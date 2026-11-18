@@ -1,0 +1,30 @@
+{
+  "name": "pdf-studio",
+  "version": "1.0.0",
+  "description": "PDF Studio: a PDF editor that runs in the browser (MuPDF + WebAssembly)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "e2e": "node e2e/check.mjs",
+    "icons": "node scripts/icons.mjs",
+    "samples": "cd samples/src && pdflatex -interaction=batchmode paper.tex && pdflatex -interaction=batchmode paper.tex && cp paper.pdf ../../public/samples/ && python3 make_samples.py && node make_scan.mjs && python3 make_scan.py && rm -f paper.aux paper.log paper.pdf scan_raw.png scan.jpg"
+  },
+  "author": "",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "mupdf": "^1.28.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^26.6.6",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.1.1"
+  },
+  "private": true,
+  "type": "module"
+}

@@ -1,0 +1,751 @@
+// App shell: toolbar, files, keyboard shortcuts, and wiring between engine, viewer and sidebar.
+import { createEngine, type Engine } from "./engine/client";
+import type { DocInfo, SearchHit } from "./engine/engine";
+import { Viewer, PALETTE } from "./ui/viewer";
+import { Sidebar } from "./ui/sidebar";
+import { icon } from "./ui/icons";
+import { toast, askPassword, confirmDialog, drawSignature, showShortcuts, modal } from "./ui/dialogs";
+import { loadSettings, saveSettings, type Settings, type Tool, type Theme } from "./storage";
+import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
+import { nextZoom, ZOOM_STEPS } from "./core/geometry";
+import { afterDelete, formatRange, movedSelection } from "./core/pages";
+
+const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
+  { id: "select", label: "Select", key: "V", icon: "select" },
+  { id: "highlight", label: "Highlight", key: "H", icon: "highlight" },
+  { id: "pen", label: "Pen", key: "P", icon: "pen" },
+  { id: "text", label: "Text box", key: "T", icon: "text" },
+  { id: "shape", label: "Shapes", key: "R", icon: "shape" },
+  { id: "sign", label: "Sign", key: "S", icon: "sign" },
+];
+
+const SAMPLES = [
+  { file: "paper.pdf", label: "Paper" },
+  { file: "form.pdf", label: "Form" },
+  { file: "scan.pdf", label: "Scan" },
+  { file: "pages.pdf", label: "5 pages" },
+];
+
+export class App {
+  engine: Engine;
+  settings: Settings = loadSettings();
+  private viewer!: Viewer;
+  private sidebar!: Sidebar;
+  private info: DocInfo | null = null;
+  private file: { name: string; handle: FileSystemFileHandle | null } | null = null;
+  private dirty = false;
+  private busyCount = 0;
+  private hits: SearchHit[] = [];
+  private hitIndex = -1;
+  private searchTimer = 0;
+  private ready: Promise<void>;
+  private $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
+
+  constructor(root: HTMLElement) {
+    const { engine, ready } = createEngine();
+    this.engine = engine;
+    this.ready = ready;
+    this.applyTheme();
+    root.innerHTML = this.template();
+    const main = this.$(".main");
+    this.sidebar = new Sidebar(
+      {
+        engine,
+        goTo: (i) => this.viewer.scrollToPage(i),
+        rotate: (p, d) => this.pageOp(this.engine.rotatePages(p, d), p),
+        remove: (p) => this.removePages(p),
+        extract: (p) => this.extractPages(p),
+        insertPdf: (at) => this.insertPdf(at),
+        insertBlank: (at) => this.pageOp(this.engine.insertBlankPage(at), [at], at),
+        reorder: (order, moved) => this.pageOp(this.engine.reorderPages(order), movedSelection(order, moved)),
+      },
+      main,
+    );
+    this.viewer = new Viewer(
+      {
+        engine,
+        settings: this.settings,
+        edited: (info, pages) => this.edited(info, pages),
+        currentPageChanged: (i) => this.currentChanged(i),
+        zoomChanged: (z) => (this.$<HTMLButtonElement>("#zoom-label").textContent = `${Math.round(z * 100)}%`),
+        needSignature: () => this.editSignature(),
+        busy: (p) => this.busy(p),
+      },
+      main,
+    );
+    this.viewer.el.append(this.$("#empty"));
+    // On phones the pages panel covers the page, so start with it closed there.
+    if (window.matchMedia("(max-width: 760px)").matches) this.settings.sidebar = false;
+    this.sidebar.show(this.settings.sidebar);
+    this.bind();
+    this.setTool(this.settings.tool);
+    this.renderOptions();
+    this.updateUi();
+    onLaunchFiles((f) => this.open(f));
+    ready.catch((e) => toast(`The PDF engine failed to load: ${e.message}`, "error"));
+  }
+
+  private template(): string {
+    return `
+    <header class="topbar">
+      <div class="tb-group">
+        <button class="icon-btn" id="btn-sidebar" title="Pages panel">${icon("sidebar")}</button>
+        <div class="brand"><span class="logo">${icon("file")}</span>PDF Studio</div>
+        <button class="icon-btn" id="btn-open" title="Open (Ctrl+O)">${icon("open")}</button>
+        <button class="icon-btn" id="btn-save" title="Save (Ctrl+S)">${icon("save")}</button>
+      </div>
+      <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name"></span></div>
+      <div class="tb-group">
+        <button class="icon-btn" id="btn-undo" title="Undo (Ctrl+Z)">${icon("undo")}</button>
+        <button class="icon-btn" id="btn-redo" title="Redo (Ctrl+Y)">${icon("redo")}</button>
+      </div>
+      <div class="tb-group pagenav">
+        <input id="page-input" class="page-input" inputmode="numeric" aria-label="Current page" value="0">
+        <span class="muted" id="page-count">/ 0</span>
+      </div>
+      <div class="tb-group">
+        <button class="icon-btn" id="btn-zoom-out" title="Zoom out (Ctrl −)">${icon("zoomOut")}</button>
+        <button class="zoom-label" id="zoom-label" title="Fit width (Ctrl 0)">100%</button>
+        <button class="icon-btn" id="btn-zoom-in" title="Zoom in (Ctrl +)">${icon("zoomIn")}</button>
+      </div>
+      <div class="tb-group">
+        <button class="icon-btn" id="btn-search" title="Search (Ctrl+F)">${icon("search")}</button>
+        <button class="icon-btn" id="btn-theme" title="Theme">${icon("auto")}</button>
+        <div class="menu-wrap">
+          <button class="icon-btn" id="btn-more" title="More" aria-haspopup="menu">${icon("more")}</button>
+          <div class="menu" id="menu" role="menu" hidden>
+            <button data-menu="open">${icon("open")}Open…<kbd>Ctrl O</kbd></button>
+            <button data-menu="save">${icon("save")}Save<kbd>Ctrl S</kbd></button>
+            <button data-menu="saveas">${icon("extract")}Save a copy…<kbd>Ctrl ⇧ S</kbd></button>
+            <hr>
+            <button data-menu="insert">${icon("insert")}Insert PDF at end…</button>
+            <button data-menu="flatten">${icon("flatten")}Flatten forms &amp; annotations</button>
+            <button data-menu="signature">${icon("sign")}Change my signature…</button>
+            <hr>
+            <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
+            <button data-menu="about">${icon("file")}About PDF Studio</button>
+          </div>
+        </div>
+      </div>
+      <div class="searchbar" id="searchbar" hidden>
+        <input id="search-input" type="search" placeholder="Search in document" aria-label="Search">
+        <span class="muted" id="search-count"></span>
+        <button class="icon-btn" id="search-prev" title="Previous (Shift+Enter)">${icon("up")}</button>
+        <button class="icon-btn" id="search-next" title="Next (Enter)">${icon("down")}</button>
+        <button class="icon-btn" id="search-close" title="Close (Esc)">${icon("close")}</button>
+      </div>
+      <div class="progress" id="progress"></div>
+    </header>
+    <nav class="toolstrip" aria-label="Tools">
+      <div class="tools" role="radiogroup">
+        ${TOOLS.map((t) => `<button class="tool" data-tool="${t.id}" role="radio" title="${t.label} (${t.key})">${icon(t.icon)}<span>${t.label}</span></button>`).join("")}
+      </div>
+      <div class="options" id="options"></div>
+    </nav>
+    <div class="main"></div>
+    <div class="empty" id="empty">
+      <div class="empty-card">
+        <div class="empty-icon">${icon("file")}</div>
+        <h1>Open a PDF to start</h1>
+        <p class="muted">Annotate, highlight, fill forms, sign and rearrange pages. Everything stays on this device.</p>
+        <button class="btn primary big" id="empty-open">${icon("open")}Open PDF</button>
+        <p class="muted small">or drop a file anywhere</p>
+        <div class="samples"><span class="muted small">Try a sample:</span>
+          ${SAMPLES.map((s) => `<button class="chip" data-sample="${s.file}">${s.label}</button>`).join("")}
+        </div>
+      </div>
+    </div>
+    <div class="dropzone" id="dropzone"><div>Drop PDF to open</div></div>`;
+  }
+
+  // ---------- wiring ----------
+
+  private bind(): void {
+    const on = (id: string, fn: () => void) => this.$(id).addEventListener("click", fn);
+    on("#btn-open", () => this.openPicker());
+    on("#empty-open", () => this.openPicker());
+    on("#btn-save", () => this.save());
+    on("#btn-undo", () => this.undo());
+    on("#btn-redo", () => this.redo());
+    on("#btn-zoom-in", () => this.viewer.setZoom(nextZoom(this.viewer.zoom, 1)));
+    on("#btn-zoom-out", () => this.viewer.setZoom(nextZoom(this.viewer.zoom, -1)));
+    on("#zoom-label", () => this.viewer.setFitWidth());
+    on("#btn-search", () => this.openSearch());
+    on("#btn-theme", () => this.cycleTheme());
+    on("#btn-sidebar", () => {
+      this.settings.sidebar = !this.settings.sidebar;
+      saveSettings(this.settings);
+      this.sidebar.show(this.settings.sidebar);
+      this.updateUi();
+    });
+    on("#btn-more", () => this.toggleMenu());
+    this.$("#menu").addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-menu]");
+      if (!b) return;
+      this.toggleMenu(false);
+      this.menuAction(b.dataset.menu!);
+    });
+    document.addEventListener("pointerdown", (e) => {
+      if (!(e.target as HTMLElement).closest(".menu-wrap")) this.toggleMenu(false);
+    });
+    this.$(".tools").addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tool]");
+      if (b) this.setTool(b.dataset.tool as Tool);
+    });
+    this.$("#options").addEventListener("click", (e) => this.onOption(e));
+    this.$("#options").addEventListener("input", (e) => this.onOption(e));
+    this.$("#empty").addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-sample]");
+      if (b) this.openSample(b.dataset.sample!);
+    });
+
+    const pageInput = this.$<HTMLInputElement>("#page-input");
+    pageInput.addEventListener("change", () => {
+      const n = parseInt(pageInput.value, 10);
+      if (this.info && n >= 1 && n <= this.info.pageCount) this.viewer.scrollToPage(n - 1);
+      else pageInput.value = String(this.viewer.currentPage() + 1);
+    });
+    pageInput.addEventListener("keydown", (e) => e.key === "Enter" && pageInput.blur());
+
+    const si = this.$<HTMLInputElement>("#search-input");
+    si.addEventListener("input", () => {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = window.setTimeout(() => this.runSearch(si.value), 220);
+    });
+    si.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.stepSearch(e.shiftKey ? -1 : 1);
+      } else if (e.key === "Escape") this.closeSearch();
+    });
+    on("#search-next", () => this.stepSearch(1));
+    on("#search-prev", () => this.stepSearch(-1));
+    on("#search-close", () => this.closeSearch());
+
+    // drag & drop
+    const dz = this.$("#dropzone");
+    let depth = 0;
+    window.addEventListener("dragenter", (e) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      depth++;
+      dz.classList.add("show");
+    });
+    window.addEventListener("dragleave", () => {
+      if (--depth <= 0) {
+        depth = 0;
+        dz.classList.remove("show");
+      }
+    });
+    window.addEventListener("dragover", (e) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    });
+    window.addEventListener("drop", async (e) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      depth = 0;
+      dz.classList.remove("show");
+      const item = [...e.dataTransfer.items].find((it) => it.kind === "file");
+      if (!item) return;
+      const withHandle = item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> };
+      const file = item.getAsFile();
+      const handlePromise = withHandle.getAsFileSystemHandle?.();
+      let handle: FileSystemFileHandle | null = null;
+      try {
+        const h = await handlePromise;
+        if (h && h.kind === "file") handle = h as FileSystemFileHandle;
+      } catch {
+        /* not supported */
+      }
+      if (file) this.open(await fileToOpened(file, handle));
+    });
+
+    document.addEventListener("keydown", (e) => this.onKey(e));
+    document.addEventListener("copy", (e) => {
+      if (this.viewer.hasTextSelection() && !this.isTyping(e.target)) {
+        e.preventDefault();
+        void this.viewer.copySelection();
+      }
+    });
+    window.addEventListener("beforeunload", (e) => {
+      if (this.dirty) e.preventDefault();
+    });
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.applyTheme());
+  }
+
+  private isTyping(t: EventTarget | null): boolean {
+    const el = t as HTMLElement | null;
+    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    const mod = e.ctrlKey || e.metaKey;
+    const k = e.key.toLowerCase();
+    if (document.querySelector(".modal-back")) return;
+    if (mod && k === "s") {
+      e.preventDefault();
+      return void (e.shiftKey ? this.saveCopy() : this.save());
+    }
+    if (mod && k === "o") {
+      e.preventDefault();
+      return void this.openPicker();
+    }
+    if (mod && k === "f") {
+      e.preventDefault();
+      return this.openSearch();
+    }
+    if (this.isTyping(e.target)) return;
+    if (mod && (k === "=" || k === "+")) {
+      e.preventDefault();
+      return this.viewer.setZoom(nextZoom(this.viewer.zoom, 1));
+    }
+    if (mod && k === "-") {
+      e.preventDefault();
+      return this.viewer.setZoom(nextZoom(this.viewer.zoom, -1));
+    }
+    if (mod && k === "0") {
+      e.preventDefault();
+      return this.viewer.setFitWidth();
+    }
+    if (mod && k === "z") {
+      e.preventDefault();
+      return void (e.shiftKey ? this.redo() : this.undo());
+    }
+    if (mod && k === "y") {
+      e.preventDefault();
+      return void this.redo();
+    }
+    if (mod && k === "c") {
+      if (this.viewer.hasTextSelection()) {
+        e.preventDefault();
+        void this.viewer.copySelection();
+      }
+      return;
+    }
+    if (mod || e.altKey) return;
+    if (e.key === "Escape") {
+      this.viewer.clearSelection();
+      this.viewer.selectAnnot(null);
+      if (this.settings.tool !== "select") this.setTool("select");
+      return;
+    }
+    if (e.key === "Delete" || e.key === "Backspace") {
+      if (this.viewer.selectedAnnot()) {
+        e.preventDefault();
+        void this.viewer.deleteSelectedAnnot().catch((err) => toast(err.message, "error"));
+      } else if (this.sidebar.focused() && this.sidebar.hasSelection()) {
+        e.preventDefault();
+        this.removePages(this.sidebar.targetPages());
+      }
+      return;
+    }
+    const tool = TOOLS.find((t) => t.key.toLowerCase() === k);
+    if (tool && this.info) {
+      e.preventDefault();
+      this.setTool(tool.id);
+    }
+  }
+
+  // ---------- tools & options ----------
+
+  private setTool(tool: Tool): void {
+    this.settings.tool = tool;
+    saveSettings(this.settings);
+    this.viewer.setTool(tool);
+    document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((b) => {
+      b.classList.toggle("on", b.dataset.tool === tool);
+      b.setAttribute("aria-checked", String(b.dataset.tool === tool));
+    });
+    this.renderOptions();
+  }
+
+  private renderOptions(): void {
+    const s = this.settings;
+    const t = s.tool;
+    const el = this.$("#options");
+    const swatches = () =>
+      `<div class="swatches">${PALETTE.map((c) => `<button class="swatch ${s.colors[t] === c ? "on" : ""}" data-color="${c}" style="--c:${c}" title="${c}"></button>`).join("")}
+       <label class="swatch custom" title="Custom colour" style="--c:${s.colors[t]}"><input type="color" data-color-input value="${s.colors[t]}"></label></div>`;
+    const seg = (name: string, items: [string, string, string][], value: string) =>
+      `<div class="seg">${items.map(([v, ic, label]) => `<button data-${name}="${v}" class="${v === value ? "on" : ""}" title="${label}">${icon(ic)}</button>`).join("")}</div>`;
+    const range = (name: string, min: number, max: number, step: number, value: number, label: string, unit = "pt") =>
+      `<label class="range"><span class="muted">${label}</span><input type="range" data-range="${name}" min="${min}" max="${max}" step="${step}" value="${value}"><output>${value}${unit}</output></label>`;
+    let html = "";
+    switch (t) {
+      case "select":
+        html = `<span class="muted hint">Drag over text to select it · click an annotation to move, recolour or delete it · drag empty space to scroll</span>`;
+        break;
+      case "highlight":
+        html = seg("mark", [["Highlight", "highlight", "Highlight"], ["Underline", "underline", "Underline"], ["StrikeOut", "strike", "Strike out"]], s.markKind) + swatches() +
+          `<span class="muted hint">Drag over text — or over any area on scans</span>`;
+        break;
+      case "pen":
+        html = swatches() + range("penWidth", 0.5, 12, 0.5, s.penWidth, "Width");
+        break;
+      case "text":
+        html = swatches() + range("textSize", 6, 48, 1, s.textSize, "Size") + `<span class="muted hint">Click to add a text box · Ctrl+Enter to finish</span>`;
+        break;
+      case "shape":
+        html = seg("shape", [["Square", "square", "Rectangle"], ["Circle", "circle", "Ellipse"], ["Arrow", "arrow", "Arrow"]], s.shapeKind) + swatches() + range("shapeWidth", 0.5, 12, 0.5, s.shapeWidth, "Width");
+        break;
+      case "sign":
+        html = swatches() + range("signatureWidth", 60, 300, 5, s.signatureWidth, "Size", "") +
+          `<button class="btn small" data-act="redraw">${s.signature ? "Redraw signature" : "Draw signature"}</button><span class="muted hint">Click on the page to place it</span>`;
+        break;
+    }
+    el.innerHTML = html;
+  }
+
+  private onOption(e: Event): void {
+    const target = e.target as HTMLElement;
+    const s = this.settings;
+    const t = s.tool;
+    if (e.type === "input") {
+      const input = target as HTMLInputElement;
+      if (input.dataset.range) {
+        (s as unknown as Record<string, number>)[input.dataset.range] = Number(input.value);
+        const out = input.parentElement!.querySelector("output")!;
+        out.textContent = `${input.value}${input.dataset.range === "signatureWidth" ? "" : "pt"}`;
+        saveSettings(s);
+      } else if (input.dataset.colorInput !== undefined) {
+        s.colors[t] = input.value;
+        saveSettings(s);
+        this.renderOptions();
+      }
+      return;
+    }
+    const b = target.closest<HTMLButtonElement>("button");
+    if (!b) return;
+    if (b.dataset.color) s.colors[t] = b.dataset.color;
+    else if (b.dataset.mark) s.markKind = b.dataset.mark as Settings["markKind"];
+    else if (b.dataset.shape) s.shapeKind = b.dataset.shape as Settings["shapeKind"];
+    else if (b.dataset.act === "redraw") return void this.editSignature();
+    else return;
+    saveSettings(s);
+    this.renderOptions();
+  }
+
+  private async editSignature(): Promise<boolean> {
+    const strokes = await drawSignature(this.settings.colors.sign, this.settings.signature);
+    if (!strokes) return false;
+    if (!strokes.length) {
+      toast("Signature is empty", "error");
+      return false;
+    }
+    this.settings.signature = strokes;
+    saveSettings(this.settings);
+    this.renderOptions();
+    if (this.settings.tool !== "sign") this.setTool("sign");
+    toast("Signature saved on this device");
+    return true;
+  }
+
+  // ---------- theme & menu ----------
+
+  private applyTheme(): void {
+    const t = this.settings.theme;
+    const dark = t === "dark" || (t === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#16181d" : "#f6f7f9");
+    const btn = document.querySelector("#btn-theme");
+    if (btn) {
+      btn.innerHTML = icon(t === "auto" ? "auto" : t === "dark" ? "moon" : "sun");
+      btn.setAttribute("title", `Theme: ${t}`);
+    }
+  }
+
+  private cycleTheme(): void {
+    const order: Theme[] = ["auto", "light", "dark"];
+    this.settings.theme = order[(order.indexOf(this.settings.theme) + 1) % 3];
+    saveSettings(this.settings);
+    this.applyTheme();
+    toast(`Theme: ${this.settings.theme}`);
+  }
+
+  private toggleMenu(force?: boolean): void {
+    const m = this.$("#menu");
+    m.hidden = force === undefined ? !m.hidden : !force;
+  }
+
+  private menuAction(a: string): void {
+    switch (a) {
+      case "open": return void this.openPicker();
+      case "save": return void this.save();
+      case "saveas": return void this.saveCopy();
+      case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
+      case "flatten": return void this.flatten();
+      case "signature": return void this.editSignature();
+      case "keys": return showShortcuts();
+      case "about":
+        return void modal({
+          title: "About PDF Studio",
+          body: `<p>PDF Studio is a PDF editor that runs entirely in your browser. Files never leave your device.</p>
+                 <p class="muted">Rendering and editing by <a href="https://mupdf.com" target="_blank" rel="noopener">MuPDF</a> (AGPL). Source: <a href="https://github.com/mhoangtrinh/pdf-studio" target="_blank" rel="noopener">github.com/mhoangtrinh/pdf-studio</a></p>`,
+          actions: [{ label: "Close", value: "", primary: true }],
+        });
+    }
+  }
+
+  // ---------- files ----------
+
+  private async openPicker(): Promise<void> {
+    const [f] = await pickPdfs(false);
+    if (f) await this.open(f);
+  }
+
+  private async openSample(name: string): Promise<void> {
+    try {
+      const res = await fetch(`./samples/${name}`);
+      if (!res.ok) throw new Error(`Couldn't load the sample (${res.status})`);
+      await this.open({ name, bytes: new Uint8Array(await res.arrayBuffer()), handle: null });
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
+  async open(f: OpenedFile): Promise<void> {
+    if (this.dirty && !(await confirmDialog("Discard changes?", "The current document has unsaved changes.", "Discard", true))) return;
+    await this.ready;
+    try {
+      let info = await this.busy(this.engine.open(f.bytes, f.name));
+      let wrong = false;
+      while (!info) {
+        const pw = await askPassword(f.name, wrong);
+        if (pw === null) {
+          await this.engine.close();
+          this.setDoc(null);
+          return;
+        }
+        info = await this.engine.authenticate(pw);
+        wrong = true;
+      }
+      this.file = { name: f.name, handle: f.handle };
+      this.setDoc(info);
+      if (info.pageCount > 0 && !(await this.engine.pageText(0)).trim()) {
+        const scanned = info.pageCount === 1 || !(await this.engine.pageText(Math.min(1, info.pageCount - 1))).trim();
+        if (scanned) toast("This looks like a scan: no selectable text. You can still highlight areas, draw and sign.");
+      }
+    } catch (e) {
+      toast(`Couldn't open ${f.name}: ${(e as Error).message}`, "error");
+    }
+  }
+
+  private setDoc(info: DocInfo | null): void {
+    this.info = info;
+    this.dirty = false;
+    this.closeSearch();
+    this.sidebar.setDocument(info);
+    this.viewer.setDocument(info);
+    this.$("#empty").hidden = !!info;
+    document.body.classList.toggle("has-doc", !!info);
+    this.updateUi({ canUndo: false, canRedo: false, dirty: false, undoName: "", redoName: "" });
+  }
+
+  private async save(): Promise<void> {
+    if (!this.info || !this.file) return;
+    this.viewer.closeEditor(true);
+    try {
+      if (this.file.handle) {
+        const bytes = await this.busy(this.engine.save(false));
+        await writeToHandle(this.file.handle, bytes);
+        await this.engine.markSaved();
+        toast(`Saved ${this.file.name}`);
+      } else {
+        const bytes = await this.busy(this.engine.save(false));
+        const res = await saveAs(bytes, this.file.name);
+        if (res === undefined) return;
+        if (res) this.file = { name: res.name, handle: res };
+        await this.engine.markSaved();
+        toast(res ? `Saved ${res.name}` : "Downloaded");
+      }
+      this.updateUi(await this.engine.state());
+    } catch (e) {
+      toast(`Couldn't save: ${(e as Error).message}`, "error");
+    }
+  }
+
+  private async saveCopy(): Promise<void> {
+    if (!this.info || !this.file) return;
+    this.viewer.closeEditor(true);
+    try {
+      const bytes = await this.busy(this.engine.save(false));
+      const res = await saveAs(bytes, `${baseName(this.file.name)} (copy).pdf`);
+      if (res !== undefined) toast(res ? `Saved ${res.name}` : "Downloaded");
+    } catch (e) {
+      toast(`Couldn't save: ${(e as Error).message}`, "error");
+    }
+  }
+
+  // ---------- editing ----------
+
+  private async edited(info: DocInfo | null, pages: number[]): Promise<void> {
+    if (info) this.info = info;
+    this.sidebar.refresh(pages);
+    this.updateUi(await this.engine.state());
+  }
+
+  private async undo(): Promise<void> {
+    if (!this.info) return;
+    this.viewer.closeEditor(true);
+    const st = await this.engine.state();
+    if (!st.canUndo) return;
+    const info = await this.busy(this.engine.undo());
+    this.afterHistory(info, `Undid: ${st.undoName}`);
+  }
+
+  private async redo(): Promise<void> {
+    if (!this.info) return;
+    const st = await this.engine.state();
+    if (!st.canRedo) return;
+    const info = await this.busy(this.engine.redo());
+    this.afterHistory(info, `Redid: ${st.redoName}`);
+  }
+
+  private async afterHistory(info: DocInfo, msg: string): Promise<void> {
+    const structural = !this.info || info.pageCount !== this.info.pageCount || info.pages.some((p, i) => p.rotation !== this.info!.pages[i]?.rotation);
+    this.info = info;
+    this.viewer.refresh(info);
+    if (structural) this.sidebar.setDocument(info);
+    else this.sidebar.refresh("all");
+    this.updateUi(await this.engine.state());
+    if (msg.trim().endsWith(":")) return;
+    toast(msg);
+  }
+
+  /** Run a page operation, then rebuild views. */
+  private async pageOp(job: Promise<DocInfo>, select: number[] = [], goTo?: number): Promise<void> {
+    try {
+      const info = await this.busy(job);
+      this.info = info;
+      this.viewer.refresh(info);
+      this.sidebar.setDocument(info, select.filter((i) => i < info.pageCount));
+      if (goTo !== undefined) this.viewer.scrollToPage(Math.min(goTo, info.pageCount - 1));
+      this.updateUi(await this.engine.state());
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
+  private async removePages(pages: number[]): Promise<void> {
+    if (!this.info) return;
+    if (pages.length >= this.info.pageCount) return toast("A PDF needs at least one page", "error");
+    if (pages.length > 1 && !(await confirmDialog("Delete pages?", `Delete pages ${formatRange(pages)}? You can undo this.`, "Delete", true))) return;
+    const next = afterDelete(this.info.pageCount, pages);
+    await this.pageOp(this.engine.deletePages(pages), [], next);
+  }
+
+  private async extractPages(pages: number[]): Promise<void> {
+    if (!this.file) return;
+    try {
+      const bytes = await this.busy(this.engine.extractPages(pages));
+      const name = `${baseName(this.file.name)} (p${formatRange(pages).replace(/\s/g, "")}).pdf`;
+      const res = canSaveInPlace ? await saveAs(bytes, name) : (download(bytes, name), null);
+      if (res !== undefined) toast(`Saved ${pages.length} page${pages.length > 1 ? "s" : ""} as a new PDF`);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
+  private async insertPdf(at: number): Promise<void> {
+    const files = await pickPdfs(true);
+    let pos = at;
+    for (const f of files) {
+      const n = this.info?.pageCount ?? 0;
+      await this.pageOp(this.engine.insertPdf(f.bytes, pos), [], pos);
+      pos += (this.info?.pageCount ?? n) - n;
+    }
+    if (files.length) toast(`Inserted ${files.map((f) => f.name).join(", ")}`);
+  }
+
+  private async flatten(): Promise<void> {
+    if (!this.info) return;
+    if (!(await confirmDialog("Flatten?", "Annotations and form fields become part of the page and can no longer be edited. You can undo this until you close the file.", "Flatten"))) return;
+    await this.pageOp(this.engine.flatten());
+  }
+
+  // ---------- search ----------
+
+  private openSearch(): void {
+    if (!this.info) return;
+    const bar = this.$("#searchbar");
+    bar.hidden = false;
+    const si = this.$<HTMLInputElement>("#search-input");
+    si.focus();
+    si.select();
+  }
+
+  private closeSearch(): void {
+    this.$("#searchbar").hidden = true;
+    this.hits = [];
+    this.hitIndex = -1;
+    this.viewer.setSearchHits([], -1);
+    this.$("#search-count").textContent = "";
+  }
+
+  private async runSearch(q: string): Promise<void> {
+    if (!this.info) return;
+    const hits = q.trim().length ? await this.engine.search(q) : [];
+    this.hits = hits;
+    const cur = this.viewer.currentPage();
+    this.hitIndex = hits.length ? Math.max(0, hits.findIndex((h) => h.page >= cur)) : -1;
+    this.viewer.setSearchHits(hits, this.hitIndex);
+    this.updateSearchCount(q);
+  }
+
+  private stepSearch(dir: 1 | -1): void {
+    if (!this.hits.length) return;
+    this.hitIndex = (this.hitIndex + dir + this.hits.length) % this.hits.length;
+    this.viewer.setSearchHits(this.hits, this.hitIndex);
+    this.updateSearchCount(this.$<HTMLInputElement>("#search-input").value);
+  }
+
+  private updateSearchCount(q: string): void {
+    this.$("#search-count").textContent = !q.trim() ? "" : this.hits.length ? `${this.hitIndex + 1} / ${this.hits.length}` : "No results";
+  }
+
+  // ---------- status ----------
+
+  private currentChanged(i: number): void {
+    const input = this.$<HTMLInputElement>("#page-input");
+    if (document.activeElement !== input) input.value = String(i + 1);
+    this.sidebar.setCurrent(i);
+  }
+
+  private updateUi(st?: { canUndo: boolean; canRedo: boolean; dirty: boolean; undoName: string; redoName: string }): void {
+    const has = !!this.info;
+    if (st) {
+      this.dirty = st.dirty;
+      this.$<HTMLButtonElement>("#btn-undo").disabled = !st.canUndo;
+      this.$<HTMLButtonElement>("#btn-redo").disabled = !st.canRedo;
+      this.$("#btn-undo").title = st.canUndo ? `Undo ${st.undoName} (Ctrl+Z)` : "Undo (Ctrl+Z)";
+      this.$("#btn-redo").title = st.canRedo ? `Redo ${st.redoName} (Ctrl+Y)` : "Redo (Ctrl+Y)";
+    }
+    for (const id of ["#btn-save", "#btn-search", "#btn-zoom-in", "#btn-zoom-out", "#zoom-label", "#page-input"]) {
+      this.$<HTMLButtonElement>(id).disabled = !has;
+    }
+    if (!has) {
+      this.$<HTMLButtonElement>("#btn-undo").disabled = true;
+      this.$<HTMLButtonElement>("#btn-redo").disabled = true;
+    }
+    this.$("#btn-sidebar").classList.toggle("on", this.settings.sidebar);
+    document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((b) => (b.disabled = !has));
+    const name = this.file?.name ?? "";
+    this.$("#docname .name").textContent = has ? name : "";
+    this.$("#docname").classList.toggle("dirty", has && this.dirty);
+    this.$("#page-count").textContent = `/ ${this.info?.pageCount ?? 0}`;
+    if (!has) this.$<HTMLInputElement>("#page-input").value = "0";
+    document.title = has ? `${this.dirty ? "• " : ""}${name} — PDF Studio` : "PDF Studio";
+  }
+
+  private async busy<T>(p: Promise<T>): Promise<T> {
+    this.busyCount++;
+    const timer = setTimeout(() => this.$("#progress").classList.add("on"), 250);
+    try {
+      return await p;
+    } finally {
+      clearTimeout(timer);
+      if (--this.busyCount === 0) this.$("#progress").classList.remove("on");
+    }
+  }
+}
+
+export { ZOOM_STEPS };
