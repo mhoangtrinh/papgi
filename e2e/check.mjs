@@ -204,6 +204,34 @@ try {
   await page.click('[data-sig="drawn"]');
   check("can switch between drawn and picture signature", (await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")).signatureKind)) === "drawn");
 
+  // drop and paste a picture into the signature dialog
+  const photoB64 = fs.readFileSync(new URL("./fixtures/signature-photo.jpg", import.meta.url)).toString("base64");
+  const fileEvent = async (how) =>
+    page.evaluate(([b64, how]) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.items.add(new File([bytes], "my-signature.jpg", { type: "image/jpeg" }));
+      if (how === "paste") {
+        document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+        return;
+      }
+      const el = document.querySelector(".sigdlg");
+      for (const type of ["dragenter", "dragover", "drop"]) el.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+    }, [photoB64, how]);
+  for (const how of ["drop", "paste"]) {
+    await page.click('[data-act="redraw"]');
+    await page.waitForSelector(".sigdlg");
+    const docBefore = await page.evaluate(() => window.papgi.info.pageCount);
+    await fileEvent(how);
+    const ok = await page.waitForSelector(".pic-work:not([hidden]) .out-canvas:not([hidden])", { timeout: 5000 }).then(() => true, () => false);
+    const tabOn = await page.evaluate(() => document.querySelector('[data-tab="image"]').classList.contains("on"));
+    const docAfter = await page.evaluate(() => window.papgi.info.pageCount);
+    check(`picture signature by ${how}`, ok && tabOn && docBefore === docAfter);
+    if (how === "drop") await page.screenshot({ path: shots + "desktop-signature-drop-light.png" });
+    await page.click('.modal-actions [data-v=""]');
+    await page.waitForTimeout(200);
+  }
+
   // select + move the text box, then delete the rectangle via keyboard
   await page.keyboard.press("v");
   const ftNow = (await engine("listAnnots", 0)).find((x) => x.kind === "FreeText");

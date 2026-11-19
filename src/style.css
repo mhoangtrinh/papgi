@@ -1392,3 +1392,18 @@ body:not(.has-doc) .options {
   font-size: 12px;
   text-decoration: underline;
 }
+
+.sigdlg.dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: 6px;
+  border-radius: 12px;
+}
+
+.sigdlg.dragover .pic-empty {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.drop-hint {
+  margin-top: -6px !important;
+}

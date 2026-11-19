@@ -227,8 +227,9 @@ export class App {
     // drag & drop
     const dz = this.$("#dropzone");
     let depth = 0;
+    const dialogOpen = () => !!document.querySelector(".modal-back");
     window.addEventListener("dragenter", (e) => {
-      if (!e.dataTransfer?.types.includes("Files")) return;
+      if (!e.dataTransfer?.types.includes("Files") || dialogOpen()) return;
       depth++;
       dz.classList.add("show");
     });
@@ -244,6 +245,7 @@ export class App {
     window.addEventListener("drop", async (e) => {
       if (!e.dataTransfer?.types.includes("Files")) return;
       e.preventDefault();
+      if (dialogOpen()) return;
       depth = 0;
       dz.classList.remove("show");
       const item = [...e.dataTransfer.items].find((it) => it.kind === "file");

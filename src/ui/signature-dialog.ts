@@ -43,6 +43,7 @@ export async function signatureDialog(o: Opts): Promise<SignatureResult | null> 
       <div class="pic-empty">
         <p class="muted small">Sign on white paper with a dark pen and take a photo in good light, or use a scan. The paper is removed automatically.</p>
         <button class="btn primary" data-act="pick">${icon("image")}Choose picture…</button>
+        <p class="muted small drop-hint">or drop an image here, or paste one with Ctrl+V</p>
       </div>
       <div class="pic-work" hidden>
         <div class="pic-label muted small">Drag over the photo to select just the signature</div>
@@ -203,23 +204,74 @@ export async function signatureDialog(o: Opts): Promise<SignatureResult | null> 
     schedule();
   });
 
+  const usePicture = async (file: Blob) => {
+    if (file.type && !file.type.startsWith("image/")) {
+      toast("That isn't an image", "error");
+      return;
+    }
+    setTab("image");
+    try {
+      photo = await loadPhoto(file);
+      crop = null;
+      showPhoto();
+    } catch {
+      toast("Couldn't read that picture", "error");
+    }
+  };
+
   const pick = () => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/*";
-    input.onchange = async () => {
+    input.onchange = () => {
       const file = input.files?.[0];
-      if (!file) return;
-      try {
-        photo = await loadPhoto(file);
-        crop = null;
-        showPhoto();
-      } catch {
-        toast("Couldn't read that picture", "error");
-      }
+      if (file) void usePicture(file);
     };
     input.click();
   };
+
+  // drop an image anywhere on the dialog
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+  let dragDepth = 0;
+  wrap.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepth++;
+    wrap.classList.add("dragover");
+  });
+  wrap.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer!.dropEffect = "copy";
+  });
+  wrap.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    e.stopPropagation();
+    if (--dragDepth <= 0) {
+      dragDepth = 0;
+      wrap.classList.remove("dragover");
+    }
+  });
+  wrap.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepth = 0;
+    wrap.classList.remove("dragover");
+    const file = [...(e.dataTransfer?.files ?? [])].find((f) => f.type.startsWith("image/")) ?? e.dataTransfer?.files[0];
+    if (file) void usePicture(file);
+  });
+  // paste an image (e.g. a screenshot or a copied photo)
+  const onPaste = (e: ClipboardEvent) => {
+    const item = [...(e.clipboardData?.items ?? [])].find((it) => it.kind === "file" && it.type.startsWith("image/"));
+    const file = item?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    void usePicture(file);
+  };
+  document.addEventListener("paste", onPaste);
 
   sens.addEventListener("input", schedule);
 
@@ -271,6 +323,7 @@ export async function signatureDialog(o: Opts): Promise<SignatureResult | null> 
     },
   );
   clearTimeout(timer);
+  document.removeEventListener("paste", onPaste);
   if (forget) return { kind: "clear" };
   if (v !== "ok") return null;
   if (tab === "drawn") {
