@@ -300,7 +300,8 @@ export class Viewer {
       .catch((e) => {
         next.renderedScale = scale;
         next.renderedVersion = version;
-        console.error(e);
+        // (a page of a document that was closed meanwhile is expected to fail)
+        if (this.pages[next.index] === next) console.warn("Couldn't render page", next.index + 1, e);
       })
       .finally(() => {
         this.rendering = false;

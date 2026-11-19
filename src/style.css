@@ -1722,3 +1722,61 @@ body:not(.has-doc) .options {
 .pages[data-tool="select"].panning .page {
   cursor: grabbing;
 }
+
+/* ---------- printing ---------- */
+
+.print-frame {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border: 0;
+  visibility: hidden;
+}
+
+#print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 0;
+  }
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+  body > *:not(#print-root) {
+    display: none !important;
+  }
+  #print-root {
+    display: block !important;
+  }
+  .print-sheet {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    overflow: hidden;
+    break-after: page;
+    break-inside: avoid;
+  }
+  .print-sheet:last-child {
+    break-after: auto;
+  }
+  .print-sheet img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  /* printed from the browser's own menu: point to papgi's Print */
+  body:not(:has(#print-root img))::after {
+    content: "To print the document, use Print in papgi's ⋯ menu (Ctrl+P).";
+    display: block !important;
+    padding: 2cm;
+    font: 14pt system-ui, sans-serif;
+  }
+}

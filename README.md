@@ -23,6 +23,7 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 | Draw | Pen, rectangles, ellipses, arrows, text boxes |
 | Sign | Keep up to 5 signatures, drawn or from a photo/scan (paper removed automatically, crop, recolour, or drop/paste the image); saved on this device, pick one and click to place |
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
+| Print | Ctrl+P or ⋯ → Print: prints the document as it is now (edits, annotations, signatures, filled forms). Chrome/Edge use their PDF print dialog (sharp vector output); iPhone, Safari and Firefox print the rendered pages (about 200 dpi). |
 | Pages | Reorder by drag and drop, rotate, delete, insert other PDFs, add blank pages, save pages as a new PDF |
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
 | **Scans (OCR)** | Recognize text on scanned pages (⋯ menu → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
@@ -36,6 +37,7 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 | Key | Action |
 |---|---|
 | V / E / H / P / T / R / S | Select, Edit text, Highlight, Pen, Text box, Shapes, Sign |
+| Ctrl+P | Print |
 | Edit text: Ctrl+Enter / Esc | Finish / cancel editing a paragraph (clicking outside also finishes) |
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, Save, Save a copy |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
@@ -77,6 +79,7 @@ src/
   core/ocrwords.ts   recognition output -> words in page space (columns, sizes, skew; pure, tested)
   core/ocrlangs.ts   the recognition languages on offer
   ui/ocr.ts          recognition dialog, progress, and the tesseract.js runner
+  ui/print.ts        printing (browser PDF viewer, or rendered pages)
   ui/viewer.ts       pages, rendering, tools, form fields, search highlights
   ui/sidebar.ts      thumbnails and page actions
   ui/dialogs.ts      toasts and modals

@@ -34,7 +34,7 @@ try {
     // Force the download fallback so saves can be captured.
     delete window.showSaveFilePicker;
     delete window.showOpenFilePicker;
-    window.localStorage.clear();
+    if (window.top === window) window.localStorage.clear(); // (not in frames such as the PDF viewer used for printing)
   });
   const page = await ctx.newPage();
   const errors = [];
@@ -494,6 +494,50 @@ try {
   await page.waitForTimeout(400);
   check("undo brings it back to page 1", (await engine("listAnnots", 0)).some((x) => x.kind === "Ink") && !(await engine("listAnnots", 1)).some((x) => x.kind === "Ink"));
   await page.screenshot({ path: shots + "desktop-pages-light.png" });
+
+  // --- printing ---
+  const pcount = await page.evaluate(() => window.papgi.info.pageCount);
+  // (headless Chromium can't open a print dialog and crashes if asked to: catch the final call)
+  await page.evaluate(() => {
+    const desc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow");
+    Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
+      configurable: true,
+      get() {
+        const w = desc.get.call(this);
+        if (w && this.classList.contains("print-frame")) w.print = () => (window.__framePrinted = true);
+        return w;
+      },
+    });
+  });
+  await page.keyboard.press("Control+p");
+  await page.waitForFunction(() => window.__framePrinted === true, null, { timeout: 15000 });
+  await page.waitForTimeout(1500);
+  const framePdf = await page.evaluate(async () => {
+    const f = document.querySelector("iframe.print-frame");
+    const b = new Uint8Array(await (await fetch(f.src)).arrayBuffer());
+    return { head: String.fromCharCode(...b.slice(0, 5)), size: b.length, printed: window.__framePrinted === true, toast: document.querySelector(".toast.show")?.textContent ?? "" };
+  });
+  check("print (Chrome/Edge): the current PDF goes to the browser's PDF viewer", framePdf.head === "%PDF-" && framePdf.size > 1000 && framePdf.printed && !/Couldn't print/.test(framePdf.toast), JSON.stringify(framePdf));
+  check("print doesn't count as saving", await page.locator("#docname.dirty").isVisible());
+  check("keyboard stays on papgi after printing", await page.evaluate(() => document.activeElement?.tagName !== "IFRAME"), await page.evaluate(() => document.activeElement?.tagName));
+  // other browsers (iPhone, Safari, Firefox): page images in a print-only layer
+  await page.evaluate(() => {
+    Object.defineProperty(Navigator.prototype, "pdfViewerEnabled", { get: () => false, configurable: true });
+    window.__printed = -1;
+    window.print = () => (window.__printed = document.querySelectorAll("#print-root img").length);
+  });
+  await page.keyboard.press("Control+p");
+  await page.waitForFunction(() => window.__printed >= 0, null, { timeout: 30000 });
+  check("print (iPhone/Safari/Firefox): every page rendered for printing", (await page.evaluate(() => window.__printed)) === pcount, `${await page.evaluate(() => window.__printed)} of ${pcount}`);
+  await page.emulateMedia({ media: "print" });
+  check("print layout: only the pages are visible", (await page.locator("#print-root img").evaluateAll((ims) => ims.filter((im) => im.getBoundingClientRect().width > 100).length)) === pcount && !(await page.locator(".topbar, .viewer").first().isVisible()));
+  await page.screenshot({ path: shots + "desktop-print-preview.png" });
+  await page.emulateMedia({ media: null }); // (page.pdf uses screen styles while screen is forced)
+  const printedPdf = await page.pdf({ preferCSSPageSize: true });
+  const printedPages = (await import("mupdf")).Document.openDocument(printedPdf, "application/pdf").countPages();
+  check("print layout: one sheet per page", printedPages === pcount, `${printedPages} sheets for ${pcount} pages`);
+  await page.evaluate(() => delete Navigator.prototype.pdfViewerEnabled);
+
 
   // --- scan sample: area highlight ---
   await page.evaluate(async () => {

@@ -7,6 +7,7 @@ import { icon } from "./ui/icons";
 import { toast, askPassword, confirmDialog, showShortcuts, modal } from "./ui/dialogs";
 import { signatureDialog } from "./ui/signature-dialog";
 import { ocrDialog, runOcr } from "./ui/ocr";
+import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
 import { nextZoom, strokesBounds, ZOOM_STEPS } from "./core/geometry";
@@ -124,6 +125,7 @@ export class App {
             <button data-menu="open">${icon("open")}Open…<kbd>Ctrl O</kbd></button>
             <button data-menu="save">${icon("save")}Save<kbd>Ctrl S</kbd></button>
             <button data-menu="saveas">${icon("extract")}Save a copy…<kbd>Ctrl ⇧ S</kbd></button>
+            <button data-menu="print">${icon("print")}Print…<kbd>Ctrl P</kbd></button>
             <hr>
             <button data-menu="insert">${icon("insert")}Insert PDF at end…</button>
             <button data-menu="ocr">${icon("scan")}Recognize text (OCR)…</button>
@@ -294,6 +296,10 @@ export class App {
     if (mod && k === "s") {
       e.preventDefault();
       return void (e.shiftKey ? this.saveCopy() : this.save());
+    }
+    if (mod && k === "p") {
+      e.preventDefault();
+      return void this.print();
     }
     if (mod && k === "o") {
       e.preventDefault();
@@ -557,6 +563,7 @@ export class App {
       case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
       case "flatten": return void this.flatten();
       case "ocr": return void this.recognize();
+      case "print": return void this.print();
       case "signature": return void this.addSignature();
       case "keys": return showShortcuts();
       case "about":
@@ -740,6 +747,29 @@ export class App {
       pos += (this.info?.pageCount ?? n) - n;
     }
     if (files.length) toast(`Inserted ${files.map((f) => f.name).join(", ")}`);
+  }
+
+  // ---------- printing ----------
+
+  /** Print the document as it is now (edits, annotations, signatures, filled forms). */
+  async print(): Promise<void> {
+    if (!this.info) return toast("Open a PDF first");
+    this.viewer.closeEditor(true);
+    await this.viewer.closeParagraph(true);
+    try {
+      if (canPrintPdfNatively()) {
+        try {
+          const bytes = await this.busy(this.engine.save(false));
+          await this.busy(printPdfBytes(bytes));
+          return;
+        } catch {
+          // the PDF viewer is blocked or failed: print page images instead
+        }
+      }
+      await this.busy(printAsImages(this.engine, this.info));
+    } catch (e) {
+      toast(`Couldn't print: ${(e as Error).message}`, "error");
+    }
   }
 
   // ---------- text recognition ----------

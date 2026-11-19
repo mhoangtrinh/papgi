@@ -108,6 +108,7 @@ export function showShortcuts(): void {
     ["Ctrl + O", "Open"],
     ["Ctrl + S", "Save"],
     ["Ctrl + Shift + S", "Save a copy"],
+    ["Ctrl + P", "Print"],
     ["Ctrl + Z / Ctrl + Y", "Undo / redo"],
     ["Ctrl + F", "Search"],
     ["Ctrl + C", "Copy selected text"],
