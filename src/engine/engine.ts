@@ -83,8 +83,9 @@ export class PdfEngine {
   // Each journal step gets a unique id, so "dirty" survives undo + new edit sequences.
   // Undo history as document snapshots. (MuPDF's own journal leaves its font/image caches
   // pointing at objects that undo deleted, which garbles later edits.)
-  private undoStack: { name: string; bytes: Uint8Array; id: number }[] = [];
-  private redoStack: { name: string; bytes: Uint8Array; id: number }[] = [];
+  /** Undo steps: the document before the step, and which pages' contents the step changed. */
+  private undoStack: UndoStep[] = [];
+  private redoStack: UndoStep[] = [];
   private stateId = 0;
   private nextStateId = 1;
   private savedId = 0;
@@ -129,6 +130,7 @@ export class PdfEngine {
 
   close(): void {
     this.clearText();
+    this.dropContent();
     this.doc?.destroy();
     this.doc = null;
   }
@@ -189,8 +191,8 @@ export class PdfEngine {
   undo(): DocInfo {
     const prev = this.undoStack.pop();
     if (prev) {
-      this.redoStack.push({ name: prev.name, bytes: this.snapshot(), id: this.stateId });
-      this.restore(prev.bytes);
+      this.redoStack.push({ name: prev.name, bytes: this.snapshot(), id: this.stateId, content: prev.content });
+      this.restore(prev.bytes, prev.content);
       this.stateId = prev.id;
     }
     return this.info();
@@ -199,8 +201,8 @@ export class PdfEngine {
   redo(): DocInfo {
     const next = this.redoStack.pop();
     if (next) {
-      this.undoStack.push({ name: next.name, bytes: this.snapshot(), id: this.stateId });
-      this.restore(next.bytes);
+      this.undoStack.push({ name: next.name, bytes: this.snapshot(), id: this.stateId, content: next.content });
+      this.restore(next.bytes, next.content);
       this.stateId = next.id;
     }
     return this.info();
@@ -214,20 +216,43 @@ export class PdfEngine {
     return out;
   }
 
-  /** Replace the open document with a snapshot (fresh engine state, fresh caches). */
-  private restore(bytes: Uint8Array): void {
+  /**
+   * Replace the open document with a snapshot (fresh engine state, fresh caches). Drawn page
+   * contents are kept for pages the undone/redone step didn't change (`content`).
+   */
+  private restore(bytes: Uint8Array, content: number[] | "all" = "all"): void {
     const d = this.mupdf.Document.openDocument(bytes, "application/pdf");
     const pdf = d.asPDF();
     if (!pdf) throw new Error("Undo failed");
     if (pdf.needsPassword() && !pdf.authenticatePassword(this.password)) throw new Error("Undo failed (password)");
     this.clearText();
+    this.dropContent(content);
     this.doc?.destroy();
     this.doc = pdf;
   }
 
   // ---------- rendering & text ----------
 
-  /** Render page contents, annotations and form widgets. */
+  /**
+   * Page contents drawn at a scale, kept so that a change to annotations or form fields
+   * only redraws those on top (a scanned page takes 100-300 ms to draw, annotations ~20 ms).
+   * Newest last; dropped whenever page contents may have changed.
+   */
+  private contentCache = new Map<string, MuPDF.Pixmap>();
+  private contentBytes = 0;
+  static readonly CONTENT_CACHE_BYTES = 160e6;
+
+  /** Forget drawn page contents: of some pages, or of all (also after undo, page changes...). */
+  private dropContent(pages: number[] | "all" = "all"): void {
+    for (const [k, pix] of this.contentCache)
+      if (pages === "all" || pages.includes(Number(k.split("|")[0]))) {
+        this.contentBytes -= pix.getStride() * pix.getHeight();
+        pix.destroy();
+        this.contentCache.delete(k);
+      }
+  }
+
+  /** Render page contents, annotations and form widgets (RGBA). */
   render(index: number, scale: number): RGBAImage {
     const m = this.mupdf;
     return this.withPage(index, (page) => {
@@ -235,28 +260,46 @@ export class PdfEngine {
       const mat = m.Matrix.concat(m.Matrix.translate(-b[0], -b[1]), m.Matrix.scale(scale, scale));
       const w = Math.max(1, Math.ceil((b[2] - b[0]) * scale));
       const h = Math.max(1, Math.ceil((b[3] - b[1]) * scale));
-      const pix = new m.Pixmap(m.ColorSpace.DeviceRGB, [0, 0, w, h], false);
-      pix.clear(255);
+      const key = `${index}|${scale.toFixed(5)}|${b.join(",")}`;
+      let base = this.contentCache.get(key);
+      if (base) {
+        this.contentCache.delete(key); // (most recently used goes last)
+        this.contentCache.set(key, base);
+      } else {
+        // an opaque white RGBA pixmap: blend modes work as on paper, and the bytes are ImageData-ready
+        base = new m.Pixmap(m.ColorSpace.DeviceRGB, [0, 0, w, h], true);
+        base.clear(255);
+        const dev = new m.DrawDevice(m.Matrix.identity, base);
+        page.runPageContents(dev, mat);
+        dev.close();
+        dev.destroy();
+        const size = base.getStride() * h;
+        if (size <= PdfEngine.CONTENT_CACHE_BYTES / 2) {
+          this.contentCache.set(key, base);
+          this.contentBytes += size;
+          for (const [k, old] of this.contentCache) {
+            if (this.contentBytes <= PdfEngine.CONTENT_CACHE_BYTES || k === key) break;
+            this.contentBytes -= old.getStride() * old.getHeight();
+            old.destroy();
+            this.contentCache.delete(k);
+          }
+        }
+      }
+      const pix = new m.Pixmap(m.ColorSpace.DeviceRGB, [0, 0, w, h], true);
+      pix.getPixels().set(base.getPixels());
+      if (!this.contentCache.has(key)) base.destroy();
       const dev = new m.DrawDevice(m.Matrix.identity, pix);
-      page.runPageContents(dev, mat);
       page.runPageAnnots(dev, mat);
       page.runPageWidgets(dev, mat);
       dev.close();
       dev.destroy();
-      const rgb = pix.getPixels();
       const stride = pix.getStride();
-      const data = new Uint8ClampedArray(w * h * 4);
-      for (let y = 0; y < h; y++) {
-        let s = y * stride;
-        let d = y * w * 4;
-        for (let x = 0; x < w; x++) {
-          data[d] = rgb[s];
-          data[d + 1] = rgb[s + 1];
-          data[d + 2] = rgb[s + 2];
-          data[d + 3] = 255;
-          s += 3;
-          d += 4;
-        }
+      const px = pix.getPixels();
+      let data: Uint8ClampedArray;
+      if (stride === w * 4) data = new Uint8ClampedArray(px);
+      else {
+        data = new Uint8ClampedArray(w * h * 4);
+        for (let y = 0; y < h; y++) data.set(px.subarray(y * stride, y * stride + w * 4), y * w * 4);
       }
       pix.destroy();
       return { width: w, height: h, data };
@@ -491,7 +534,7 @@ export class PdfEngine {
         const r = a.getBounds();
         shiftAnnot(a, topLeft[0] - r[0], topLeft[1] - r[1]);
       });
-    });
+    }, []);
     this.clearText();
     return { from: this.listAnnots(from), to: this.listAnnots(to), index: newIndex };
   }
@@ -599,7 +642,7 @@ export class PdfEngine {
           n += addOcrWords(this.mupdf, doc, page, words, font);
         });
       return pages.length > 0;
-    });
+    }, pages.map((p) => p.index));
     this.clearText();
     return n;
   }
@@ -657,7 +700,7 @@ export class PdfEngine {
         }
         if (lost) result.warnings.push(`${lost} highlight${lost > 1 ? "s were" : " was"} removed because the marked words changed.`);
       });
-    });
+    }, [index]);
     this.clearText();
     return { result, annots: this.listAnnots(index) };
   }
@@ -889,7 +932,7 @@ export class PdfEngine {
    * Run a change as one undo step. If `fn` returns false nothing changed and no step is
    * recorded; if it throws, the document is put back exactly as it was.
    */
-  private journaled(name: string, fn: () => void | boolean): void {
+  private journaled(name: string, fn: () => void | boolean, content: number[] | "all" = "all"): void {
     const before = this.snapshot();
     let changed: void | boolean;
     try {
@@ -899,7 +942,9 @@ export class PdfEngine {
       throw e;
     }
     if (changed === false) return;
-    this.undoStack.push({ name, bytes: before, id: this.stateId });
+    // pages whose contents (not just annotations or fields) may look different now
+    this.dropContent(content);
+    this.undoStack.push({ name, bytes: before, id: this.stateId, content });
     this.stateId = this.nextStateId++;
     this.redoStack = [];
     // keep memory in check: drop the oldest steps
@@ -911,7 +956,8 @@ export class PdfEngine {
 
   /** Run an undoable change on one page; returns that page's annotations afterwards. */
   private op(name: string, index: number, fn: (p: MuPDF.PDFPage) => void | boolean): AnnotInfo[] {
-    this.journaled(name, () => this.withPage(index, fn));
+    // (annotations and form fields only: the page contents stay as drawn)
+    this.journaled(name, () => this.withPage(index, fn), []);
     this.stext.get(index)?.destroy();
     this.stext.delete(index);
     this.lines.delete(index);
@@ -923,6 +969,13 @@ export class PdfEngine {
     this.clearText();
     return this.info();
   }
+}
+
+interface UndoStep {
+  name: string;
+  bytes: Uint8Array;
+  id: number;
+  content: number[] | "all";
 }
 
 /** Translate any kind of annotation by (dx, dy) in page space. */

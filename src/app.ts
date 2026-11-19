@@ -57,6 +57,7 @@ export class App {
       {
         engine,
         goTo: (i) => this.viewer.scrollToPage(i),
+        viewerBusy: () => this.viewer?.busyWithVisible() ?? false,
         rotate: (p, d) => this.pageOp(this.engine.rotatePages(p, d), p),
         remove: (p) => this.removePages(p),
         extract: (p) => this.extractPages(p),

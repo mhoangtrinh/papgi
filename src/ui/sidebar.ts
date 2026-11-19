@@ -13,6 +13,8 @@ export interface SidebarHost {
   insertPdf(at: number): void;
   insertBlank(at: number): void;
   reorder(order: number[], moved: number[]): void;
+  /** The main view is drawing pages in view: thumbnails wait (one engine does both). */
+  viewerBusy(): boolean;
 }
 
 interface Thumb {
@@ -237,8 +239,15 @@ export class Sidebar {
     hint.textContent = n > 1 ? `${n} pages selected` : n === 1 ? `Page ${this.sel.selected[0] + 1} selected` : "Ctrl/Shift-click to select pages";
   }
 
+  private waiting = 0;
+
   private schedule(): void {
     if (this.rendering || !this.info || this.el.hidden) return;
+    if (this.host.viewerBusy()) {
+      clearTimeout(this.waiting);
+      this.waiting = window.setTimeout(() => this.schedule(), 120);
+      return;
+    }
     const i = this.thumbs.findIndex((t) => t.near && t.renderedVersion !== t.version);
     if (i < 0) return;
     const t = this.thumbs[i];

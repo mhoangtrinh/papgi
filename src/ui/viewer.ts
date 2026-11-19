@@ -267,6 +267,11 @@ export class Viewer {
     return Math.round(s * 1000) / 1000;
   }
 
+  /** Pages in view still waiting to be drawn (thumbnails wait for these). */
+  busyWithVisible(): boolean {
+    return this.rendering || this.visiblePages().some((pv) => pv.renderedScale !== this.targetScale(pv) || pv.renderedVersion !== pv.version);
+  }
+
   private visiblePages(): PageView[] {
     const vr = this.el.getBoundingClientRect();
     return this.pages.filter((pv) => {
@@ -280,10 +285,14 @@ export class Viewer {
     if (this.rendering || !this.info) return;
     const needs = (pv: PageView) => pv.renderedScale !== this.targetScale(pv) || pv.renderedVersion !== pv.version;
     const visible = this.visiblePages();
-    const next = visible.find(needs) ?? this.pages.find((pv) => pv.near && needs(pv));
+    // pages coming into view first get a quick, low-resolution picture (big scans take a few
+    // hundred ms to draw sharply), then the sharp one
+    const blank = visible.find((pv) => pv.renderedScale === 0);
+    const next = blank ?? visible.find(needs) ?? this.pages.find((pv) => pv.near && needs(pv));
     if (!next) return;
     this.rendering = true;
-    const scale = this.targetScale(next);
+    const full = this.targetScale(next);
+    const scale = blank && full > 1.2 ? Math.round(Math.max(0.6, full / 3) * 1000) / 1000 : full;
     const version = next.version;
     this.host.engine
       .renderBitmap(next.index, scale)
