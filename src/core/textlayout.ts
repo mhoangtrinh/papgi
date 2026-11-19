@@ -11,6 +11,10 @@ export type Align = "left" | "justify" | "center" | "right";
 export interface LayoutOptions {
   width: number;
   align: Align;
+  /** Offset of the first line of each paragraph (after a hard break), e.g. a paragraph indent. */
+  firstIndent?: number;
+  /** Offset of the other lines, e.g. the hanging indent of a list item. */
+  restIndent?: number;
   /** Width of `text` drawn in `style`. */
   measure: (style: number, text: string) => number;
 }
@@ -81,8 +85,13 @@ export function layoutParagraph(runs: Run[], o: LayoutOptions): Line[] {
   let pendingSpaceCount = 0;
   let pendingJoin = false;
 
+  // first line of a paragraph = the first line, or a line right after a hard break
+  let firstOfPara = true;
+  const indent = () => (firstOfPara ? (o.firstIndent ?? 0) : (o.restIndent ?? 0));
+  const avail = () => Math.max(1, o.width - indent());
   const finish = (last: boolean) => {
     lines.push(place(cur, curWidth, last));
+    firstOfPara = last;
     cur = [];
     curWidth = 0;
     pendingSpace = 0;
@@ -92,11 +101,12 @@ export function layoutParagraph(runs: Run[], o: LayoutOptions): Line[] {
 
   const place = (words: W[], natural: number, last: boolean): Line => {
     const gaps = words.filter((w, i) => i > 0 && !w.joined).length;
+    const width = avail();
     let extra = 0;
-    let offset = 0;
-    if (o.align === "justify" && !last && gaps > 0) extra = Math.max(0, (o.width - natural) / gaps);
-    else if (o.align === "center") offset = Math.max(0, (o.width - natural) / 2);
-    else if (o.align === "right") offset = Math.max(0, o.width - natural);
+    let offset = indent();
+    if (o.align === "justify" && !last && gaps > 0) extra = Math.max(0, (width - natural) / gaps);
+    else if (o.align === "center") offset += Math.max(0, (width - natural) / 2);
+    else if (o.align === "right") offset += Math.max(0, width - natural);
     const pieces: Piece[] = [];
     let x = offset;
     words.forEach((w, i) => {
@@ -113,13 +123,13 @@ export function layoutParagraph(runs: Run[], o: LayoutOptions): Line[] {
     const w = wordWidth(segs);
     const joined = cur.length > 0 && pendingJoin && pendingSpaceCount === 0;
     const space = cur.length && !joined ? pendingSpace : 0;
-    if (cur.length && curWidth + space + w > o.width + 0.01) {
+    if (cur.length && curWidth + space + w > avail() + 0.01) {
       finish(false);
       return pushWord(segs);
     }
-    if (!cur.length && w > o.width + 0.01) {
+    if (!cur.length && w > avail() + 0.01) {
       // a single word longer than the line: break it by characters
-      const [head, tail] = splitToFit(segs, o.width, o.measure);
+      const [head, tail] = splitToFit(segs, avail(), o.measure);
       if (!tail.length) {
         cur.push({ segs, width: w, spaceBefore: 0, joined: false });
         curWidth = w;

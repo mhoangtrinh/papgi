@@ -8,7 +8,8 @@ export default defineConfig({
   optimizeDeps: { exclude: ["mupdf"] },
   plugins: [
     VitePWA({
-      registerType: "autoUpdate",
+      registerType: "prompt",
+      injectRegister: false,
       includeAssets: ["favicon.svg", "apple-touch-icon.png"],
       manifest: {
         name: "papgi",

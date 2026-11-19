@@ -9,7 +9,7 @@
     "test": "vitest run",
     "e2e": "node e2e/check.mjs",
     "icons": "node scripts/icons.mjs",
-    "samples": "cd samples/src && pdflatex -interaction=batchmode paper.tex && pdflatex -interaction=batchmode paper.tex && cp paper.pdf ../../public/samples/ && python3 make_samples.py && node make_scan.mjs && python3 make_scan.py && rm -f paper.aux paper.log paper.pdf scan_raw.png scan.jpg"
+    "samples": "cd samples/src && pdflatex -interaction=batchmode paper.tex && pdflatex -interaction=batchmode paper.tex && cp paper.pdf ../../public/samples/ && python3 make_samples.py && node make_scan.mjs && python3 make_scan.py && python3 make_report.py && rm -f paper.aux paper.log paper.pdf scan_raw.png scan.jpg"
   },
   "author": "",
   "license": "AGPL-3.0-or-later",

@@ -24,6 +24,7 @@ const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
 const SAMPLES = [
   { file: "paper.pdf", label: "Paper" },
   { file: "form.pdf", label: "Form" },
+  { file: "report.pdf", label: "Word report" },
   { file: "scan.pdf", label: "Scan" },
   { file: "pages.pdf", label: "5 pages" },
 ];
@@ -814,6 +815,27 @@ export class App {
     this.$("#page-count").textContent = `/ ${this.info?.pageCount ?? 0}`;
     if (!has) this.$<HTMLInputElement>("#page-input").value = "0";
     document.title = has ? `${this.dirty ? "• " : ""}${name} — papgi` : "papgi";
+  }
+
+  /** A new version of the app is ready to use. */
+  updateReady(apply: () => void): void {
+    if (!this.info) return apply();
+    let bar = document.querySelector<HTMLDivElement>(".update-bar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.className = "update-bar";
+      bar.setAttribute("role", "status");
+      document.body.append(bar);
+    }
+    bar.innerHTML = `<span>A new version of papgi is ready.</span><button class="btn small primary" data-act="reload">Reload</button><button class="icon-btn sm" data-act="later" title="Later">${icon("close")}</button>`;
+    bar.onclick = async (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
+      if (!b) return;
+      if (b.dataset.act === "later") return bar!.remove();
+      if (this.dirty && !(await confirmDialog("Reload now?", "You have unsaved changes. Save first, or they will be lost.", "Reload anyway", true))) return;
+      this.dirty = false;
+      apply();
+    };
   }
 
   private async busy<T>(p: Promise<T>): Promise<T> {

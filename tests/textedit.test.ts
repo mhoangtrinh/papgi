@@ -110,7 +110,8 @@ describe("live text editing: replacing text", () => {
     const b2 = find(e, 0, "This is the first page");
     const { result } = edit(e, 0, b2.id, [{ text: "Trang đầu tiên — Việt Nam", style: 0 }]);
     expect(e.pageText(0)).toContain("Trang đầu tiên — Việt Nam");
-    expect(result.warnings.join(" ")).toMatch(/matching font/);
+    // Liberation Sans is a metric twin of Helvetica, so no "different font" warning
+    expect(result.warnings.join(" ")).not.toMatch(/matching font/);
   });
 
   it("can empty a paragraph and grow a short heading on one line", () => {
@@ -150,5 +151,39 @@ describe("live text editing: highlights follow their words", () => {
     const h = annots[0].rect;
     expect(Math.abs(h[1] - Math.min(...now.map((q) => q[1])))).toBeLessThan(3);
     expect(h[1]).not.toBeCloseTo(keep.quads[0][1], 0);
+  });
+});
+
+describe("live text editing: Word-style documents", () => {
+  it("splits headings, list items, table cells and hard line breaks into separate paragraphs", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("report.pdf"));
+    const texts = e.textBlocks(0).map((b) => b.runs.map((r) => r.text).join(""));
+    expect(texts).toContain("Results");
+    expect(texts).toContain("First bullet item with some text");
+    expect(texts).toContain("Cell 11");
+    expect(texts.some((t) => t.startsWith("The noise floor") && !t.includes("Results"))).toBe(true);
+    // ragged (left-aligned) text is not mistaken for justified
+    expect(find(e, 0, "This report").align).toBe("left");
+  });
+
+  it("keeps the bullet when editing a list item and edits one table cell alone", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("report.pdf"));
+    const item = find(e, 0, "First bullet");
+    edit(e, 0, item.id, [{ text: "First bullet item, edited", style: item.runs[0].style }]);
+    const cell = find(e, 0, "Cell 11");
+    edit(e, 0, cell.id, [{ text: "Changed", style: cell.runs[0].style }]);
+    const t = e.pageText(0);
+    expect(t).toContain("First bullet item, edited");
+    expect(t).toContain("Changed");
+    for (const c of ["Cell 10", "Cell 12", "Cell 01"]) expect(t).toContain(c);
+    // the bullet glyph is still drawn: the page renders dark pixels left of the item text
+    const it2 = find(e, 0, "First bullet item, edited");
+    const img = e.render(0, 2);
+    const y = Math.round(it2.firstBaseline * 2 - 6);
+    let dark = 0;
+    for (let x = Math.round((it2.left - 20) * 2); x < Math.round((it2.left - 2) * 2); x++) if (img.data[(y * img.width + x) * 4] < 100) dark++;
+    expect(dark).toBeGreaterThan(2);
   });
 });

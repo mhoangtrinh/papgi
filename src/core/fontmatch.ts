@@ -18,6 +18,8 @@ export interface Substitute {
   family: string;
   bold: boolean;
   italic: boolean;
+  /** A look-alike with the same letter widths (Latin Modern for TeX, Carlito for Calibri, Liberation for Arial...). */
+  exact: boolean;
 }
 
 /** Drop the 6-letter subset tag: "ABCDEF+Calibri-Bold" -> "Calibri-Bold". */
@@ -33,6 +35,7 @@ export function isItalicName(n: string): boolean {
   return /italic|oblique|slant|cmti|cmsl|cmmi|sfti|sfsl|-it\b|mathitalic|[-,]i$|bi$/i.test(n);
 }
 
+const MATH = /math|cmmi|cmsy|cmex/i;
 const TEX = /^(lm|cm|sf|ec|tc|eu|texgyre|latinmodern)|lmroman|lmsans|lmmono|lmmath|cmr\d|cmbx|cmti|cmsl|cmmi|cmsy|cmss|cmtt|sfrm|sfss|sftt/i;
 
 function pick(base: string, bold: boolean, italic: boolean, names: [string, string, string, string]): string {
@@ -47,27 +50,27 @@ export function substituteFor(t: FontTraits): Substitute {
 
   if (TEX.test(n)) {
     if (/tt|mono|typewriter/i.test(n)) {
-      return { file: italic ? "lmmono10-italic.otf" : "lmmono10-regular.otf", family: "papgi LM Mono", css: "'papgi LM Mono', 'Courier New', monospace", bold: false, italic };
+      return { file: italic ? "lmmono10-italic.otf" : "lmmono10-regular.otf", family: "papgi LM Mono", css: "'papgi LM Mono', 'Courier New', monospace", bold: false, italic, exact: true };
     }
     if (/ss|sans/i.test(n)) {
-      return { file: pick("lmsans10-", bold, italic, ["regular.otf", "bold.otf", "oblique.otf", "boldoblique.otf"]), family: "papgi LM Sans", css: "'papgi LM Sans', Arial, sans-serif", bold, italic };
+      return { file: pick("lmsans10-", bold, italic, ["regular.otf", "bold.otf", "oblique.otf", "boldoblique.otf"]), family: "papgi LM Sans", css: "'papgi LM Sans', Arial, sans-serif", bold, italic, exact: true };
     }
-    return { file: pick("lmroman10-", bold, italic, ["regular.otf", "bold.otf", "italic.otf", "bolditalic.otf"]), family: "papgi LM Roman", css: "'papgi LM Roman', 'Times New Roman', serif", bold, italic };
+    return { file: pick("lmroman10-", bold, italic, ["regular.otf", "bold.otf", "italic.otf", "bolditalic.otf"]), family: "papgi LM Roman", css: "'papgi LM Roman', 'Times New Roman', serif", bold, italic, exact: !MATH.test(n) };
   }
   if (/calibri|carlito/i.test(n)) {
-    return { file: pick("Carlito-", bold, italic, ["Regular.ttf", "Bold.ttf", "Italic.ttf", "BoldItalic.ttf"]), family: "papgi Carlito", css: "'papgi Carlito', Calibri, sans-serif", bold, italic };
+    return { file: pick("Carlito-", bold, italic, ["Regular.ttf", "Bold.ttf", "Italic.ttf", "BoldItalic.ttf"]), family: "papgi Carlito", css: "'papgi Carlito', Calibri, sans-serif", bold, italic, exact: true };
   }
   if (/cambria|caladea/i.test(n)) {
-    return { file: pick("Caladea-", bold, italic, ["Regular.ttf", "Bold.ttf", "Italic.ttf", "BoldItalic.ttf"]), family: "papgi Caladea", css: "'papgi Caladea', Cambria, serif", bold, italic };
+    return { file: pick("Caladea-", bold, italic, ["Regular.ttf", "Bold.ttf", "Italic.ttf", "BoldItalic.ttf"]), family: "papgi Caladea", css: "'papgi Caladea', Cambria, serif", bold, italic, exact: true };
   }
   const names: [string, string, string, string] = ["Regular.ttf", "Bold.ttf", "Italic.ttf", "BoldItalic.ttf"];
   if (t.mono || /courier|mono|consol|menlo|typewriter|code/i.test(n)) {
-    return { file: pick("LiberationMono-", bold, italic, names), family: "papgi Mono", css: "'papgi Mono', 'Courier New', monospace", bold, italic };
+    return { file: pick("LiberationMono-", bold, italic, names), family: "papgi Mono", css: "'papgi Mono', 'Courier New', monospace", bold, italic, exact: /courier|liberation ?mono|nimbus ?mono/i.test(n) };
   }
   const sans = /arial|helvetica|sans|verdana|tahoma|segoe|roboto|inter\b|calibri|gill|futura|frutiger|myriad|lato|source ?sans|nunito|montserrat|poppins|ubuntu/i.test(n);
   const serif = /times|serif|roman|georgia|garamond|minion|palatino|book|century|cambria|charter|baskerville|caslon|utopia|bodoni/i.test(n);
   if (sans || (!serif && !t.serif)) {
-    return { file: pick("LiberationSans-", bold, italic, names), family: "papgi Sans", css: "'papgi Sans', Arial, Helvetica, sans-serif", bold, italic };
+    return { file: pick("LiberationSans-", bold, italic, names), family: "papgi Sans", css: "'papgi Sans', Arial, Helvetica, sans-serif", bold, italic, exact: /arial|helvetica|liberation ?sans|nimbus ?sans|arimo/i.test(n) };
   }
-  return { file: pick("LiberationSerif-", bold, italic, names), family: "papgi Serif", css: "'papgi Serif', 'Times New Roman', serif", bold, italic };
+  return { file: pick("LiberationSerif-", bold, italic, names), family: "papgi Serif", css: "'papgi Serif', 'Times New Roman', serif", bold, italic, exact: /times|liberation ?serif|nimbus ?rom|tinos/i.test(n) };
 }

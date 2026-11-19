@@ -111,3 +111,14 @@ describe("hyphen breaks", () => {
     expect(scale.x).toBeCloseTo(full.x + 5);
   });
 });
+
+describe("indents", () => {
+  it("indents the first line of each paragraph and the other lines separately", () => {
+    const lines = layoutParagraph([{ text: "aa bb cc dd\nee ff", style: 0 }], { width: 8, align: "left", measure, firstIndent: 2, restIndent: 1 });
+    expect(lines.map((l) => [l.pieces[0].x, l.pieces.map((p) => p.text).join(" ")])).toEqual([
+      [2, "aa bb"],
+      [1, "cc dd"],
+      [2, "ee ff"],
+    ]);
+  });
+});

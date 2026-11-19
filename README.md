@@ -11,6 +11,8 @@ A PDF editor that runs in your browser. Annotate, highlight, fill forms, sign an
 
 In Edge/Chrome, **Save (Ctrl+S) writes back to the file you opened**. In other browsers, Save downloads a copy.
 
+Updates: when a new version is ready, papgi switches to it right away if no document is open; otherwise it shows a small "Reload" bar so unsaved work isn't lost.
+
 ## What it does (stage 1)
 
 | | |
