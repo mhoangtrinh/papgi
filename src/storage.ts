@@ -2,7 +2,7 @@
 import type { Point } from "./core/geometry";
 
 export type Theme = "auto" | "light" | "dark";
-export type Tool = "select" | "highlight" | "pen" | "text" | "shape" | "sign";
+export type Tool = "select" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign";
 export type MarkKind = "Highlight" | "Underline" | "StrikeOut";
 export type ShapeKind = "Square" | "Circle" | "Arrow";
 
@@ -43,6 +43,7 @@ export const DEFAULTS: Settings = {
   tool: "select",
   colors: {
     select: "#ffd400",
+    edit: "#1c1c1c",
     highlight: "#ffd400",
     pen: "#2f6fed",
     text: "#1c1c1c",

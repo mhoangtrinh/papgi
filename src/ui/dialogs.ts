@@ -86,6 +86,7 @@ export async function confirmDialog(title: string, text: string, ok: string, dan
 export function showShortcuts(): void {
   const rows: [string, string][] = [
     ["V", "Select / move"],
+    ["E", "Edit text in the PDF"],
     ["H", "Highlight text"],
     ["P", "Pen"],
     ["T", "Text box"],

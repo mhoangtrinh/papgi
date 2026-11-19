@@ -1,12 +1,34 @@
 // Web Worker that owns the MuPDF engine, so heavy work never blocks the UI.
 import * as mupdf from "mupdf";
-import { PdfEngine } from "./engine";
+import { PdfEngine, type AnnotInfo, type EditResult } from "./engine";
+import type { Run } from "../core/textlayout";
 
 export class WorkerEngine extends PdfEngine {
   /** Render straight to an ImageBitmap that can be transferred to the page. */
   async renderBitmap(index: number, scale: number): Promise<ImageBitmap> {
     const img = this.render(index, scale);
     return createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+  }
+
+  /** Replace a paragraph, first fetching any bundled fonts it needs from `fontBase`. */
+  async editText(index: number, block: number, runs: Run[], fontBase: string): Promise<{ result: EditResult; annots: AnnotInfo[] }> {
+    for (let round = 0; round < 3; round++) {
+      const need = this.fontsForEdit(index, block, runs);
+      if (!need.length) break;
+      await Promise.all(
+        need.map(async (file) => {
+          let res: Response;
+          try {
+            res = await fetch(new URL(file, fontBase));
+          } catch {
+            throw new Error("Couldn't download the font for this text. Are you offline?");
+          }
+          if (!res.ok) throw new Error(`Couldn't load the font ${file} (${res.status})`);
+          this.registerFont(file, new Uint8Array(await res.arrayBuffer()));
+        }),
+      );
+    }
+    return this.replaceText(index, block, runs);
   }
 
   /** One annotation on a transparent background (drag preview). */

@@ -1,5 +1,6 @@
 // The document view: pages, rendering, zoom, tools and form fields.
-import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit } from "../engine/engine";
+import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit, EditBlock } from "../engine/engine";
+import { ParagraphEditor } from "./text-editor";
 import type { Engine } from "../engine/client";
 import type { Settings, Tool, SavedSignature } from "../storage";
 import { hexToRgb, rgbToHex } from "../storage";
@@ -37,6 +38,8 @@ interface PageView {
   widgets: WidgetInfo[] | null;
   lines: Rect[] | null;
   dataVersion: number;
+  blocks: EditBlock[] | null; // paragraphs, loaded while the Edit text tool is on
+  blocksVersion: number;
 }
 
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -126,6 +129,10 @@ export class Viewer {
   setDocument(info: DocInfo | null, keepPosition = false): void {
     const keep = keepPosition ? this.current : 0;
     this.closeEditor(false);
+    if (this.para) {
+      this.para.ed.destroy();
+      this.para = null;
+    }
     this.clearSelection();
     this.selectAnnot(null);
     this.observer.disconnect();
@@ -174,7 +181,7 @@ export class Viewer {
     svg.classList.add("page-overlay");
     svg.setAttribute("viewBox", `${info.x} ${info.y} ${info.w} ${info.h}`);
     svg.setAttribute("preserveAspectRatio", "none");
-    svg.innerHTML = `<g class="g-hits"></g><g class="g-sel"></g><g class="g-annsel"></g><g class="g-preview"></g>`;
+    svg.innerHTML = `<g class="g-hits"></g><g class="g-sel"></g><g class="g-hover"></g><g class="g-annsel"></g><g class="g-preview"></g>`;
     const forms = document.createElement("div");
     forms.className = "page-forms";
     const label = document.createElement("div");
@@ -185,14 +192,36 @@ export class Viewer {
     return {
       index, info, el, canvas, svg: svg as SVGSVGElement, forms,
       renderedScale: 0, version: 1, renderedVersion: 0, near: false,
-      annots: null, widgets: null, lines: null, dataVersion: 0,
+      annots: null, widgets: null, lines: null, dataVersion: 0, blocks: null, blocksVersion: 0,
     };
   }
 
   private invalidate(pv: PageView): void {
     pv.version++;
     pv.annots = pv.widgets = pv.lines = null;
+    pv.blocks = null;
     if (pv.near) this.loadPageData(pv);
+  }
+
+  /** Paragraph list for the Edit text tool (cached per page version). */
+  private async ensureBlocks(pv: PageView): Promise<EditBlock[]> {
+    if (pv.blocks && pv.blocksVersion === pv.version) return pv.blocks;
+    const v = pv.version;
+    const blocks = await this.host.engine.textBlocks(pv.index);
+    if (pv.version === v) {
+      pv.blocks = blocks;
+      pv.blocksVersion = v;
+    }
+    return blocks;
+  }
+
+  private blockAt(pv: PageView, p: Point): EditBlock | null {
+    const pad = 2;
+    for (const b of pv.blocks ?? []) {
+      if (!b.lines.length) continue;
+      if (b.lines.some((l) => inRect([b.left, l.bbox[1], b.left + b.width, l.bbox[3]], p[0], p[1], pad))) return b;
+    }
+    return null;
   }
 
   private async loadPageData(pv: PageView): Promise<void> {
@@ -353,7 +382,10 @@ export class Viewer {
   setTool(tool: Tool): void {
     this.tool = tool;
     this.closeEditor(true);
+    void this.closeParagraph(true);
     this.hideGhost();
+    for (const pv of this.pages) pv.svg.querySelector(".g-hover")?.replaceChildren();
+    if (tool === "edit") for (const pv of this.pages) if (pv.near) void this.ensureBlocks(pv).catch(() => {});
     if (tool !== "select") {
       this.clearSelection();
       this.selectAnnot(null);
@@ -388,7 +420,12 @@ export class Viewer {
 
   private onDown(e: PointerEvent): void {
     if (e.button !== 0 && e.pointerType === "mouse") return;
-    if ((e.target as Element).closest(".page-forms > *, .text-editor, .floating")) return;
+    if ((e.target as Element).closest(".page-forms > *, .text-editor, .para-editor, .floating")) return;
+    if (this.para) {
+      // clicking anywhere else finishes the paragraph being edited
+      void this.closeParagraph(true);
+      return;
+    }
     const pv = this.pageFromEvent(e);
     if (!pv) {
       if (this.tool === "select") {
@@ -449,6 +486,7 @@ export class Viewer {
         break;
       case "text":
       case "sign":
+      case "edit":
         this.drag = { kind: "click", pv, start: p, x: e.clientX, y: e.clientY };
         break;
     }
@@ -458,6 +496,7 @@ export class Viewer {
     const d = this.drag;
     if (!d) {
       if (this.tool === "sign") this.moveGhost(e);
+      else if (this.tool === "edit") this.hoverBlock(e);
       return;
     }
     if (d.kind === "pan") {
@@ -590,6 +629,8 @@ export class Viewer {
             else this.openEditor(d.pv, null, d.start);
           } else if (this.tool === "sign") {
             await this.placeSignature(d.pv, d.start);
+          } else if (this.tool === "edit") {
+            await this.openParagraph(d.pv, d.start, e.clientX, e.clientY);
           }
           break;
         }
@@ -681,6 +722,7 @@ export class Viewer {
     pv.annots = annots;
     pv.version++;
     pv.dataVersion = pv.version;
+    pv.blocks = null;
     // Keep the live preview until the new render lands, so nothing flickers.
     const v = pv.version;
     const waitAndClear = () => {
@@ -906,8 +948,9 @@ export class Viewer {
     this.floating.remove();
   }
 
-  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot", html: string): void {
+  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot" | "edit", html: string): void {
     this.floating.innerHTML = html;
+    this.floating.onpointerdown = null;
     this.floating.dataset.kind = kind;
     this.floating.dataset.page = String(pv.index);
     this.floating.dataset.rect = r.join(",");
@@ -976,6 +1019,98 @@ export class Viewer {
         toast((err as Error).message, "error");
       }
     };
+  }
+
+  // ---------- live text editing ----------
+
+  private para: { pv: PageView; ed: ParagraphEditor; block: EditBlock } | null = null;
+  private paraBusy = false;
+  private hoverPage: PageView | null = null;
+
+  private hoverBlock(e: PointerEvent): void {
+    const pv = this.pageFromEvent(e);
+    if (this.hoverPage && this.hoverPage !== pv) this.hoverPage.svg.querySelector(".g-hover")?.replaceChildren();
+    this.hoverPage = pv;
+    if (!pv || this.para) return;
+    if (!pv.blocks || pv.blocksVersion !== pv.version) {
+      void this.ensureBlocks(pv).catch(() => {});
+      return;
+    }
+    const b = this.blockAt(pv, this.toPagePoint(pv, e));
+    const g = pv.svg.querySelector(".g-hover")!;
+    if (!b) return void g.replaceChildren();
+    const top = Math.min(...b.lines.map((l) => l.bbox[1]));
+    const bottom = Math.max(...b.lines.map((l) => l.bbox[3]));
+    const pad = 2 / this.zoom;
+    g.innerHTML = `<rect x="${b.left - pad}" y="${top - pad}" width="${b.width + 2 * pad}" height="${bottom - top + 2 * pad}" class="hover-block ${b.editable ? "" : "locked"}"/>`;
+  }
+
+  private async openParagraph(pv: PageView, p: Point, clientX: number, clientY: number): Promise<void> {
+    const blocks = await this.ensureBlocks(pv);
+    const block = this.blockAt(pv, p);
+    if (!block) {
+      if (!blocks.some((b) => b.lines.length)) toast("This page has no text that can be edited — it may be a scanned image.");
+      return;
+    }
+    if (!block.editable) return void toast(block.reason ?? "This text can't be edited.", "error");
+    pv.svg.querySelector(".g-hover")?.replaceChildren();
+    const ed = new ParagraphEditor(pv.index, block, pv.info, new URL("fonts/", document.baseURI).href, (commit) => void this.closeParagraph(commit));
+    pv.el.append(ed.el);
+    this.para = { pv, ed, block };
+    ed.placeCaret(clientX, clientY);
+    this.showFloatingAt(
+      pv,
+      [block.left, Math.min(...block.lines.map((l) => l.bbox[1])), block.left + block.width, block.bbox[3]],
+      "edit",
+      `${block.warn ? `<span class="float-warn" title="${block.warn}">${icon("warn")}<span>Formulas get flattened</span></span><span class="sep"></span>` : ""}
+       <button data-act="done" title="Finish (Ctrl+Enter)">${icon("check")}</button>
+       <button data-act="cancel" title="Cancel (Esc)">${icon("close")}</button>`,
+    );
+    this.floating.onclick = (ev) => {
+      const b = (ev.target as HTMLElement).closest<HTMLButtonElement>("button");
+      if (b) void this.closeParagraph(b.dataset.act === "done");
+    };
+    this.floating.onpointerdown = (ev) => ev.preventDefault(); // keep the caret in the editor
+    if (block.warn) toast(block.warn);
+  }
+
+  /** Finish editing a paragraph: write the new text into the PDF (or throw the changes away). */
+  async closeParagraph(commit: boolean): Promise<void> {
+    const cur = this.para;
+    if (!cur || this.paraBusy) return;
+    const { pv, ed, block } = cur;
+    if (!commit || !ed.changed()) {
+      this.para = null;
+      ed.destroy();
+      if (this.floating.dataset.kind === "edit") this.hideFloating();
+      return;
+    }
+    this.paraBusy = true;
+    ed.el.classList.add("saving");
+    try {
+      const { result, annots } = await this.host.busy(this.host.engine.editText(pv.index, block.id, ed.runs(), new URL("fonts/", document.baseURI).href));
+      this.para = null;
+      if (this.floating.dataset.kind === "edit") this.hideFloating();
+      this.afterAnnotEdit(pv, annots);
+      // keep the editor visible until the new page image is drawn, so nothing flickers
+      const v = pv.version;
+      const wait = () => {
+        if (pv.renderedVersion >= v || this.pages[pv.index] !== pv) ed.destroy();
+        else requestAnimationFrame(wait);
+      };
+      wait();
+      if (result.warnings.length) toast(result.warnings[result.warnings.length - 1]);
+    } catch (err) {
+      ed.el.classList.remove("saving");
+      toast((err as Error).message, "error");
+      return;
+    } finally {
+      this.paraBusy = false;
+    }
+  }
+
+  isEditingParagraph(): boolean {
+    return !!this.para;
   }
 
   // ---------- text box editor ----------

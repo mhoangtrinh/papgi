@@ -4,6 +4,10 @@
 
 import type * as MuPDF from "mupdf";
 import type { Point, Quad, Rect } from "../core/geometry";
+import type { Run } from "../core/textlayout";
+import { extractBlocks, fontsNeeded, replaceBlock, type EditBlock, type EditResult } from "./textedit";
+
+export type { EditBlock, EditResult, EditStyle } from "./textedit";
 
 type M = typeof MuPDF;
 export type RGB = [number, number, number];
@@ -72,6 +76,7 @@ export class PdfEngine {
   private stext = new Map<number, MuPDF.StructuredText>();
   private lines = new Map<number, Rect[]>();
   private helv: MuPDF.Font | null = null;
+  private bundled = new Map<string, MuPDF.Font>();
   private title = "";
   // Each journal step gets a unique id, so "dirty" survives undo + new edit sequences.
   private stepIds: number[] = [];
@@ -162,7 +167,7 @@ export class PdfEngine {
   /** Serialize the current document; by default this also marks it as saved. */
   save(markSaved = true): Uint8Array {
     const doc = this.requireDoc();
-    const buf = doc.saveToBuffer("garbage=compact,compress");
+    const buf = doc.saveToBuffer("garbage=deduplicate,compress");
     const out = buf.asUint8Array().slice();
     buf.destroy();
     if (markSaved) this.markSaved();
@@ -507,6 +512,85 @@ export class PdfEngine {
       const a = page.getAnnotations()[annot];
       if (a) page.deleteAnnotation(a);
     });
+  }
+
+  // ---------- live text editing ----------
+
+  /** Paragraphs on a page, with their text and styles, for the text editor. */
+  textBlocks(index: number): EditBlock[] {
+    return this.withPage(index, (page) => extractBlocks(page).blocks);
+  }
+
+  /** Register a bundled font file (from public/fonts). */
+  registerFont(file: string, bytes: Uint8Array): void {
+    if (!this.bundled.has(file)) this.bundled.set(file, new this.mupdf.Font(file.replace(/\.[a-z]+$/, ""), bytes));
+  }
+
+  hasFont(file: string): boolean {
+    return this.bundled.has(file);
+  }
+
+  /** Bundled font files that must be registered before replaceText can run. */
+  fontsForEdit(index: number, block: number, runs: Run[]): string[] {
+    return this.withPage(index, (page) => fontsNeeded(page, block, runs, this.bundled));
+  }
+
+  /**
+   * Replace a paragraph with new text (one undo step). Highlights, underlines and
+   * strike-outs on the paragraph follow their words to the new position, or are
+   * removed if those words are gone.
+   */
+  replaceText(index: number, block: number, runs: Run[]): { result: EditResult; annots: AnnotInfo[] } {
+    const doc = this.requireDoc();
+    let result!: EditResult;
+    this.journaled("Edit text", () => {
+      this.withPage(index, (page) => {
+        const blk = extractBlocks(page).blocks[block];
+        // markup annotations sitting on this paragraph, with the words they cover
+        const marks: { annot: MuPDF.PDFAnnotation; text: string }[] = [];
+        if (blk) {
+          const st = page.toStructuredText("preserve-whitespace");
+          for (const a of page.getAnnotations()) {
+            if (!["Highlight", "Underline", "StrikeOut", "Squiggly"].includes(a.getType())) continue;
+            const qs = a.getQuadPoints();
+            const inside = qs.some((q) => blk.lines.some((l) => q[1] < l.bbox[3] && q[5] > l.bbox[1] && q[2] > blk.left - 1 && q[0] < blk.left + blk.width + 1));
+            if (!inside || !qs.length) continue;
+            const first = qs[0];
+            const last = qs[qs.length - 1];
+            const text = st.copy([first[0] + 0.5, (first[1] + first[5]) / 2], [last[2] - 0.5, (last[3] + last[7]) / 2]).replace(/\s+/g, " ").trim();
+            marks.push({ annot: a, text });
+          }
+          st.destroy();
+        }
+        result = replaceBlock(this.mupdf, doc, page, block, runs, this.bundled);
+        if (!marks.length) return;
+        // put each mark back on its words inside the new paragraph
+        const area = result.bbox;
+        const used = new Set<string>();
+        let lost = 0;
+        for (const m of marks) {
+          const hits = m.text ? (page.search(m.text, undefined) as Quad[][]) : [];
+          const hit = hits.find((h) => {
+            const key = h.map((q) => q.map((v) => v.toFixed(1)).join()).join("|");
+            const inArea = h.every((q) => {
+              const cy = (q[1] + q[5]) / 2;
+              return q[0] >= area[0] - 1 && q[2] <= area[2] + 1 && cy >= area[1] - 2 && cy <= area[3] + 2;
+            });
+            return inArea && !used.has(key) && used.add(key) !== undefined;
+          });
+          if (hit) {
+            m.annot.setQuadPoints(hit);
+            m.annot.update();
+          } else {
+            page.deleteAnnotation(m.annot);
+            lost++;
+          }
+        }
+        if (lost) result.warnings.push(`${lost} highlight${lost > 1 ? "s were" : " was"} removed because the marked words changed.`);
+      });
+    });
+    this.clearText();
+    return { result, annots: this.listAnnots(index) };
   }
 
   // ---------- forms ----------

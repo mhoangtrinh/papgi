@@ -13,6 +13,7 @@ import { afterDelete, formatRange, movedSelection } from "./core/pages";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "select", label: "Select", key: "V", icon: "select" },
+  { id: "edit", label: "Edit text", key: "E", icon: "textEdit" },
   { id: "highlight", label: "Highlight", key: "H", icon: "highlight" },
   { id: "pen", label: "Pen", key: "P", icon: "pen" },
   { id: "text", label: "Text box", key: "T", icon: "text" },
@@ -378,6 +379,9 @@ export class App {
       case "select":
         html = `<span class="muted hint">Drag over text to select it · click an annotation to move, recolour or delete it · drag empty space to scroll</span>`;
         break;
+      case "edit":
+        html = `<span class="muted hint">Click a paragraph to change its text · Ctrl+Enter or click outside to finish · Esc to cancel</span>`;
+        break;
       case "highlight":
         html = seg("mark", [["Highlight", "highlight", "Highlight"], ["Underline", "underline", "Underline"], ["StrikeOut", "strike", "Strike out"]], s.markKind) + swatches() +
           `<span class="muted hint">Drag over text — or over any area on scans</span>`;
@@ -617,6 +621,7 @@ export class App {
   private async save(): Promise<void> {
     if (!this.info || !this.file) return;
     this.viewer.closeEditor(true);
+    await this.viewer.closeParagraph(true);
     try {
       if (this.file.handle) {
         const bytes = await this.busy(this.engine.save(false));
@@ -640,6 +645,7 @@ export class App {
   private async saveCopy(): Promise<void> {
     if (!this.info || !this.file) return;
     this.viewer.closeEditor(true);
+    await this.viewer.closeParagraph(true);
     try {
       const bytes = await this.busy(this.engine.save(false));
       const res = await saveAs(bytes, `${baseName(this.file.name)} (copy).pdf`);

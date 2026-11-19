@@ -299,12 +299,66 @@ try {
   check("zoom in", parseInt(zl) > 100 || zl !== "", zl);
   await page.click("#zoom-label");
 
+  // ---- live text editing ----
+  await page.keyboard.press("e");
+  const introHit = (await engine("search", "Power is the dominant"))[0].quads[0];
+  const ip = await pt((introHit[0] + introHit[2]) / 2, (introHit[1] + introHit[5]) / 2);
+  await page.mouse.move(ip[0], ip[1]);
+  await page.waitForTimeout(400);
+  await page.mouse.move(ip[0] + 2, ip[1]);
+  check("edit tool highlights the paragraph under the mouse", await page.locator(".hover-block").count() === 1);
+  await page.mouse.click(ip[0], ip[1]);
+  await page.waitForSelector(".para-editor");
+  const edText = await page.locator(".para-editor").innerText();
+  check("paragraph opens in the in-page editor", edText.includes("Power is the dominant constraint") && edText.includes("achievable"));
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" Edited live in papgi.");
+  await page.screenshot({ path: shots + "desktop-textedit-open-light.png" });
+  await page.keyboard.press("Control+Enter");
+  await page.waitForSelector(".para-editor", { state: "detached", timeout: 15000 });
+  await page.waitForTimeout(500);
+  let ptxt = (await engine("pageText", 0)).replace(/\s+/g, " ");
+  check("edited text is written into the PDF", ptxt.includes("Edited live in papgi.") && ptxt.includes("Power is the dominant constraint"));
+  await page.screenshot({ path: shots + "desktop-textedit-done-light.png" });
+  // edit the same paragraph again (re-reading our own text), replacing a word
+  const again = (await engine("search", "Edited live in papgi"))[0].quads[0];
+  const ap = await pt(again[0] + 3, (again[1] + again[5]) / 2);
+  await page.mouse.click(ap[0], ap[1]);
+  await page.waitForSelector(".para-editor");
+  await page.evaluate(() => {
+    const el = document.querySelector(".para-editor");
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = walker.nextNode())) if (n.textContent.includes("live")) n.textContent = n.textContent.replace("live", "twice");
+  });
+  await page.keyboard.press("Control+Enter");
+  await page.waitForSelector(".para-editor", { state: "detached", timeout: 15000 });
+  await page.waitForTimeout(400);
+  ptxt = (await engine("pageText", 0)).replace(/\s+/g, " ");
+  check("a paragraph can be edited again", ptxt.includes("Edited twice in papgi."));
+  // Esc cancels
+  await page.mouse.click(ap[0], ap[1]);
+  await page.waitForSelector(".para-editor");
+  await page.keyboard.type("SHOULD NOT APPEAR");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  check("Esc cancels an edit", !(await engine("pageText", 0)).includes("SHOULD NOT APPEAR") && (await page.locator(".para-editor").count()) === 0);
+  // undo / redo the text edit
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(500);
+  check("undo a text edit", (await engine("pageText", 0)).replace(/\s+/g, " ").includes("Edited live in papgi."));
+  await page.keyboard.press("Control+y");
+  await page.waitForTimeout(500);
+  await page.keyboard.press("v");
+
   // save -> download and verify the file in Node
   const [dl] = await Promise.all([page.waitForEvent("download"), page.keyboard.press("Control+s")]);
   const savedPath = shots + "saved-paper.pdf";
   await dl.saveAs(savedPath);
   const doc = mupdf.Document.openDocument(fs.readFileSync(savedPath), "application/pdf").asPDF();
   const kinds = doc.loadPage(0).getAnnotations().map((x) => x.getType());
+  const savedText = doc.loadPage(0).toStructuredText("").asText().replace(/\s+/g, " ");
+  check("saved PDF contains the edited text", savedText.includes("Edited twice in papgi."));
   check("saved PDF contains the annotations", kinds.includes("Highlight") && kinds.includes("FreeText") && kinds.includes("Ink") && kinds.includes("Stamp"), kinds.join(","));
   await page.waitForTimeout(200);
   check("clean after save", !(await page.locator("#docname.dirty").isVisible()));
@@ -341,6 +395,25 @@ try {
   check("form: radio", get("building", 1).checked && !get("building", 0).checked);
   check("form: multiline", get("comments").value === "Line one\nLine two", JSON.stringify(get("comments").value));
   await page.screenshot({ path: shots + "desktop-form-light.png" });
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("e");
+  const th = (await engine("search", "Lab Access Registration"))[0].quads[0];
+  const tp = await pt(th[0] + 20, (th[1] + th[5]) / 2);
+  await page.mouse.click(...tp);
+  await page.waitForSelector(".para-editor");
+  await page.evaluate(() => {
+    const el = document.querySelector(".para-editor");
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = walker.nextNode())) n.textContent = n.textContent.replace("Registration", "Request — Đăng ký");
+  });
+  await page.keyboard.press("Control+Enter");
+  await page.waitForSelector(".para-editor", { state: "detached", timeout: 15000 });
+  await page.waitForTimeout(400);
+  check("edit a bold heading in a form (with Vietnamese letters)", (await engine("pageText", 0)).includes("Lab Access Request — Đăng ký"));
+  check("form fields still work after editing text", (await engine("listWidgets", 0)).length > 5);
+  await page.screenshot({ path: shots + "desktop-form-edited-light.png" });
+  await page.keyboard.press("v");
 
   // --- pages sample: rotate, delete, reorder by drag ---
   await page.evaluate(async () => {
@@ -423,6 +496,12 @@ try {
   await page.mouse.up();
   await page.waitForTimeout(300);
   check("area highlight on a scan", (await engine("listAnnots", 0)).some((x) => x.kind === "Highlight"));
+  await page.keyboard.press("e");
+  const sc = await pt(300, 400);
+  await page.mouse.click(...sc);
+  await page.waitForTimeout(400);
+  check("scan: explains there is no editable text", /no text that can be edited/.test(await page.textContent(".toast")));
+  await page.keyboard.press("v");
   await page.screenshot({ path: shots + "desktop-scan-light.png" });
 
   check("no page errors", errors.length === 0, errors.join(" | "));
