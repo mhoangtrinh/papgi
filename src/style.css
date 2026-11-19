@@ -1579,3 +1579,16 @@ body:not(.has-doc) .options {
   box-shadow: var(--shadow);
   white-space: nowrap;
 }
+
+/* select tool: show what a click would do */
+.pages[data-tool="select"] .page.over-text {
+  cursor: text;
+}
+
+.pages[data-tool="select"] .page.over-annot {
+  cursor: move;
+}
+
+.pages[data-tool="select"].panning .page {
+  cursor: grabbing;
+}

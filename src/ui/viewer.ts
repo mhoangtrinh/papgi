@@ -418,6 +418,24 @@ export class Viewer {
     return (pv.lines ?? []).some((r) => inRect(r, p[0], p[1], pad));
   }
 
+  /** Select tool: I-beam over text, move cursor over annotations, arrow elsewhere. */
+  private hoverCursor(e: PointerEvent): void {
+    const pv = this.pageFromEvent(e);
+    let kind = "";
+    if (pv && !(e.target as Element).closest(".page-forms > *, .floating")) {
+      const p = this.toPagePoint(pv, e);
+      if (this.annotAt(pv, p)) kind = "over-annot";
+      else if (this.onText(pv, p)) kind = "over-text";
+    }
+    if (this.cursorPage && (this.cursorPage !== pv || this.cursorKind !== kind)) this.cursorPage.el.classList.remove("over-text", "over-annot");
+    if (pv && kind) pv.el.classList.add(kind);
+    this.cursorPage = pv;
+    this.cursorKind = kind;
+  }
+
+  private cursorPage: PageView | null = null;
+  private cursorKind = "";
+
   private onDown(e: PointerEvent): void {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     if ((e.target as Element).closest(".page-forms > *, .text-editor, .para-editor, .floating")) return;
@@ -497,6 +515,7 @@ export class Viewer {
     if (!d) {
       if (this.tool === "sign") this.moveGhost(e);
       else if (this.tool === "edit") this.hoverBlock(e);
+      else if (this.tool === "select") this.hoverCursor(e);
       return;
     }
     if (d.kind === "pan") {
