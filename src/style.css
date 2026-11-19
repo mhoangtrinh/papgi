@@ -1435,3 +1435,66 @@ body:not(.has-doc) .options {
   fill: none;
   opacity: 0.5;
 }
+
+/* saved signatures picker */
+.sig-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sig-chip {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 34px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+  flex: none;
+}
+
+.sig-chip svg,
+.sig-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.sig-chip.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+
+.sig-chip.add {
+  width: auto;
+  min-width: 32px;
+  display: flex;
+  gap: 4px;
+  background: var(--panel-2);
+  border-style: dashed;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sig-chip.add .ic {
+  width: 16px;
+  height: 16px;
+}
+
+.sig-chip.add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.icon-btn.sm {
+  width: 28px;
+  height: 28px;
+}
+
+.icon-btn.sm .ic {
+  width: 17px;
+  height: 17px;
+}

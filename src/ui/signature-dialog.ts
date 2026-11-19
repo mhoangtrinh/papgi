@@ -6,15 +6,13 @@ import type { SignatureImage } from "../storage";
 import { modal, toast } from "./dialogs";
 import { icon } from "./icons";
 
-export type SignatureResult =
-  | { kind: "drawn"; strokes: Point[][] }
-  | { kind: "image"; image: SignatureImage }
-  | { kind: "clear" };
+export type SignatureResult = { kind: "drawn"; strokes: Point[][] } | { kind: "image"; image: SignatureImage };
 
 interface Opts {
+  title: string;
   color: string; // pen colour for drawing
-  strokes: Point[][] | null;
-  image: SignatureImage | null;
+  strokes: Point[][] | null; // when editing a drawn signature
+  image: SignatureImage | null; // when editing a picture signature
   start: "drawn" | "image";
 }
 
@@ -61,8 +59,7 @@ export async function signatureDialog(o: Opts): Promise<SignatureResult | null> 
           <button class="btn small" data-act="pick">Other picture…</button>
         </div>
       </div>
-    </section>
-    ${o.strokes || o.image ? `<button class="linkish" data-act="forget">Delete my saved signatures</button>` : ""}`;
+    </section>`;
 
   let tab: "drawn" | "image" = o.start;
   const setTab = (t: "drawn" | "image") => {
@@ -294,10 +291,9 @@ export async function signatureDialog(o: Opts): Promise<SignatureResult | null> 
     }
   });
 
-  let forget = false;
   const v = await modal(
     {
-      title: "Your signature",
+      title: o.title,
       body: wrap,
       wide: true,
       actions: [
@@ -305,11 +301,7 @@ export async function signatureDialog(o: Opts): Promise<SignatureResult | null> 
         { label: "Save signature", value: "ok", primary: true },
       ],
     },
-    (root) => {
-      root.querySelector('[data-act="forget"]')?.addEventListener("click", () => {
-        forget = true;
-        root.querySelector<HTMLButtonElement>('.modal-actions [data-v=""]')!.click();
-      });
+    () => {
       // show the picture saved earlier as a starting point
       if (o.image && o.start === "image") {
         loadPhotoUrl(o.image.src)
@@ -324,7 +316,6 @@ export async function signatureDialog(o: Opts): Promise<SignatureResult | null> 
   );
   clearTimeout(timer);
   document.removeEventListener("paste", onPaste);
-  if (forget) return { kind: "clear" };
   if (v !== "ok") return null;
   if (tab === "drawn") {
     const s = strokes.filter((x) => x.length > 0);

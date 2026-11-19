@@ -1,7 +1,7 @@
 // The document view: pages, rendering, zoom, tools and form fields.
 import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit } from "../engine/engine";
 import type { Engine } from "../engine/client";
-import type { Settings, Tool } from "../storage";
+import type { Settings, Tool, SavedSignature } from "../storage";
 import { hexToRgb, rgbToHex } from "../storage";
 import {
   type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight,
@@ -18,7 +18,7 @@ export interface ViewerHost {
   currentPageChanged(index: number): void;
   zoomChanged(zoom: number): void;
   needSignature(): Promise<boolean>;
-  signatureKind(): "drawn" | "image";
+  activeSignature(): SavedSignature | null;
   busy<T>(p: Promise<T>): Promise<T>;
 }
 
@@ -814,22 +814,18 @@ export class Viewer {
     this.ghost = null;
   }
 
-  /** Page rect for the picture signature centred on p, or null if there is none. */
-  private imageSignatureRect(p: Point): Rect | null {
-    const s = this.host.settings;
-    const img = s.signatureImage;
-    if (!img) return null;
-    const w = s.signatureWidth;
-    const h = (w * img.h) / img.w;
+  /** Page rect for a picture signature centred on p. */
+  private imageSignatureRect(sig: Extract<SavedSignature, { kind: "image" }>, p: Point): Rect {
+    const w = this.host.settings.signatureWidth;
+    const h = (w * sig.image.h) / sig.image.w;
     return [p[0] - w / 2, p[1] - h / 2, p[0] + w / 2, p[1] + h / 2];
   }
 
   private moveGhost(e: PointerEvent): void {
     const pv = this.pageFromEvent(e);
     const s = this.host.settings;
-    const kind = this.host.signatureKind();
-    const has = kind === "image" ? !!s.signatureImage : !!s.signature?.length;
-    if (!pv || !has) return this.hideGhost();
+    const sig = this.host.activeSignature();
+    if (!pv || !sig) return this.hideGhost();
     const p = this.toPagePoint(pv, e);
     if (!this.ghost || this.ghost.ownerSVGElement !== pv.svg) {
       this.hideGhost();
@@ -837,12 +833,12 @@ export class Viewer {
       this.ghost.classList.add("ghost");
       pv.svg.append(this.ghost);
     }
-    if (kind === "image") {
-      const r = this.imageSignatureRect(p)!;
-      this.ghost.innerHTML = `<image href="${s.signatureImage!.src}" x="${r[0]}" y="${r[1]}" width="${rectWidth(r)}" height="${rectHeight(r)}" preserveAspectRatio="none"/>`;
+    if (sig.kind === "image") {
+      const r = this.imageSignatureRect(sig, p);
+      this.ghost.innerHTML = `<image href="${sig.image.src}" x="${r[0]}" y="${r[1]}" width="${rectWidth(r)}" height="${rectHeight(r)}" preserveAspectRatio="none"/>`;
       return;
     }
-    const strokes = placeStrokes(s.signature!, p[0], p[1], s.signatureWidth);
+    const strokes = placeStrokes(sig.strokes, p[0], p[1], s.signatureWidth);
     const w = (1.6 * s.signatureWidth) / 150;
     this.ghost.innerHTML = strokes
       .map((st) => `<polyline points="${st.map((q) => q.join(",")).join(" ")}" fill="none" stroke="${s.colors.sign}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`)
@@ -851,16 +847,16 @@ export class Viewer {
 
   private async placeSignature(pv: PageView, p: Point): Promise<void> {
     const s = this.host.settings;
-    const kind = this.host.signatureKind();
-    const has = kind === "image" ? !!s.signatureImage : !!s.signature?.length;
-    if (!has && !(await this.host.needSignature())) return;
+    if (!this.host.activeSignature() && !(await this.host.needSignature())) return;
+    const sig = this.host.activeSignature();
+    if (!sig) return;
     this.hideGhost();
-    if (this.host.signatureKind() === "image" && s.signatureImage) {
-      const r = this.imageSignatureRect(p)!;
-      this.afterAnnotEdit(pv, await this.host.engine.addImageStamp(pv.index, r, dataUrlBytes(s.signatureImage.src)));
+    if (sig.kind === "image") {
+      const r = this.imageSignatureRect(sig, p);
+      this.afterAnnotEdit(pv, await this.host.engine.addImageStamp(pv.index, r, dataUrlBytes(sig.image.src)));
       return;
     }
-    const strokes = placeStrokes(s.signature!, p[0], p[1], s.signatureWidth);
+    const strokes = placeStrokes(sig.strokes, p[0], p[1], s.signatureWidth);
     const w = (1.6 * s.signatureWidth) / 150;
     this.afterAnnotEdit(pv, await this.host.engine.addInk(pv.index, strokes, hexToRgb(s.colors.sign), w));
   }

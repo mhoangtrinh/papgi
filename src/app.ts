@@ -6,9 +6,9 @@ import { Sidebar } from "./ui/sidebar";
 import { icon } from "./ui/icons";
 import { toast, askPassword, confirmDialog, showShortcuts, modal } from "./ui/dialogs";
 import { signatureDialog } from "./ui/signature-dialog";
-import { loadSettings, saveSettings, type Settings, type Tool, type Theme } from "./storage";
+import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
-import { nextZoom, ZOOM_STEPS } from "./core/geometry";
+import { nextZoom, strokesBounds, ZOOM_STEPS } from "./core/geometry";
 import { afterDelete, formatRange, movedSelection } from "./core/pages";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
@@ -69,8 +69,8 @@ export class App {
         edited: (info, pages) => this.edited(info, pages),
         currentPageChanged: (i) => this.currentChanged(i),
         zoomChanged: (z) => (this.$<HTMLButtonElement>("#zoom-label").textContent = `${Math.round(z * 100)}%`),
-        needSignature: () => this.editSignature(),
-        signatureKind: () => this.signatureKind(),
+        needSignature: () => this.addSignature(),
+        activeSignature: () => this.activeSignature(),
         busy: (p) => this.busy(p),
       },
       main,
@@ -122,7 +122,7 @@ export class App {
             <hr>
             <button data-menu="insert">${icon("insert")}Insert PDF at end…</button>
             <button data-menu="flatten">${icon("flatten")}Flatten forms &amp; annotations</button>
-            <button data-menu="signature">${icon("sign")}Change my signature…</button>
+            <button data-menu="signature">${icon("sign")}Add a signature…</button>
             <hr>
             <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
             <button data-menu="about">${icon("file")}About papgi</button>
@@ -392,13 +392,22 @@ export class App {
         html = seg("shape", [["Square", "square", "Rectangle"], ["Circle", "circle", "Ellipse"], ["Arrow", "arrow", "Arrow"]], s.shapeKind) + swatches() + range("shapeWidth", 0.5, 12, 0.5, s.shapeWidth, "Width");
         break;
       case "sign": {
-        const both = !!s.signature?.length && !!s.signatureImage;
-        const kind = this.signatureKind();
+        const active = this.activeSignature();
+        const chips = s.signatures
+          .map((sig, i) => `<button class="sig-chip ${sig.id === active?.id ? "on" : ""}" data-sigid="${sig.id}" title="Signature ${i + 1}">${this.signatureThumb(sig)}</button>`)
+          .join("");
+        const add =
+          s.signatures.length < MAX_SIGNATURES
+            ? `<button class="sig-chip add" data-act="sig-add" title="Add a signature (up to ${MAX_SIGNATURES})">${icon("plus")}${s.signatures.length ? "" : "<span>Add signature</span>"}</button>`
+            : "";
         html =
-          (both ? seg("sig", [["drawn", "pen", "Drawn signature"], ["image", "image", "Signature from a picture"]], kind) : "") +
-          (kind === "drawn" ? swatches() : "") +
+          `<div class="sig-chips" role="radiogroup" aria-label="Saved signatures">${chips}${add}</div>` +
+          (active
+            ? `<button class="icon-btn sm" data-act="sig-edit" title="Edit this signature">${icon("edit")}</button><button class="icon-btn sm" data-act="sig-delete" title="Delete this signature">${icon("trash")}</button>`
+            : "") +
+          (active?.kind === "drawn" ? swatches() : "") +
           range("signatureWidth", 60, 300, 5, s.signatureWidth, "Size", "") +
-          `<button class="btn small" data-act="redraw">${s.signature || s.signatureImage ? "Edit signature" : "Add signature"}</button><span class="muted hint">Click on the page to place it</span>`;
+          `<span class="muted hint">${active ? "Click on the page to place it" : `Save up to ${MAX_SIGNATURES} signatures`}</span>`;
         break;
       }
     }
@@ -428,42 +437,80 @@ export class App {
     if (b.dataset.color) s.colors[t] = b.dataset.color;
     else if (b.dataset.mark) s.markKind = b.dataset.mark as Settings["markKind"];
     else if (b.dataset.shape) s.shapeKind = b.dataset.shape as Settings["shapeKind"];
-    else if (b.dataset.sig) s.signatureKind = b.dataset.sig as Settings["signatureKind"];
-    else if (b.dataset.act === "redraw") return void this.editSignature();
+    else if (b.dataset.sigid) s.activeSignature = b.dataset.sigid;
+    else if (b.dataset.act === "sig-add") return void this.addSignature();
+    else if (b.dataset.act === "sig-edit") return void this.editSignature();
+    else if (b.dataset.act === "sig-delete") return void this.deleteSignature();
     else return;
     saveSettings(s);
     this.renderOptions();
   }
 
-  /** Which saved signature the Sign tool places (falls back to whichever exists). */
-  private signatureKind(): "drawn" | "image" {
-    const s = this.settings;
-    if (s.signatureKind === "image" && s.signatureImage) return "image";
-    if (s.signature?.length) return "drawn";
-    return s.signatureImage ? "image" : s.signatureKind;
+  /** The signature the Sign tool places. */
+  private activeSignature(): SavedSignature | null {
+    const list = this.settings.signatures;
+    return list.find((x) => x.id === this.settings.activeSignature) ?? list[0] ?? null;
   }
 
-  private async editSignature(): Promise<boolean> {
+  /** Small preview for the signature picker. */
+  private signatureThumb(sig: SavedSignature): string {
+    if (sig.kind === "image") return `<img src="${sig.image.src}" alt="">`;
+    const b = strokesBounds(sig.strokes);
+    if (!b) return "";
+    const pad = Math.max(b[2] - b[0], b[3] - b[1]) * 0.06 + 2;
+    const vb = `${b[0] - pad} ${b[1] - pad} ${b[2] - b[0] + 2 * pad} ${b[3] - b[1] + 2 * pad}`;
+    const w = Math.max(b[2] - b[0], 1) / 60;
+    return `<svg viewBox="${vb}" preserveAspectRatio="xMidYMid meet">${sig.strokes
+      .map((st) => `<polyline points="${st.map((q) => q.join(",")).join(" ")}" fill="none" stroke="${this.settings.colors.sign}" stroke-width="${w * 3}" stroke-linecap="round" stroke-linejoin="round"/>`)
+      .join("")}</svg>`;
+  }
+
+  private async addSignature(): Promise<boolean> {
     const s = this.settings;
-    const res = await signatureDialog({ color: s.colors.sign, strokes: s.signature, image: s.signatureImage, start: this.signatureKind() });
-    if (!res) return false;
-    if (res.kind === "clear") {
-      if (!(await confirmDialog("Delete signatures?", "Your saved signatures will be removed from this device.", "Delete", true))) return false;
-      s.signature = null;
-      s.signatureImage = null;
-      saveSettings(s);
-      this.renderOptions();
-      toast("Signatures deleted");
+    if (s.signatures.length >= MAX_SIGNATURES) {
+      toast(`You can keep up to ${MAX_SIGNATURES} signatures. Delete one first.`, "error");
       return false;
     }
-    if (res.kind === "drawn") s.signature = res.strokes;
-    else s.signatureImage = res.image;
-    s.signatureKind = res.kind;
+    const res = await signatureDialog({ title: "New signature", color: s.colors.sign, strokes: null, image: null, start: "drawn" });
+    if (!res) return false;
+    const sig: SavedSignature = res.kind === "drawn" ? { id: newSignatureId(), kind: "drawn", strokes: res.strokes } : { id: newSignatureId(), kind: "image", image: res.image };
+    s.signatures.push(sig);
+    s.activeSignature = sig.id;
     saveSettings(s);
-    this.renderOptions();
     if (s.tool !== "sign") this.setTool("sign");
+    else this.renderOptions();
     toast("Signature saved on this device");
     return true;
+  }
+
+  private async editSignature(): Promise<void> {
+    const s = this.settings;
+    const cur = this.activeSignature();
+    if (!cur) return void this.addSignature();
+    const res = await signatureDialog({
+      title: "Edit signature",
+      color: s.colors.sign,
+      strokes: cur.kind === "drawn" ? cur.strokes : null,
+      image: cur.kind === "image" ? cur.image : null,
+      start: cur.kind,
+    });
+    if (!res) return;
+    const next: SavedSignature = res.kind === "drawn" ? { id: cur.id, kind: "drawn", strokes: res.strokes } : { id: cur.id, kind: "image", image: res.image };
+    s.signatures = s.signatures.map((x) => (x.id === cur.id ? next : x));
+    saveSettings(s);
+    this.renderOptions();
+    toast("Signature updated");
+  }
+
+  private async deleteSignature(): Promise<void> {
+    const s = this.settings;
+    const cur = this.activeSignature();
+    if (!cur) return;
+    if (!(await confirmDialog("Delete signature?", "This removes the selected signature from this device. Signatures already placed in documents stay.", "Delete", true))) return;
+    s.signatures = s.signatures.filter((x) => x.id !== cur.id);
+    s.activeSignature = s.signatures[0]?.id ?? null;
+    saveSettings(s);
+    this.renderOptions();
   }
 
   // ---------- theme & menu ----------
@@ -500,7 +547,7 @@ export class App {
       case "saveas": return void this.saveCopy();
       case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
       case "flatten": return void this.flatten();
-      case "signature": return void this.editSignature();
+      case "signature": return void this.addSignature();
       case "keys": return showShortcuts();
       case "about":
         return void modal({

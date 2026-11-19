@@ -13,6 +13,13 @@ export interface SignatureImage {
   h: number;
 }
 
+/** One saved signature: drawn strokes or a picture. */
+export type SavedSignature =
+  | { id: string; kind: "drawn"; strokes: Point[][] }
+  | { id: string; kind: "image"; image: SignatureImage };
+
+export const MAX_SIGNATURES = 5;
+
 export interface Settings {
   theme: Theme;
   tool: Tool;
@@ -23,9 +30,8 @@ export interface Settings {
   markKind: MarkKind;
   shapeKind: ShapeKind;
   sidebar: boolean;
-  signature: Point[][] | null;
-  signatureImage: SignatureImage | null;
-  signatureKind: "drawn" | "image";
+  signatures: SavedSignature[];
+  activeSignature: string | null;
   signatureWidth: number;
 }
 
@@ -49,21 +55,53 @@ export const DEFAULTS: Settings = {
   markKind: "Highlight",
   shapeKind: "Square",
   sidebar: true,
-  signature: null,
-  signatureImage: null,
-  signatureKind: "drawn",
+  signatures: [],
+  activeSignature: null,
   signatureWidth: 150,
 };
 
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY) ?? OLD_KEYS.map((k) => localStorage.getItem(k)).find((v) => v !== null) ?? null;
-    if (!raw) return structuredClone(DEFAULTS);
-    const saved = JSON.parse(raw) as Partial<Settings>;
-    return { ...structuredClone(DEFAULTS), ...saved, colors: { ...DEFAULTS.colors, ...(saved.colors ?? {}) } };
+    return mergeSettings(raw ? JSON.parse(raw) : null);
   } catch {
     return structuredClone(DEFAULTS);
   }
+}
+
+/** Defaults + saved values, upgrading older formats (single drawn/picture signature). */
+export function mergeSettings(saved: Record<string, unknown> | null): Settings {
+  const out: Settings = structuredClone(DEFAULTS);
+  if (!saved || typeof saved !== "object") return out;
+  const { signature, signatureImage, signatureKind, ...rest } = saved as Record<string, unknown>;
+  Object.assign(out, rest);
+  out.colors = { ...DEFAULTS.colors, ...((saved.colors as Settings["colors"]) ?? {}) };
+  if (!Array.isArray(out.signatures)) out.signatures = [];
+  out.signatures = out.signatures.filter(isSignature).slice(0, MAX_SIGNATURES);
+  // version 1 kept one drawn and one picture signature
+  if (Array.isArray(signature) && signature.length && out.signatures.length < MAX_SIGNATURES)
+    out.signatures.push({ id: "drawn-1", kind: "drawn", strokes: signature as Point[][] });
+  if (isImage(signatureImage) && out.signatures.length < MAX_SIGNATURES)
+    out.signatures.push({ id: "image-1", kind: "image", image: signatureImage });
+  if (signature !== undefined || signatureImage !== undefined)
+    out.activeSignature = out.signatures.find((x) => x.kind === signatureKind)?.id ?? out.signatures[0]?.id ?? null;
+  if (!out.signatures.some((x) => x.id === out.activeSignature)) out.activeSignature = out.signatures[0]?.id ?? null;
+  return out;
+}
+
+function isImage(v: unknown): v is SignatureImage {
+  const i = v as SignatureImage;
+  return !!i && typeof i.src === "string" && i.w > 0 && i.h > 0;
+}
+
+function isSignature(v: unknown): v is SavedSignature {
+  const s = v as SavedSignature;
+  if (!s || typeof s.id !== "string") return false;
+  return (s.kind === "drawn" && Array.isArray(s.strokes) && s.strokes.length > 0) || (s.kind === "image" && isImage(s.image));
+}
+
+export function newSignatureId(): string {
+  return `sig-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 export function saveSettings(s: Settings): void {

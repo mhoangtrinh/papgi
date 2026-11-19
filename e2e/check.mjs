@@ -170,7 +170,7 @@ try {
   await page.screenshot({ path: shots + "desktop-annotated-light.png" });
 
   // signature from a picture: photo with shading and a desk edge -> transparent ink
-  await page.click('[data-act="redraw"]');
+  await page.click('[data-act="sig-add"]');
   await page.waitForSelector(".sigdlg");
   await page.click('[data-tab="image"]');
   const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.click('.pic-empty [data-act="pick"]')]);
@@ -192,7 +192,8 @@ try {
   await page.click(".modal-actions .btn.primary");
   await page.waitForTimeout(300);
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")));
-  check("picture signature saved as a transparent PNG", stored.signatureKind === "image" && stored.signatureImage?.src.startsWith("data:image/png"));
+  const activeSig = stored.signatures.find((x) => x.id === stored.activeSignature);
+  check("second signature (picture) saved as a transparent PNG and selected", stored.signatures.length === 2 && activeSig?.kind === "image" && activeSig.image.src.startsWith("data:image/png"));
   const sp = await pt(150, 760);
   await page.mouse.move(...sp);
   await page.waitForTimeout(100);
@@ -200,9 +201,25 @@ try {
   await page.waitForTimeout(500);
   annots = await engine("listAnnots", 0);
   check("picture signature placed as a stamp", annots.some((x) => x.kind === "Stamp"));
+  await page.screenshot({ path: shots + "desktop-signature-chips-light.png", clip: { x: 0, y: 48, width: 1440, height: 46 } });
   // switch back to the drawn one
-  await page.click('[data-sig="drawn"]');
-  check("can switch between drawn and picture signature", (await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")).signatureKind)) === "drawn");
+  await page.locator(".sig-chip[data-sigid]").nth(0).click();
+  const st2 = await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")));
+  check("pick another saved signature", st2.signatures.find((x) => x.id === st2.activeSignature)?.kind === "drawn");
+  // up to 5: the add button disappears at the limit
+  await page.evaluate(() => {
+    const s = window.papgi.settings;
+    while (s.signatures.length < 5) s.signatures.push({ ...s.signatures[0], id: "copy" + s.signatures.length });
+    window.papgi.renderOptions();
+  });
+  check("at most 5 signatures", (await page.locator(".sig-chip[data-sigid]").count()) === 5 && (await page.locator('[data-act="sig-add"]').count()) === 0);
+  // delete the selected one
+  await page.locator(".sig-chip[data-sigid]").nth(4).click();
+  await page.click('[data-act="sig-delete"]');
+  await page.click(".modal-actions .btn.primary");
+  await page.waitForTimeout(200);
+  check("delete a signature", (await page.locator(".sig-chip[data-sigid]").count()) === 4 && (await page.locator('[data-act="sig-add"]').count()) === 1);
+  await page.locator(".sig-chip[data-sigid]").nth(0).click();
 
   // drop and paste a picture into the signature dialog
   const photoB64 = fs.readFileSync(new URL("./fixtures/signature-photo.jpg", import.meta.url)).toString("base64");
@@ -219,7 +236,7 @@ try {
       for (const type of ["dragenter", "dragover", "drop"]) el.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
     }, [photoB64, how]);
   for (const how of ["drop", "paste"]) {
-    await page.click('[data-act="redraw"]');
+    await page.click('[data-act="sig-add"]');
     await page.waitForSelector(".sigdlg");
     const docBefore = await page.evaluate(() => window.papgi.info.pageCount);
     await fileEvent(how);

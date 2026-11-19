@@ -18,7 +18,7 @@ In Edge/Chrome, **Save (Ctrl+S) writes back to the file you opened**. In other b
 | View | Fast, sharp rendering (MuPDF in WebAssembly), thumbnails, zoom, search |
 | Text | Select and copy text; highlight, underline, strike out |
 | Draw | Pen, rectangles, ellipses, arrows, text boxes |
-| Sign | Draw your signature, or use a photo/scan of it (paper removed automatically, crop, recolour); saved on this device, click to place |
+| Sign | Keep up to 5 signatures, drawn or from a photo/scan (paper removed automatically, crop, recolour, or drop/paste the image); saved on this device, pick one and click to place |
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
 | Pages | Reorder by drag and drop, rotate, delete, insert other PDFs, add blank pages, save pages as a new PDF |
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
