@@ -1,5 +1,6 @@
 // The document view: pages, rendering, zoom, tools and form fields.
 import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit, EditBlock } from "../engine/engine";
+import { editorRaise, loadTextBoxFont } from "./textbox-metrics";
 import { ParagraphEditor } from "./text-editor";
 import type { Engine } from "../engine/client";
 import type { Settings, Tool, SavedSignature } from "../storage";
@@ -1161,9 +1162,14 @@ export class Viewer {
     ta.className = "text-editor";
     ta.spellcheck = true;
     ta.value = annot?.contents ?? "";
-    ta.style.left = `${((pos[0] - pv.info.x) / pv.info.w) * 100}%`;
-    ta.style.top = `${((pos[1] - pv.info.y) / pv.info.h) * 100}%`;
+    // (the CSS moves the editor up/left by its padding, border and baseline offset, so the
+    // text you type sits exactly where the finished text box draws it)
+    ta.style.setProperty("--x", `${((pos[0] - pv.info.x) / pv.info.w) * 100}%`);
+    ta.style.setProperty("--y", `${((pos[1] - pv.info.y) / pv.info.h) * 100}%`);
     ta.style.setProperty("--fs", String(size));
+    const raise = () => ta.style.setProperty("--raise", editorRaise().toFixed(4));
+    raise();
+    loadTextBoxFont(new URL("fonts/", document.baseURI).href, raise);
     ta.style.color = color;
     ta.dataset.page = String(pv.index);
     ta.dataset.annot = annot ? String(annot.index) : "";

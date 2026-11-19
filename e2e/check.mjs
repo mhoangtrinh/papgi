@@ -4,6 +4,7 @@ import { chromium } from "@playwright/test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import * as mupdf from "mupdf";
+import sharp from "sharp";
 
 const PORT = 4179;
 const URL_ = `http://localhost:${PORT}/`;
@@ -537,6 +538,55 @@ try {
   const printedPages = (await import("mupdf")).Document.openDocument(printedPdf, "application/pdf").countPages();
   check("print layout: one sheet per page", printedPages === pcount, `${printedPages} sheets for ${pcount} pages`);
   await page.evaluate(() => delete Navigator.prototype.pdfViewerEnabled);
+
+  // --- text box: the text must not jump when you finish typing ---
+  {
+    const ink = async (buf) => {
+      const { data, info } = await sharp(buf).greyscale().raw().toBuffer({ resolveWithObject: true });
+      let sx = 0, sy = 0, n = 0, x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1;
+      for (let y = 0; y < info.height; y++)
+        for (let x = 0; x < info.width; x++) {
+          const v = 255 - data[y * info.width + x];
+          if (v < 40) continue;
+          sx += v * x; sy += v * y; n += v;
+          if (v > 100) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+        }
+      return { cx: sx / n, cy: sy / n, x0, x1, y0, y1 };
+    };
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Control+=");
+    await page.waitForTimeout(500);
+    await page.keyboard.press("t");
+    await page.mouse.click(...(await pt(120, 520)));
+    await page.waitForSelector(".text-editor");
+    await page.keyboard.type("Hamburg Quality 123");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Second line gjpq");
+    await page.waitForTimeout(400);
+    const r = await page.locator(".text-editor").boundingBox();
+    const clip = { x: Math.round(r.x - 12), y: Math.round(r.y - 12), width: Math.round(r.width + 40), height: Math.round(r.height + 24) };
+    await page.evaluate(() => Object.assign(document.querySelector(".text-editor").style, { borderColor: "transparent", background: "transparent", caretColor: "transparent" }));
+    const typing = await ink(await page.screenshot({ clip }));
+    await page.keyboard.press("Control+Enter");
+    await page.mouse.move(5, 5); // (no hover outline in the picture)
+    await page.waitForTimeout(1500);
+    const done = await ink(await page.screenshot({ clip }));
+    const dx = done.cx - typing.cx, dy = done.cy - typing.cy;
+    const edges = (a, b) => [a.x0 - b.x0, a.y0 - b.y0, a.x1 - b.x1, a.y1 - b.y1];
+    check("text box: text stays put when you finish typing", Math.abs(dx) < 1.2 && Math.abs(dy) < 1.2 && edges(done, typing).every((v) => Math.abs(v) <= 1), `moved ${dx.toFixed(2)}, ${dy.toFixed(2)} px, edges ${edges(done, typing)}`);
+    // and again when the box is opened for editing
+    await page.keyboard.press("v");
+    await page.mouse.dblclick(...(await pt(140, 528)));
+    await page.waitForSelector(".text-editor");
+    await page.mouse.move(5, 5);
+    await page.waitForTimeout(300);
+    await page.evaluate(() => Object.assign(document.querySelector(".text-editor").style, { borderColor: "transparent", background: "transparent", caretColor: "transparent" }));
+    const reopened = await ink(await page.screenshot({ clip }));
+    check("text box: reopening it shows the text in the same place", Math.abs(reopened.cx - done.cx) < 1.2 && Math.abs(reopened.cy - done.cy) < 1.2 && edges(reopened, done).every((v) => Math.abs(v) <= 1), `moved ${(reopened.cx - done.cx).toFixed(2)}, ${(reopened.cy - done.cy).toFixed(2)} px, edges ${edges(reopened, done)}`);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Control+z");
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Control+-");
+    await page.waitForTimeout(400);
+  }
 
 
   // --- scan sample: area highlight ---

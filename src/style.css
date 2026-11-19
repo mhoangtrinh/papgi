@@ -879,15 +879,25 @@ textarea.field-input {
 
 /* text box editor */
 .text-editor {
+  --pad: calc(2px * var(--z));
   position: absolute;
   z-index: 5;
+  /* text origin = top-left of the text box; first baseline as MuPDF draws it (see textbox-metrics.ts) */
+  left: calc(var(--x) - var(--pad) - 1px);
+  top: calc(var(--y) - var(--pad) - 1px - var(--raise, 0.146) * var(--fs) * var(--z) * 1px);
   margin: 0;
-  padding: calc(2px * var(--z));
+  padding: var(--pad);
   border: 1px dashed var(--accent);
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.96);
-  font-family: Helvetica, Arial, sans-serif;
+  /* Liberation Sans: the letter widths of Helvetica/Arial, the same on every system */
+  font-family: "papgi TextBox", Arial, Helvetica, sans-serif;
   font-size: calc(var(--fs) * var(--z) * 1px);
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: 0;
+  font-kerning: none;
+  font-variant-ligatures: none;
   line-height: 1.2;
   white-space: pre;
   overflow: hidden;
