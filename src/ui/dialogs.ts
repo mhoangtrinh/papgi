@@ -2,7 +2,8 @@
 import { icon } from "./icons";
 
 let toastTimer = 0;
-export function toast(msg: string, kind: "info" | "error" = "info"): void {
+/** A short message at the bottom; with an action it gets a button and stays a bit longer. */
+export function toast(msg: string, kind: "info" | "error" = "info", action?: { label: string; run: () => void }): void {
   let el = document.querySelector<HTMLDivElement>(".toast");
   if (!el) {
     el = document.createElement("div");
@@ -10,11 +11,23 @@ export function toast(msg: string, kind: "info" | "error" = "info"): void {
     el.setAttribute("role", "status");
     document.body.append(el);
   }
-  el.textContent = msg;
+  const text = document.createElement("span");
+  text.textContent = msg;
+  el.replaceChildren(text);
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "toast-action";
+    b.textContent = action.label;
+    b.onclick = () => {
+      el!.classList.remove("show");
+      action.run();
+    };
+    el.append(b);
+  }
   el.dataset.kind = kind;
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => el!.classList.remove("show"), kind === "error" ? 5000 : 2500);
+  toastTimer = window.setTimeout(() => el!.classList.remove("show"), action ? 9000 : kind === "error" ? 5000 : 2500);
 }
 
 interface ModalOpts {

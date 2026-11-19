@@ -7,6 +7,7 @@ import type * as MuPDF from "mupdf";
 import type { Point, Quad, Rect } from "../core/geometry";
 import { substituteFor, cleanFontName, isBoldName, isItalicName } from "../core/fontmatch";
 import { layoutParagraph, normalizeRuns, type Align, type Run } from "../core/textlayout";
+import { appendContent, ownResources, isOcrPage, OCR_EM_BOX, OCR_FONT, sampleColors } from "./ocr";
 
 type M = typeof MuPDF;
 
@@ -20,6 +21,7 @@ export interface EditStyle {
   family: string; // bundled family to load for the editor
   file: string; // bundled substitute font file
   exact: boolean; // the substitute is a look-alike with the same letter widths
+  ocr?: boolean; // invisible text from text recognition on a scanned page
 }
 
 export interface EditLine {
@@ -46,6 +48,13 @@ export interface EditBlock {
   reason?: string;
   /** Shown before editing, e.g. when formulas would lose their layout. */
   warn?: string;
+  /** Recognised text on a scan: editing paints over the old words on the image. */
+  ocr: boolean;
+}
+
+export interface EditOptions {
+  /** For recognised text: set the new words in a serif font instead of sans. */
+  serif?: boolean;
 }
 
 export interface EditResult {
@@ -144,15 +153,19 @@ function quadX1(c: CharInfo) {
   return Math.max(c.quad[2], c.quad[6]);
 }
 
+type CutTest = (prev: CharInfo, c: CharInfo, baseline: number) => boolean;
+const bigGap = (gapEm: number): CutTest => (prev, c) => quadX0(c) - quadX1(prev) > Math.max(c.size, prev.size) * gapEm;
+
 /** Split a MuPDF line at big gaps (table cells, tab stops) into separate pieces of text. */
-function splitLine(ln: RawLine, raw: number): Seg[] {
-  const horizontal = ln.wmode === 0 && Math.abs(ln.dir[0] - 1) < 0.02 && Math.abs(ln.dir[1]) < 0.02;
+function splitLine(ln: RawLine, raw: number, cut: CutTest = bigGap(1.2), skew = 0.02): Seg[] {
+  // (recognised text follows the scan's skew; it is rewritten straight when edited)
+  const horizontal = ln.wmode === 0 && Math.abs(ln.dir[1]) < skew;
   const out: CharInfo[][] = [];
   let cur: CharInfo[] = [];
   let prev: CharInfo | null = null;
   for (const c of ln.chars) {
     if (!isSpace(c.c)) {
-      if (prev && horizontal && quadX0(c) - quadX1(prev) > Math.max(c.size, prev.size) * 1.2) {
+      if (prev && horizontal && cut(prev, c, c.origin[1])) {
         out.push(cur);
         cur = [];
       }
@@ -162,6 +175,39 @@ function splitLine(ln: RawLine, raw: number): Seg[] {
   }
   out.push(cur);
   return out.map((chars) => makeSeg(chars, raw, horizontal)).filter((x): x is Seg => !!x);
+}
+
+/**
+ * Recognised text has no reliable spacing: a sentence gap can be as wide as the gutter between
+ * two columns. A gap is a column gutter when lines just above or below have a gap at the same x.
+ */
+function gutterCut(lines: RawLine[]): CutTest {
+  const info = lines.map((ln) => {
+    const ink = ln.chars.filter((c) => !isSpace(c.c)).map((c) => [quadX0(c), quadX1(c)] as const);
+    return { y: ln.chars[0]?.origin[1] ?? 0, ink, x0: Math.min(...ink.map((i) => i[0])), x1: Math.max(...ink.map((i) => i[1])) };
+  });
+  return (prev, c, y) => {
+    const x0 = quadX1(prev);
+    const x1 = quadX0(c);
+    const size = Math.min(c.size, prev.size);
+    const w = x1 - x0;
+    if (w > size * 1.5) return true;
+    if (w < size * 0.5) return false;
+    // the middle of the gap: is it white on the lines nearby that reach across it?
+    const m0 = x0 + w * 0.3;
+    const m1 = x1 - w * 0.3;
+    let across = 0;
+    let clear = 0;
+    for (const l of info) {
+      const dy = Math.abs(l.y - y);
+      if (dy < size * 0.5 || dy > size * 6 || l.x0 > m0 || l.x1 < m1) continue;
+      across++;
+      if (!l.ink.some(([a, b]) => b > m0 && a < m1)) clear++;
+    }
+    // too few lines nearby to tell: a wide gap, or a change of size (body text next to a heading)
+    if (across < 2) return w > size * 0.8 || Math.abs(c.size - prev.size) > size * 0.15;
+    return clear >= 2 && clear >= across * 0.6;
+  };
 }
 
 function makeSeg(all: CharInfo[], raw: number, editable: boolean): Seg | null {
@@ -213,11 +259,11 @@ function makeSeg(all: CharInfo[], raw: number, editable: boolean): Seg | null {
 }
 
 /** MuPDF sometimes splits one visual line in two; glue pieces on the same baseline with a normal gap. */
-function mergeSegs(segs: Seg[]): Seg[] {
+function mergeSegs(segs: Seg[], merge = true): Seg[] {
   const out: Seg[] = [];
   for (const g of segs) {
     const p = out[out.length - 1];
-    if (p && p.raw === g.raw && !g.marker && Math.abs(p.baseline - g.baseline) < g.size * 0.3 && g.x0 >= p.x1 - 1 && g.x0 - p.x1 < Math.max(p.size, g.size) * 1.2) {
+    if (p && p.raw === g.raw && !g.marker && Math.abs(p.baseline - g.baseline) < g.size * 0.3 && g.x0 >= p.x1 - 1 && merge && g.x0 - p.x1 < Math.max(p.size, g.size) * 1.2) {
       const sp = p.chars[p.chars.length - 1];
       p.chars = [...p.chars, { ...sp, c: " " }, ...g.chars];
       p.x1 = g.x1;
@@ -237,10 +283,33 @@ function firstWordWidth(g: Seg): number {
   return quadX1(g.chars[Math.max(0, end - 1)]) - g.x0;
 }
 
+/**
+ * OCR text comes in rows that can run across columns (left column line, then the table on the
+ * right, then the next left line...). Put the pieces of each column one after the other so a
+ * paragraph's lines follow each other.
+ */
+function columnOrder(segs: Seg[]): Seg[] {
+  const streams: Seg[][] = [];
+  for (const g of segs) {
+    let best: Seg[] | null = null;
+    for (const st of streams) {
+      const p = st[st.length - 1];
+      if (p.raw !== g.raw || g.baseline <= p.baseline + p.size * 0.3) continue;
+      if (g.baseline - p.baseline > Math.max(p.size, g.size) * 3) continue;
+      const overlap = Math.min(g.x1, p.x1) - Math.max(g.x0, p.x0);
+      if (overlap < Math.min(g.x1 - g.x0, p.x1 - p.x0) * 0.5) continue;
+      if (!best || p.baseline > best[best.length - 1].baseline) best = st;
+    }
+    if (best) best.push(g);
+    else streams.push([g]);
+  }
+  return streams.flat();
+}
+
 /** Group pieces of text into paragraphs. */
-function paragraphs(segs: Seg[]): Seg[][] {
+function paragraphs(segs: Seg[], ocr = false): Seg[][] {
   // right edge of the text column a line sits in: lines starting near the same x, or in the same MuPDF block
-  const colRightOf = (g: Seg) => Math.max(...segs.filter((o) => o.raw === g.raw || Math.abs(o.x0 - g.x0) < g.size * 2).map((o) => o.x1));
+  const colRightOf = (g: Seg) => Math.max(...segs.filter((o) => (!ocr && o.raw === g.raw) || Math.abs(o.x0 - g.x0) < g.size * 2).map((o) => o.x1));
   const out: Seg[][] = [];
   let cur: Seg[] = [];
   for (const g of segs) {
@@ -283,9 +352,19 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
   const samples = new Map<string, { c: string; w: number; size: number }[]>();
   const pageBounds = page.getBounds();
   const pageCenter = (pageBounds[0] + pageBounds[2]) / 2;
+  const ocrPage = isOcrPage(page);
 
-  const segs = mergeSegs(raw.flatMap((rb, ri) => rb.lines.flatMap((ln) => splitLine(ln, ri))));
-  const paras = paragraphs(segs);
+  let merged: Seg[];
+  if (ocrPage) {
+    // recognised text: MuPDF's blocks mean nothing there, and the size MuPDF reports includes the
+    // horizontal stretch; the glyph box height does not.
+    for (const rb of raw)
+      for (const ln of rb.lines) for (const c of ln.chars) if (OCR_FONT.test(c.font.getName())) c.size = Math.abs(c.quad[5] - c.quad[1]) / OCR_EM_BOX;
+    const lines = raw.flatMap((rb) => rb.lines);
+    merged = mergeSegs(lines.flatMap((ln) => splitLine(ln, 0, gutterCut(lines), 0.06)), false);
+  } else merged = mergeSegs(raw.flatMap((rb, ri) => rb.lines.flatMap((ln) => splitLine(ln, ri))));
+  const segs = ocrPage ? columnOrder(merged) : merged;
+  const paras = paragraphs(segs, ocrPage);
 
   const blocks: EditBlock[] = paras.map((ls, id) => {
     const styles: EditStyle[] = [];
@@ -297,14 +376,18 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
       let i = styleIndex.get(key);
       if (i === undefined) {
         const clean = cleanFontName(name);
-        const sub = substituteFor({ name, bold: ch.font.isBold(), italic: ch.font.isItalic(), serif: ch.font.isSerif(), mono: ch.font.isMono() });
+        const ocr = ocrPage && OCR_FONT.test(name);
+        const sub = ocr
+          ? { file: "LiberationSans-Regular.ttf", family: "papgi Sans", css: "'papgi Sans', Arial, sans-serif", exact: true }
+          : substituteFor({ name, bold: ch.font.isBold(), italic: ch.font.isItalic(), serif: ch.font.isSerif(), mono: ch.font.isMono() });
         i = styles.length;
         styles.push({
+          ocr,
           font: name,
           size: ch.size,
           color: rgb,
-          bold: ch.font.isBold() || isBoldName(clean),
-          italic: ch.font.isItalic() || isItalicName(clean),
+          bold: !ocr && (ch.font.isBold() || isBoldName(clean)),
+          italic: !ocr && (ch.font.isItalic() || isItalicName(clean)),
           css: sub.css,
           family: sub.family,
           file: sub.file,
@@ -322,7 +405,8 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
       for (const ch of g.chars) {
         const name = ch.font.getName();
         if (MATH_FONT.test(name)) math = true;
-        if (Math.abs(ch.origin[1] - g.baseline) > ch.size * 0.15) shifted = true;
+        // (recognised text follows the scan's skew, so its baseline slopes; it has no superscripts)
+        if (!(ocrPage && OCR_FONT.test(name)) && Math.abs(ch.origin[1] - g.baseline) > ch.size * 0.15) shifted = true;
         if (!fonts.has(name)) fonts.set(name, ch.font);
         if (!isSpace(ch.c)) {
           const list = samples.get(name) ?? [];
@@ -339,11 +423,12 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
           // Hyphen at the line end: a typesetter's break inside a word is removed, a compound's
           // hyphen stays ("analog-to-|digital", "analog-|to-digital"). Lines papgi wrote itself
           // only ever break at real hyphens; its fonts are embedded whole (no "ABCDEF+" tag).
+          // Recognised text is treated like typeset text.
           const nextWord = g.chars.map((c) => c.c).join("").split(/\s/)[0];
           const prevLine = ls[li - 1].chars;
           const hyphenFont = prevLine[prevLine.length - 1]?.font.getName() ?? "";
           const typesetBreak =
-            /\p{Ll}/u.test(first) && !word.slice(0, -1).includes("-") && !nextWord.includes("-") && /\p{L}{2}-$/u.test(word) && /^[A-Z]{6}\+/.test(hyphenFont);
+            /\p{Ll}/u.test(first) && !word.slice(0, -1).includes("-") && !nextWord.includes("-") && /\p{L}{2}-$/u.test(word) && (/^[A-Z]{6}\+/.test(hyphenFont) || (ocrPage && OCR_FONT.test(hyphenFont)));
           if (typesetBreak) prev.text = prev.text.slice(0, -1);
         } else runs.push({ text: " ", style: prev.style });
       }
@@ -358,11 +443,13 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
 
     const lines: EditLine[] = ls.map((g) => ({ bbox: [g.x0, g.top, g.x1, g.bottom] as Rect, baseline: g.baseline }));
     const left = Math.min(...ls.map((g) => g.x0));
-    const right = Math.max(...ls.map((g) => g.x1));
+    // (on a scan a speck at the end of one line must not set the column edge)
+    const ocrBlock = ocrPage && ls.some((g) => g.chars.some((c) => OCR_FONT.test(c.font.getName())));
+    const right = ocrBlock && ls.length >= 3 ? median(ls.slice(0, -1).map((g) => g.x1)) : Math.max(...ls.map((g) => g.x1));
     const mainSize = Math.max(...ls.map((g) => g.size));
     const gaps = ls.slice(1).map((g, i) => g.baseline - ls[i].baseline).filter((x) => x > 0);
     const lineHeight = gaps.length ? median(gaps) : mainSize * 1.2;
-    const tol = Math.max(1.5, mainSize * 0.2);
+    const tol = Math.max(1.5, mainSize * (ocrBlock ? 0.3 : 0.2));
 
     let align: Align = "left";
     if (ls.length >= 2) {
@@ -383,7 +470,9 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
     }
 
     const editable = ls.every((g) => g.editable);
+    const ocr = styles.some((st) => st.ocr);
     return {
+      ocr,
       id,
       bbox: [left, Math.min(...ls.map((g) => g.top)), right, Math.max(...ls.map((g) => g.bottom))] as Rect,
       lines,
@@ -455,11 +544,13 @@ interface Plan {
   runs: Run[];
 }
 
-function plan(page: MuPDF.PDFPage, blockId: number, runsIn: Run[], fonts: FontSource): Plan {
+function plan(page: MuPDF.PDFPage, blockId: number, runsIn: Run[], fonts: FontSource, opts: EditOptions = {}): Plan {
   const ex = extractBlocks(page);
   const block = ex.blocks[blockId];
   if (!block) throw new Error("That paragraph changed. Click it again.");
   if (!block.editable) throw new Error(block.reason ?? "This text can't be edited.");
+  // recognised text has no real font: use the one the user picked
+  for (const st of block.styles) if (st.ocr && opts.serif) st.file = "LiberationSerif-Regular.ttf";
   const runs = normalizeRuns(runsIn.map((r) => ({ text: r.text, style: Math.min(Math.max(0, r.style | 0), block.styles.length - 1) })));
   const byStyle = new Map<number, string>();
   for (const r of runs) byStyle.set(r.style, (byStyle.get(r.style) ?? "") + r.text);
@@ -483,13 +574,13 @@ function plan(page: MuPDF.PDFPage, blockId: number, runsIn: Run[], fonts: FontSo
 }
 
 /** Bundled font files needed to edit this paragraph with this text. */
-export function fontsNeeded(page: MuPDF.PDFPage, blockId: number, runs: Run[], fonts: FontSource): string[] {
-  return plan(page, blockId, runs, fonts).missingFiles;
+export function fontsNeeded(page: MuPDF.PDFPage, blockId: number, runs: Run[], fonts: FontSource, opts: EditOptions = {}): string[] {
+  return plan(page, blockId, runs, fonts, opts).missingFiles;
 }
 
 /** Replace a paragraph's text. Call inside an undoable operation. */
-export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, blockId: number, runsIn: Run[], fonts: FontSource): EditResult {
-  const p = plan(page, blockId, runsIn, fonts);
+export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, blockId: number, runsIn: Run[], fonts: FontSource, opts: EditOptions = {}): EditResult {
+  const p = plan(page, blockId, runsIn, fonts, opts);
   if (p.missingFiles.length) throw new Error(`Font not loaded: ${p.missingFiles.join(", ")}`);
   const { block, fontFor, runs } = p;
   const warnings: string[] = [];
@@ -508,6 +599,38 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
   const laid = layoutParagraph(runs, { width: block.width, align: block.align, measure, firstIndent: block.firstIndent, restIndent: block.restIndent });
   const nonEmpty = laid.some((l) => l.pieces.length);
 
+  // On a scan, the words are pixels of the page image: sample the paper and ink colours so
+  // the old words can be painted over and the new ones drawn in the same ink.
+  let paper: [number, number, number] | null = null;
+  if (block.ocr) {
+    const scale = 1.5;
+    const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, false);
+    const pb = page.getBounds();
+    const W = pix.getWidth();
+    const H = pix.getHeight();
+    const n = pix.getNumberOfComponents();
+    const all = pix.getPixels();
+    const [bx0, by0, bx1, by1] = block.bbox;
+    const x0 = Math.max(0, Math.floor((bx0 - pb[0]) * scale));
+    const x1 = Math.min(W, Math.ceil((bx1 - pb[0]) * scale));
+    const y0 = Math.max(0, Math.floor((by0 - pb[1]) * scale));
+    const y1 = Math.min(H, Math.ceil((by1 - pb[1]) * scale));
+    const area = new Uint8ClampedArray(Math.max(0, x1 - x0) * Math.max(0, y1 - y0) * 4);
+    let k = 0;
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        const i = (y * W + x) * n;
+        area[k++] = all[i];
+        area[k++] = all[i + 1];
+        area[k++] = all[i + 2];
+        area[k++] = 255;
+      }
+    pix.destroy();
+    const c = sampleColors(area);
+    paper = c.paper;
+    for (const st of block.styles) if (st.ocr) st.color = c.ink;
+  }
+
   // 1) really remove the old glyphs (each line, trimmed vertically so neighbours survive)
   for (const ln of block.lines) {
     const [x0, y0, x1, y1] = ln.bbox;
@@ -518,8 +641,8 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
   }
   page.applyRedactions(false, mupdf.PDFPage.REDACT_IMAGE_NONE, mupdf.PDFPage.REDACT_LINE_ART_NONE, mupdf.PDFPage.REDACT_TEXT_REMOVE);
 
-  // 2) draw the new text
-  if (nonEmpty) {
+  // 2) draw the new text (and on scans, paint over the old words first)
+  if (nonEmpty || paper) {
     const pageObj = page.getObject();
     const res = ownResources(doc, pageObj);
     let fontDict = res.get("Font");
@@ -541,6 +664,17 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
     const inv = mupdf.Matrix.invert(page.getTransform());
     const num = (v: number) => (Math.abs(v) < 1e-6 ? "0" : String(+v.toFixed(4)));
     let ops = "q\n";
+    if (paper) {
+      // cover the old words on the scan with paper colour (a little larger than the recognised boxes)
+      const pt = (x: number, y: number) => [x * inv[0] + y * inv[2] + inv[4], x * inv[1] + y * inv[3] + inv[5]];
+      ops += `${paper.map(num).join(" ")} rg\n`;
+      for (const ln of block.lines) {
+        const h = ln.bbox[3] - ln.bbox[1];
+        const r = [ln.bbox[0] - h * 0.15, ln.bbox[1] - h * 0.2, ln.bbox[2] + h * 0.15, ln.bbox[3] + h * 0.25];
+        const c = [pt(r[0], r[1]), pt(r[2], r[1]), pt(r[2], r[3]), pt(r[0], r[3])];
+        ops += `${c[0].map(num).join(" ")} m ${c[1].map(num).join(" ")} l ${c[2].map(num).join(" ")} l ${c[3].map(num).join(" ")} l h f\n`;
+      }
+    }
     let missingGlyph = false;
     laid.forEach((line, i) => {
       const y = block.firstBaseline + i * block.lineHeight;
@@ -577,28 +711,4 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
     overflow,
     warnings,
   };
-}
-
-/** The page's own Resources dictionary (copied from the parent if it was inherited). */
-function ownResources(doc: MuPDF.PDFDocument, pageObj: MuPDF.PDFObject): MuPDF.PDFObject {
-  const own = pageObj.get("Resources");
-  if (own.isDictionary()) return own;
-  const inherited = pageObj.getInheritable("Resources");
-  const res = doc.newDictionary();
-  if (inherited.isDictionary()) inherited.forEach((v, k) => res.put(k as string, v));
-  pageObj.put("Resources", res);
-  return pageObj.get("Resources");
-}
-
-/** Add drawing operators after the page's existing content (keeping its graphics state sealed off). */
-function appendContent(doc: MuPDF.PDFDocument, pageObj: MuPDF.PDFObject, ops: string): void {
-  const enc = new TextEncoder();
-  const contents = pageObj.get("Contents");
-  const arr = doc.newArray();
-  arr.push(doc.addStream(enc.encode("q\n"), {}));
-  if (contents.isArray()) contents.forEach((c) => arr.push(c));
-  else if (!contents.isNull()) arr.push(contents);
-  arr.push(doc.addStream(enc.encode("Q\n"), {}));
-  arr.push(doc.addStream(enc.encode(ops), {}));
-  pageObj.put("Contents", arr);
 }

@@ -9,15 +9,32 @@
     "test": "vitest run",
     "e2e": "node e2e/check.mjs",
     "icons": "node scripts/icons.mjs",
-    "samples": "cd samples/src && pdflatex -interaction=batchmode paper.tex && pdflatex -interaction=batchmode paper.tex && cp paper.pdf ../../public/samples/ && python3 make_samples.py && node make_scan.mjs && python3 make_scan.py && python3 make_report.py && rm -f paper.aux paper.log paper.pdf scan_raw.png scan.jpg"
+    "samples": "cd samples/src && pdflatex -interaction=batchmode paper.tex && pdflatex -interaction=batchmode paper.tex && cp paper.pdf ../../public/samples/ && python3 make_samples.py && node make_scan.mjs && python3 make_scan.py && python3 make_report.py && rm -f paper.aux paper.log paper.pdf scan_raw.png scan.jpg",
+    "prebuild": "node scripts/copy-ocr.mjs",
+    "predev": "node scripts/copy-ocr.mjs"
   },
   "author": "",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
-    "mupdf": "^1.28.6"
+    "mupdf": "^1.28.6",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",
+    "@tesseract.js-data/ces": "^1.0.0",
+    "@tesseract.js-data/deu": "^1.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/fra": "^1.0.0",
+    "@tesseract.js-data/hun": "^1.0.0",
+    "@tesseract.js-data/ita": "^1.0.0",
+    "@tesseract.js-data/nld": "^1.0.0",
+    "@tesseract.js-data/pol": "^1.0.0",
+    "@tesseract.js-data/por": "^1.0.0",
+    "@tesseract.js-data/rus": "^1.0.0",
+    "@tesseract.js-data/spa": "^1.0.0",
+    "@tesseract.js-data/tur": "^1.0.0",
+    "@tesseract.js-data/ukr": "^1.0.0",
+    "@tesseract.js-data/vie": "^1.0.0",
     "@types/node": "^26.6.6",
     "sharp": "^0.35.5",
     "typescript": "^7.0.2",

@@ -29,7 +29,7 @@ export class ParagraphEditor {
     readonly page: number,
     readonly block: EditBlock,
     info: PageInfo,
-    fontBase: string,
+    private fontBase: string,
     private onDone: (commit: boolean) => void,
   ) {
     const b = block;
@@ -91,13 +91,25 @@ export class ParagraphEditor {
     const s = document.createElement("span");
     s.dataset.s = String(style);
     s.textContent = text;
-    s.style.fontFamily = st.css;
+    s.style.fontFamily = st.ocr && this.serifCss ? this.serifCss : st.css;
     s.style.fontWeight = st.bold ? "700" : "400";
     s.style.fontStyle = st.italic ? "italic" : "normal";
     s.style.color = rgbCss(st.color);
     s.style.setProperty("--fs", String(st.size));
     return s;
   }
+
+  /** Recognised text: show the new words in papgi's serif or sans font (what will be written). */
+  setSerif(serif: boolean): void {
+    const css = serif ? "'papgi Serif', 'Times New Roman', serif" : "'papgi Sans', Arial, sans-serif";
+    if (serif) void loadEditorFont(this.fontBase, "papgi Serif", "LiberationSerif-Regular.ttf", false, false);
+    this.el.style.fontFamily = css;
+    this.el.querySelectorAll<HTMLSpanElement>("span[data-s]").forEach((s) => {
+      if (this.block.styles[Number(s.dataset.s)]?.ocr) s.style.fontFamily = css;
+    });
+    this.serifCss = serif ? css : null;
+  }
+  private serifCss: string | null = null;
 
   focus(atEnd = true): void {
     this.el.focus();

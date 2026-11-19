@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, it, expect } from "vitest";
 import { mergeSettings, DEFAULTS, MAX_SIGNATURES } from "../src/storage";
 
@@ -25,5 +26,19 @@ describe("settings", () => {
     });
     expect(s.signatures).toHaveLength(MAX_SIGNATURES);
     expect(s.activeSignature).toBe("s0");
+  });
+
+  it("keeps recognition languages valid", () => {
+    expect(mergeSettings(null).ocrLangs).toEqual(["deu", "eng"]);
+    expect(mergeSettings({ ocrLangs: ["vie", "xx", "vie", 3] }).ocrLangs).toEqual(["vie"]);
+    expect(mergeSettings({ ocrLangs: [] }).ocrLangs).toEqual(["deu", "eng"]);
+    expect(mergeSettings({ ocrLangs: ["eng", "deu", "vie", "fra"] }).ocrLangs).toHaveLength(3);
+    expect(mergeSettings({ ocrSerif: "yes" }).ocrSerif).toBe(false);
+  });
+
+  it("ships data for every language it offers", async () => {
+    const { OCR_LANGS } = await import("../src/core/ocrlangs");
+    const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    for (const l of OCR_LANGS) expect(pkg.devDependencies[`@tesseract.js-data/${l.code}`], l.code).toBeTruthy();
   });
 });

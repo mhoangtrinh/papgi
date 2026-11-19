@@ -30,12 +30,14 @@ export default defineConfig({
       } as Record<string, unknown>,
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,wasm,woff2}"],
-        globIgnores: ["samples/**", "fonts/**"],
+        globIgnores: ["samples/**", "fonts/**", "ocr/**"],
         maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
         runtimeCaching: [
           { urlPattern: /\/samples\/.*\.pdf$/, handler: "CacheFirst", options: { cacheName: "samples" } },
           // fonts for text editing are fetched the first time they're needed, then kept offline
           { urlPattern: /\/fonts\/.*\.(otf|ttf)$/, handler: "CacheFirst", options: { cacheName: "fonts" } },
+          // text recognition engine and language data: fetched on first use, then offline
+          { urlPattern: /\/ocr\/.*\.(js|gz)$/, handler: "CacheFirst", options: { cacheName: "ocr" } },
         ],
       },
     }),

@@ -502,6 +502,7 @@ try {
     await window.papgi.open({ name: "scan.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
   });
   await waitRendered();
+  check("scan: offers text recognition when opened", /looks like a scan/.test(await page.textContent(".toast")) && (await page.locator(".toast .toast-action").isVisible()));
   await page.keyboard.press("h");
   const h0 = await pt(60, 120);
   const h1 = await pt(300, 140);
@@ -512,12 +513,64 @@ try {
   await page.waitForTimeout(300);
   check("area highlight on a scan", (await engine("listAnnots", 0)).some((x) => x.kind === "Highlight"));
   await page.keyboard.press("e");
-  const sc = await pt(300, 400);
+  const sc = await pt(150, 330);
   await page.mouse.click(...sc);
   await page.waitForTimeout(400);
-  check("scan: explains there is no editable text", /no text that can be edited/.test(await page.textContent(".toast")));
+  check("scan: edit tool offers to recognize the text", /no text yet/.test(await page.textContent(".toast")));
+
+  // --- text recognition (OCR) ---
+  await page.click(".toast .toast-action");
+  await page.waitForSelector(".ocr-dialog");
+  const chipOn = () => page.$$eval(".lang-chip.on", (bs) => bs.map((b) => b.dataset.lang));
+  check("OCR dialog: German + English chosen by default", JSON.stringify(await chipOn()) === JSON.stringify(["eng", "deu"]) || JSON.stringify((await chipOn()).sort()) === JSON.stringify(["deu", "eng"]), JSON.stringify(await chipOn()));
+  await page.click('.lang-chip[data-lang="vie"]');
+  const disabled = await page.locator(".lang-chip:disabled").count();
+  check("OCR dialog: Vietnamese can be added, at most 3 languages", (await chipOn()).includes("vie") && disabled > 5, `${await chipOn()} disabled=${disabled}`);
+  await page.click('.lang-chip[data-lang="vie"]');
+  await page.screenshot({ path: shots + "desktop-ocr-dialog-light.png" });
+  const ocrT0 = Date.now();
+  await page.click(".modal-actions .btn.primary");
+  await page.waitForSelector(".ocr-progress");
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: shots + "desktop-ocr-progress-light.png" });
+  await page.waitForFunction(() => /Recognized \d+ words/.test(document.querySelector(".toast")?.textContent ?? "") || /failed/.test(document.querySelector(".toast")?.textContent ?? ""), null, { timeout: 180000 });
+  const ocrToast = await page.textContent(".toast");
+  check("OCR: recognizes the scan in the browser", /Recognized \d+ words/.test(ocrToast), `${ocrToast} (${((Date.now() - ocrT0) / 1000).toFixed(1)} s)`);
+  console.log(`   OCR took ${((Date.now() - ocrT0) / 1000).toFixed(1)} s`);
+  const ocrText = (await engine("pageText", 0)).replace(/\s+/g, " ");
+  check("OCR: text is selectable/searchable", ocrText.includes("Voltage references are a fundamental") && (await engine("search", "Bandgap Reference")).length > 0);
+  check("OCR: settings remember the languages", (await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")).ocrLangs)).sort().join() === "deu,eng");
+  // UI search finds recognised words
+  await page.keyboard.press("Control+f");
+  await page.fill("#search-input", "neural recording");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(500);
+  check("OCR: search bar finds recognised words", /^1 \/ \d+$/.test(await page.textContent("#search-count")), await page.textContent("#search-count"));
+  await page.keyboard.press("Escape");
+  // edit a recognised paragraph
+  await page.keyboard.press("e");
+  await page.mouse.click(...(await pt(150, 340)));
+  await page.waitForSelector(".para-editor");
+  const ocrEd = await page.textContent(".para-editor");
+  check("OCR: a recognised paragraph opens in the editor", ocrEd.includes("Voltage references") && ocrEd.includes("every mixed-signal") && ocrEd.includes("(CTAT)."), ocrEd.slice(0, 80));
+  check("OCR: Sans/Serif choice offered, no formula warning", (await page.locator('.floating [data-act="serif"]').count()) === 1 && (await page.locator(".floating .float-warn").count()) === 0);
+  await page.click('.floating [data-act="serif"]');
+  await page.click(".para-editor");
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("This scanned paragraph was recognised and rewritten in papgi.");
+  await page.screenshot({ path: shots + "desktop-ocr-editing-light.png" });
+  await page.keyboard.press("Control+Enter");
+  await page.waitForTimeout(1500);
+  const ocrAfter = (await engine("pageText", 0)).replace(/\s+/g, " ");
+  check("OCR: edited text replaces the scanned paragraph", ocrAfter.includes("recognised and rewritten in papgi.") && !ocrAfter.includes("fundamental building block"));
+  check("OCR: serif font used", (await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")).ocrSerif)) === true);
   await page.keyboard.press("v");
+  await page.waitForTimeout(500);
   await page.screenshot({ path: shots + "desktop-scan-light.png" });
+  // the menu entry
+  await page.click("#btn-more");
+  check("OCR: menu entry", await page.locator('[data-menu="ocr"]').isVisible());
+  await page.keyboard.press("Escape");
 
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();

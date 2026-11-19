@@ -21,6 +21,9 @@ export interface ViewerHost {
   needSignature(): Promise<boolean>;
   activeSignature(): SavedSignature | null;
   busy<T>(p: Promise<T>): Promise<T>;
+  /** Offer text recognition (scanned pages). */
+  recognize(): void;
+  saveSettings(): void;
 }
 
 interface PageView {
@@ -1068,7 +1071,8 @@ export class Viewer {
     const blocks = await this.ensureBlocks(pv);
     const block = this.blockAt(pv, p);
     if (!block) {
-      if (!blocks.some((b) => b.lines.length)) toast("This page has no text that can be edited — it may be a scanned image.");
+      if (!blocks.some((b) => b.lines.length))
+        toast("This page has no text yet. If it's a scan, recognize its text first.", "info", { label: "Recognize text", run: () => this.host.recognize() });
       return;
     }
     if (!block.editable) return void toast(block.reason ?? "This text can't be edited.", "error");
@@ -1082,12 +1086,23 @@ export class Viewer {
       [block.left, Math.min(...block.lines.map((l) => l.bbox[1])), block.left + block.width, block.bbox[3]],
       "edit",
       `${block.warn ? `<span class="float-warn" title="${block.warn}">${icon("warn")}<span>Formulas get flattened</span></span><span class="sep"></span>` : ""}
+       ${block.ocr ? `<div class="seg mini" title="Font for the new text"><button data-act="sans" class="${this.host.settings.ocrSerif ? "" : "on"}">Sans</button><button data-act="serif" class="${this.host.settings.ocrSerif ? "on" : ""}">Serif</button></div><span class="sep"></span>` : ""}
        <button data-act="done" title="Finish (Ctrl+Enter)">${icon("check")}</button>
        <button data-act="cancel" title="Cancel (Esc)">${icon("close")}</button>`,
     );
+    if (block.ocr) ed.setSerif(this.host.settings.ocrSerif);
     this.floating.onclick = (ev) => {
       const b = (ev.target as HTMLElement).closest<HTMLButtonElement>("button");
-      if (b) void this.closeParagraph(b.dataset.act === "done");
+      if (!b) return;
+      if (b.dataset.act === "sans" || b.dataset.act === "serif") {
+        const serif = b.dataset.act === "serif";
+        this.host.settings.ocrSerif = serif;
+        this.host.saveSettings();
+        ed.setSerif(serif);
+        this.floating.querySelectorAll<HTMLButtonElement>("[data-act=sans],[data-act=serif]").forEach((x) => x.classList.toggle("on", x === b));
+        return;
+      }
+      void this.closeParagraph(b.dataset.act === "done");
     };
     this.floating.onpointerdown = (ev) => ev.preventDefault(); // keep the caret in the editor
     if (block.warn) toast(block.warn);
@@ -1107,7 +1122,7 @@ export class Viewer {
     this.paraBusy = true;
     ed.el.classList.add("saving");
     try {
-      const { result, annots } = await this.host.busy(this.host.engine.editText(pv.index, block.id, ed.runs(), new URL("fonts/", document.baseURI).href));
+      const { result, annots } = await this.host.busy(this.host.engine.editText(pv.index, block.id, ed.runs(), new URL("fonts/", document.baseURI).href, { serif: block.ocr && this.host.settings.ocrSerif }));
       this.para = null;
       if (this.floating.dataset.kind === "edit") this.hideFloating();
       this.afterAnnotEdit(pv, annots);

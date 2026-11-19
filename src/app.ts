@@ -6,6 +6,7 @@ import { Sidebar } from "./ui/sidebar";
 import { icon } from "./ui/icons";
 import { toast, askPassword, confirmDialog, showShortcuts, modal } from "./ui/dialogs";
 import { signatureDialog } from "./ui/signature-dialog";
+import { ocrDialog, runOcr } from "./ui/ocr";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
 import { nextZoom, strokesBounds, ZOOM_STEPS } from "./core/geometry";
@@ -74,6 +75,8 @@ export class App {
         needSignature: () => this.addSignature(),
         activeSignature: () => this.activeSignature(),
         busy: (p) => this.busy(p),
+        recognize: () => void this.recognize(),
+        saveSettings: () => saveSettings(this.settings),
       },
       main,
     );
@@ -123,6 +126,7 @@ export class App {
             <button data-menu="saveas">${icon("extract")}Save a copy…<kbd>Ctrl ⇧ S</kbd></button>
             <hr>
             <button data-menu="insert">${icon("insert")}Insert PDF at end…</button>
+            <button data-menu="ocr">${icon("scan")}Recognize text (OCR)…</button>
             <button data-menu="flatten">${icon("flatten")}Flatten forms &amp; annotations</button>
             <button data-menu="signature">${icon("sign")}Add a signature…</button>
             <hr>
@@ -552,6 +556,7 @@ export class App {
       case "saveas": return void this.saveCopy();
       case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
       case "flatten": return void this.flatten();
+      case "ocr": return void this.recognize();
       case "signature": return void this.addSignature();
       case "keys": return showShortcuts();
       case "about":
@@ -601,7 +606,7 @@ export class App {
       this.setDoc(info);
       if (info.pageCount > 0 && !(await this.engine.pageText(0)).trim()) {
         const scanned = info.pageCount === 1 || !(await this.engine.pageText(Math.min(1, info.pageCount - 1))).trim();
-        if (scanned) toast("This looks like a scan: no selectable text. You can still highlight areas, draw and sign.");
+        if (scanned) toast("This looks like a scan: there's no text to select yet.", "info", { label: "Recognize text", run: () => void this.recognize() });
       }
     } catch (e) {
       toast(`Couldn't open ${f.name}: ${(e as Error).message}`, "error");
@@ -735,6 +740,37 @@ export class App {
       pos += (this.info?.pageCount ?? n) - n;
     }
     if (files.length) toast(`Inserted ${files.map((f) => f.name).join(", ")}`);
+  }
+
+  // ---------- text recognition ----------
+
+  private ocrRunning = false;
+
+  /** Recognise the text on scanned pages (asks which pages and languages first). */
+  async recognize(): Promise<void> {
+    if (!this.info || this.ocrRunning) return;
+    this.viewer.closeEditor(true);
+    const scanned: number[] = [];
+    for (let i = 0; i < this.info.pageCount; i++) if (!(await this.engine.pageHasText(i))) scanned.push(i);
+    if (!scanned.length) return toast("Every page already has text that can be selected.");
+    const choice = await ocrDialog({ pageCount: this.info.pageCount, current: this.viewer.currentPage(), scanned, langs: this.settings.ocrLangs });
+    if (!choice) return;
+    this.settings.ocrLangs = choice.langs;
+    saveSettings(this.settings);
+    this.ocrRunning = true;
+    try {
+      const res = await runOcr(this.engine, choice, document.baseURI);
+      if (!res.pages.length) return void toast(res.stopped ? "Stopped. Nothing was added." : "No text was found on these pages.");
+      const info = await this.engine.info();
+      this.viewer.refresh(info, res.pages);
+      await this.edited(info, res.pages);
+      const pages = res.pages.length === 1 ? `page ${res.pages[0] + 1}` : `${res.pages.length} pages`;
+      toast(`${res.stopped ? "Stopped. " : ""}Recognized ${res.words} words on ${pages}. Select, search or edit them now.`);
+    } catch (e) {
+      toast(`Text recognition failed: ${(e as Error).message}`, "error");
+    } finally {
+      this.ocrRunning = false;
+    }
   }
 
   private async flatten(): Promise<void> {

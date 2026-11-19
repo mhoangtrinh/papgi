@@ -1,5 +1,6 @@
 // Settings in localStorage. Defaults are merged in, so older saved data never breaks newer versions.
 import type { Point } from "./core/geometry";
+import { cleanOcrLangs, DEFAULT_OCR_LANGS } from "./core/ocrlangs";
 
 export type Theme = "auto" | "light" | "dark";
 export type Tool = "select" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign";
@@ -33,6 +34,10 @@ export interface Settings {
   signatures: SavedSignature[];
   activeSignature: string | null;
   signatureWidth: number;
+  /** Languages for text recognition (Tesseract codes). */
+  ocrLangs: string[];
+  /** Write edited recognised text in a serif font. */
+  ocrSerif: boolean;
 }
 
 const KEY = "papgi.settings.v1";
@@ -59,6 +64,8 @@ export const DEFAULTS: Settings = {
   signatures: [],
   activeSignature: null,
   signatureWidth: 150,
+  ocrLangs: [...DEFAULT_OCR_LANGS],
+  ocrSerif: false,
 };
 
 export function loadSettings(): Settings {
@@ -87,6 +94,8 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   if (signature !== undefined || signatureImage !== undefined)
     out.activeSignature = out.signatures.find((x) => x.kind === signatureKind)?.id ?? out.signatures[0]?.id ?? null;
   if (!out.signatures.some((x) => x.id === out.activeSignature)) out.activeSignature = out.signatures[0]?.id ?? null;
+  out.ocrLangs = cleanOcrLangs(out.ocrLangs);
+  out.ocrSerif = out.ocrSerif === true;
   return out;
 }
 

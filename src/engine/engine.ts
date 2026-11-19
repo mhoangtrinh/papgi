@@ -5,9 +5,11 @@
 import type * as MuPDF from "mupdf";
 import type { Point, Quad, Rect } from "../core/geometry";
 import type { Run } from "../core/textlayout";
-import { extractBlocks, fontsNeeded, replaceBlock, type EditBlock, type EditResult } from "./textedit";
+import { extractBlocks, fontsNeeded, replaceBlock, type EditBlock, type EditResult, type EditOptions } from "./textedit";
+import { addOcrWords, isOcrPage, OCR_FONT_FILE, type OcrWord } from "./ocr";
 
-export type { EditBlock, EditResult, EditStyle } from "./textedit";
+export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
+export type { OcrWord } from "./ocr";
 
 type M = typeof MuPDF;
 export type RGB = [number, number, number];
@@ -562,8 +564,44 @@ export class PdfEngine {
   }
 
   /** Bundled font files that must be registered before replaceText can run. */
-  fontsForEdit(index: number, block: number, runs: Run[]): string[] {
-    return this.withPage(index, (page) => fontsNeeded(page, block, runs, this.bundled));
+  fontsForEdit(index: number, block: number, runs: Run[], opts: EditOptions = {}): string[] {
+    return this.withPage(index, (page) => fontsNeeded(page, block, runs, this.bundled, opts));
+  }
+
+  // ---------- text recognition (scans) ----------
+
+  /** Does the page have any real (or already recognised) text? */
+  pageHasText(index: number): boolean {
+    return this.pageText(index).trim().length > 0;
+  }
+
+  isRecognized(index: number): boolean {
+    return this.withPage(index, (p) => isOcrPage(p));
+  }
+
+  /** Font file the recognised text is written with (register it before addOcrText). */
+  readonly ocrFontFile = OCR_FONT_FILE;
+
+  /** Add recognised words as an invisible, selectable text layer on one page (one undo step). */
+  addOcrText(index: number, words: OcrWord[]): number {
+    return this.addOcrPages([{ index, words }]);
+  }
+
+  /** The same for several pages at once, as one undo step. Returns the number of words written. */
+  addOcrPages(pages: { index: number; words: OcrWord[] }[]): number {
+    const doc = this.requireDoc();
+    const font = this.bundled.get(OCR_FONT_FILE);
+    if (!font) throw new Error(`Font ${OCR_FONT_FILE} not loaded`);
+    let n = 0;
+    this.journaled("Recognize text", () => {
+      for (const { index, words } of pages)
+        this.withPage(index, (page) => {
+          n += addOcrWords(this.mupdf, doc, page, words, font);
+        });
+      return pages.length > 0;
+    });
+    this.clearText();
+    return n;
   }
 
   /**
@@ -571,7 +609,7 @@ export class PdfEngine {
    * strike-outs on the paragraph follow their words to the new position, or are
    * removed if those words are gone.
    */
-  replaceText(index: number, block: number, runs: Run[]): { result: EditResult; annots: AnnotInfo[] } {
+  replaceText(index: number, block: number, runs: Run[], opts: EditOptions = {}): { result: EditResult; annots: AnnotInfo[] } {
     const doc = this.requireDoc();
     let result!: EditResult;
     this.journaled("Edit text", () => {
@@ -593,7 +631,7 @@ export class PdfEngine {
           }
           st.destroy();
         }
-        result = replaceBlock(this.mupdf, doc, page, block, runs, this.bundled);
+        result = replaceBlock(this.mupdf, doc, page, block, runs, this.bundled, opts);
         if (!marks.length) return;
         // put each mark back on its words inside the new paragraph
         const area = result.bbox;

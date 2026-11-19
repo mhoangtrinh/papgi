@@ -1198,6 +1198,136 @@ textarea.field-input {
 .toast.show {
   opacity: 1;
   transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.toast-action {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ---------- text recognition ---------- */
+
+.seg.mini button,
+.ocr-dialog .seg button {
+  width: auto;
+  padding: 0 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.seg.mini {
+  align-self: center;
+}
+
+.seg.mini button {
+  height: 26px;
+}
+
+.ocr-dialog .seg {
+  justify-self: start;
+}
+
+.ocr-dialog .seg button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ocr-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.ocr-label {
+  font-weight: 600;
+}
+
+.ocr-label .muted {
+  font-weight: 400;
+}
+
+.lang-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lang-chip {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lang-chip:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.lang-chip.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.lang-chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ocr-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.ocr-progress h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ocr-progress h2 .ic {
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+.meter {
+  height: 6px;
+  margin-top: 10px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.meter > div {
+  width: 0;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.25s;
 }
 
 /* ---------- small screens ---------- */

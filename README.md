@@ -25,11 +25,11 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
 | Pages | Reorder by drag and drop, rotate, delete, insert other PDFs, add blank pages, save pages as a new PDF |
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
-| Scans | Highlight any area (OCR comes later) |
+| **Scans (OCR)** | Recognize text on scanned pages (⋯ menu → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 
-Planned next: OCR for scans, bold/italic changes while editing text, export to Word.
+Planned next: bold/italic changes while editing text, export to Word.
 
-Text editing limits: formulas and sub/superscripts inside an edited paragraph are flattened onto one line; rotated text and scans can't be edited yet.
+Text editing limits: formulas and sub/superscripts inside an edited paragraph are flattened onto one line; rotated text can't be edited yet. On scans, edit only after recognizing the text; Chinese, Japanese, Korean, Arabic and other scripts aren't supported for recognition.
 
 ## Controls
 
@@ -73,6 +73,10 @@ src/
   core/textlayout.ts line breaking / justification for edited paragraphs (pure, tested)
   core/fontmatch.ts  picks the closest bundled font for a PDF font (pure, tested)
   engine/textedit.ts finds paragraphs, removes old text, writes the new text into the page
+  engine/ocr.ts      writes recognised words as a hidden text layer on a scanned page
+  core/ocrwords.ts   recognition output -> words in page space (columns, sizes, skew; pure, tested)
+  core/ocrlangs.ts   the recognition languages on offer
+  ui/ocr.ts          recognition dialog, progress, and the tesseract.js runner
   ui/viewer.ts       pages, rendering, tools, form fields, search highlights
   ui/sidebar.ts      thumbnails and page actions
   ui/dialogs.ts      toasts and modals
@@ -84,6 +88,7 @@ src/
   storage.ts         settings in localStorage
 public/samples/      sample PDFs (paper, form, scan, pages); generators in samples/src/
 public/fonts/        fonts for text editing, loaded only when needed (licences in LICENSES.txt)
+public/ocr/          tesseract.js engine + language data, copied from node_modules on build (scripts/copy-ocr.mjs)
 tests/               Vitest unit tests
 e2e/check.mjs        Playwright browser check
 ```
