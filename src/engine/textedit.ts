@@ -434,29 +434,6 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
   return { blocks, fonts, samples };
 }
 
-/** Does the font's advance width match how the glyphs are actually laid out in the PDF? */
-function fontTrusted(font: MuPDF.Font, samples: { c: string; w: number; size: number }[]): boolean {
-  if (!samples.length) return true;
-  let ok = 0;
-  let n = 0;
-  for (const s of samples) {
-    const gid = font.encodeCharacter(s.c.codePointAt(0)!);
-    if (!gid) continue;
-    n++;
-    const w = font.advanceGlyph(gid) * s.size;
-    if (Math.abs(w - s.w) <= Math.max(0.6, s.w * 0.15)) ok++;
-  }
-  return n > 0 && ok / n >= 0.8;
-}
-
-function covers(font: MuPDF.Font, text: string): boolean {
-  for (const ch of text) {
-    if (/\s/.test(ch)) continue;
-    if (!font.encodeCharacter(ch.codePointAt(0)!)) return false;
-  }
-  return true;
-}
-
 export interface FontSource {
   /** A bundled font by file name, or undefined if not loaded yet. */
   get(file: string): MuPDF.Font | undefined;
@@ -483,11 +460,8 @@ function plan(page: MuPDF.PDFPage, blockId: number, runsIn: Run[], fonts: FontSo
   let substituted = false;
   block.styles.forEach((st, i) => {
     const text = byStyle.get(i) ?? "";
-    const orig = ex.fonts.get(st.font);
-    if (orig && covers(orig, text) && fontTrusted(orig, ex.samples.get(st.font) ?? [])) {
-      fontFor[i] = orig;
-      return;
-    }
+    // Always a bundled font: re-embedding a PDF's own (subset) font can draw the wrong
+    // letters with some producers (codes shifted), so it isn't safe to reuse.
     const sub = fonts.get(st.file);
     if (!sub) {
       if (text.trim()) missing.add(st.file);
@@ -581,7 +555,7 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
     if (missingGlyph) warnings.push("Some characters aren't available in the font and were left blank.");
   }
 
-  if (p.substituted) warnings.push("The original font doesn't contain all the letters you typed, so papgi used the closest matching font.");
+  if (p.substituted) warnings.push("papgi doesn't have this exact font, so the new text uses the closest match.");
   const oldLines = block.lines.length;
   const lastBaseline = block.firstBaseline + (laid.length - 1) * block.lineHeight;
   const oldBottom = block.lines[block.lines.length - 1]?.bbox[3] ?? block.bbox[3];

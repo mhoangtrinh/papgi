@@ -17,7 +17,7 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 
 | | |
 |---|---|
-| **Edit text** | Click any paragraph and change the words right on the page. The old text is really removed; the new text is set in the original font when possible (otherwise the closest match: Latin Modern for LaTeX papers, Carlito/Caladea for Calibri/Cambria, Liberation for Arial/Times/Courier), re-wrapped and justified like before. Highlights follow their words. |
+| **Edit text** | Click any paragraph and change the words right on the page. The old text is really removed; the new text is set in the closest bundled font (Latin Modern for LaTeX papers, Carlito/Caladea for Calibri/Cambria, Liberation for Arial/Helvetica/Times/Courier — same letter widths as the originals), re-wrapped and justified like before. Highlights follow their words. |
 | View | Fast, sharp rendering (MuPDF in WebAssembly), thumbnails, zoom, search |
 | Text | Select and copy text; highlight, underline, strike out |
 | Draw | Pen, rectangles, ellipses, arrows, text boxes |
