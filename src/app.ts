@@ -90,7 +90,7 @@ export class App {
     <header class="topbar">
       <div class="tb-group">
         <button class="icon-btn" id="btn-sidebar" title="Pages panel">${icon("sidebar")}</button>
-        <div class="brand"><span class="logo">${icon("file")}</span>PDF Studio</div>
+        <div class="brand"><span class="logo">${icon("file")}</span>papgi</div>
         <button class="icon-btn" id="btn-open" title="Open (Ctrl+O)">${icon("open")}</button>
         <button class="icon-btn" id="btn-save" title="Save (Ctrl+S)">${icon("save")}</button>
       </div>
@@ -123,7 +123,7 @@ export class App {
             <button data-menu="signature">${icon("sign")}Change my signature…</button>
             <hr>
             <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
-            <button data-menu="about">${icon("file")}About PDF Studio</button>
+            <button data-menu="about">${icon("file")}About papgi</button>
           </div>
         </div>
       </div>
@@ -477,9 +477,9 @@ export class App {
       case "keys": return showShortcuts();
       case "about":
         return void modal({
-          title: "About PDF Studio",
-          body: `<p>PDF Studio is a PDF editor that runs entirely in your browser. Files never leave your device.</p>
-                 <p class="muted">Rendering and editing by <a href="https://mupdf.com" target="_blank" rel="noopener">MuPDF</a> (AGPL). Source: <a href="https://github.com/mhoangtrinh/pdf-studio" target="_blank" rel="noopener">github.com/mhoangtrinh/pdf-studio</a></p>`,
+          title: "About papgi",
+          body: `<p>papgi is a PDF editor that runs entirely in your browser. Files never leave your device.</p>
+                 <p class="muted">Rendering and editing by <a href="https://mupdf.com" target="_blank" rel="noopener">MuPDF</a> (AGPL). Source: <a href="https://github.com/mhoangtrinh/papgi" target="_blank" rel="noopener">github.com/mhoangtrinh/papgi</a></p>`,
           actions: [{ label: "Close", value: "", primary: true }],
         });
     }
@@ -733,7 +733,7 @@ export class App {
     this.$("#docname").classList.toggle("dirty", has && this.dirty);
     this.$("#page-count").textContent = `/ ${this.info?.pageCount ?? 0}`;
     if (!has) this.$<HTMLInputElement>("#page-input").value = "0";
-    document.title = has ? `${this.dirty ? "• " : ""}${name} — PDF Studio` : "PDF Studio";
+    document.title = has ? `${this.dirty ? "• " : ""}${name} — papgi` : "papgi";
   }
 
   private async busy<T>(p: Promise<T>): Promise<T> {

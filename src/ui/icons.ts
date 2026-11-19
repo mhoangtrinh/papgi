@@ -1,4 +1,4 @@
-// Small stroke icons (24x24), drawn for PDF Studio.
+// Small stroke icons (24x24), drawn for papgi.
 const P: Record<string, string> = {
   open: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   save: '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z"/><path d="M8 3v5h7V3"/><rect x="8" y="13" width="8" height="5" rx="1"/>',

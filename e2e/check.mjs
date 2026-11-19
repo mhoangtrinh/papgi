@@ -45,7 +45,7 @@ try {
   await page.screenshot({ path: shots + "desktop-empty-light.png" });
   check("empty state shows", await page.isVisible("#empty-open"));
 
-  const engine = (fn, ...args) => page.evaluate(([f, a]) => window.pdfStudio.engine[f](...a), [fn, args]);
+  const engine = (fn, ...args) => page.evaluate(([f, a]) => window.papgi.engine[f](...a), [fn, args]);
   const waitRendered = async () => {
     await page.waitForSelector(".page.rendered", { timeout: 20000 });
     await page.waitForTimeout(300);
@@ -54,7 +54,7 @@ try {
   // page point -> screen point
   // (scrolls the viewer first if the point is off screen)
   const pt = async (x, y, i = 0) => {
-    const info = await page.evaluate((k) => window.pdfStudio.info.pages[k], i);
+    const info = await page.evaluate((k) => window.papgi.info.pages[k], i);
     const vp = page.viewportSize();
     for (let tries = 0; tries < 2; tries++) {
       const b = await pageBox(i);
@@ -237,11 +237,11 @@ try {
   await page.click("#btn-theme"); // -> auto
 
   // --- form sample ---
-  await page.evaluate(() => window.pdfStudio.open({ name: "form.pdf", bytes: new Uint8Array(), handle: null }).catch(() => {}));
+  await page.evaluate(() => window.papgi.open({ name: "form.pdf", bytes: new Uint8Array(), handle: null }).catch(() => {}));
   await page.waitForTimeout(200);
   await page.evaluate(async () => {
     const r = await fetch("./samples/form.pdf");
-    await window.pdfStudio.open({ name: "form.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    await window.papgi.open({ name: "form.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
   });
   await waitRendered();
   await page.waitForSelector(".field-input");
@@ -264,9 +264,9 @@ try {
 
   // --- pages sample: rotate, delete, reorder by drag ---
   await page.evaluate(async () => {
-    window.pdfStudio["dirty"] = false;
+    window.papgi["dirty"] = false;
     const r = await fetch("./samples/pages.pdf");
-    await window.pdfStudio.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
   });
   await waitRendered();
   await page.waitForSelector(".thumb");
@@ -274,7 +274,7 @@ try {
   await page.locator(".thumb").nth(0).click();
   await page.click('[data-act="rotR"]');
   await page.waitForTimeout(400);
-  let info = await page.evaluate(() => window.pdfStudio.info);
+  let info = await page.evaluate(() => window.papgi.info);
   check("rotate page", info.pages[0].rotation === 90);
   await page.keyboard.press("Control+z");
   await page.waitForTimeout(400);
@@ -284,7 +284,7 @@ try {
   await page.waitForSelector(".modal");
   await page.click(".modal .btn.primary");
   await page.waitForTimeout(500);
-  info = await page.evaluate(() => window.pdfStudio.info);
+  info = await page.evaluate(() => window.papgi.info);
   check("delete pages 2-3", info.pageCount === 3);
   await page.locator(".thumb").nth(2).dragTo(page.locator(".thumb").nth(0), { targetPosition: { x: 20, y: 5 } });
   await page.waitForTimeout(500);
@@ -293,9 +293,9 @@ try {
 
   // --- scan sample: area highlight ---
   await page.evaluate(async () => {
-    window.pdfStudio["dirty"] = false;
+    window.papgi["dirty"] = false;
     const r = await fetch("./samples/scan.pdf");
-    await window.pdfStudio.open({ name: "scan.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    await window.papgi.open({ name: "scan.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
   });
   await waitRendered();
   await page.keyboard.press("h");

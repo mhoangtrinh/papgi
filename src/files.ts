@@ -25,7 +25,7 @@ export async function fileToOpened(file: File, handle: FileSystemFileHandle | nu
 export async function pickPdfs(multiple = false): Promise<OpenedFile[]> {
   if (fsw.showOpenFilePicker) {
     try {
-      const handles = await fsw.showOpenFilePicker({ types: PDF_TYPES, multiple, id: "pdf-studio-open" });
+      const handles = await fsw.showOpenFilePicker({ types: PDF_TYPES, multiple, id: "papgi-open" });
       return Promise.all(handles.map(async (h) => fileToOpened(await h.getFile(), h)));
     } catch (e) {
       if ((e as Error).name === "AbortError") return [];
@@ -66,7 +66,7 @@ export async function writeToHandle(handle: FileSystemFileHandle, bytes: Uint8Ar
 export async function saveAs(bytes: Uint8Array, suggestedName: string): Promise<FileSystemFileHandle | null | undefined> {
   if (fsw.showSaveFilePicker) {
     try {
-      const handle = await fsw.showSaveFilePicker({ suggestedName, types: PDF_TYPES, id: "pdf-studio-save" });
+      const handle = await fsw.showSaveFilePicker({ suggestedName, types: PDF_TYPES, id: "papgi-save" });
       await writeToHandle(handle, bytes);
       return handle;
     } catch (e) {
@@ -89,7 +89,7 @@ export function download(bytes: Uint8Array, name: string, type = "application/pd
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Files passed in by the OS ("Open with PDF Studio" on an installed app). */
+/** Files passed in by the OS ("Open with papgi" on an installed app). */
 export function onLaunchFiles(cb: (f: OpenedFile) => void): void {
   const lq = (window as unknown as { launchQueue?: { setConsumer: (fn: (p: { files: FileSystemFileHandle[] }) => void) => void } }).launchQueue;
   lq?.setConsumer(async (params) => {

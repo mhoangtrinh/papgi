@@ -1,7 +1,7 @@
 {
-  "name": "pdf-studio",
+  "name": "papgi",
   "version": "1.0.0",
-  "description": "PDF Studio: a PDF editor that runs in the browser (MuPDF + WebAssembly)",
+  "description": "papgi: a PDF editor that runs in the browser (MuPDF + WebAssembly)",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

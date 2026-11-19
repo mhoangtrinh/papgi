@@ -1,12 +1,12 @@
-# PDF Studio
+# papgi
 
 A PDF editor that runs in your browser. Annotate, highlight, fill forms, sign and rearrange pages. Files never leave your device, and it works offline once loaded.
 
-**Live:** https://mhoangtrinh.github.io/pdf-studio/
+**Live:** https://mhoangtrinh.github.io/papgi/
 
 ## Install
 
-- **Windows (Edge or Chrome):** open the link, then click the install icon in the address bar (or menu → *Apps* → *Install PDF Studio*). Once installed, you can right-click a PDF → *Open with* → *PDF Studio*.
+- **Windows (Edge or Chrome):** open the link, then click the install icon in the address bar (or menu → *Apps* → *Install papgi*). Once installed, you can right-click a PDF → *Open with* → *papgi*.
 - **iPhone:** open the link in Safari → Share → *Add to Home Screen*.
 
 In Edge/Chrome, **Save (Ctrl+S) writes back to the file you opened**. In other browsers, Save downloads a copy.

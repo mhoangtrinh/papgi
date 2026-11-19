@@ -20,7 +20,8 @@ export interface Settings {
   signatureWidth: number;
 }
 
-const KEY = "pdf-studio.settings.v1";
+const KEY = "papgi.settings.v1";
+const OLD_KEYS = ["pdf-studio.settings.v1"]; // the app's earlier name
 
 export const DEFAULTS: Settings = {
   theme: "auto",
@@ -45,7 +46,7 @@ export const DEFAULTS: Settings = {
 
 export function loadSettings(): Settings {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(KEY) ?? OLD_KEYS.map((k) => localStorage.getItem(k)).find((v) => v !== null) ?? null;
     if (!raw) return structuredClone(DEFAULTS);
     const saved = JSON.parse(raw) as Partial<Settings>;
     return { ...structuredClone(DEFAULTS), ...saved, colors: { ...DEFAULTS.colors, ...(saved.colors ?? {}) } };

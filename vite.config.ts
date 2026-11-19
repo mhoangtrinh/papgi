@@ -11,8 +11,8 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "apple-touch-icon.png"],
       manifest: {
-        name: "PDF Studio",
-        short_name: "PDF Studio",
+        name: "papgi",
+        short_name: "papgi",
         description: "Annotate, fill, sign and rearrange PDFs. Files stay on your device.",
         theme_color: "#2f6fed",
         background_color: "#f6f7f9",
