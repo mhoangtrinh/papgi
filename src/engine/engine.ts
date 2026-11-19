@@ -79,9 +79,16 @@ export class PdfEngine {
   private bundled = new Map<string, MuPDF.Font>();
   private title = "";
   // Each journal step gets a unique id, so "dirty" survives undo + new edit sequences.
-  private stepIds: number[] = [];
-  private nextStepId = 1;
+  // Undo history as document snapshots. (MuPDF's own journal leaves its font/image caches
+  // pointing at objects that undo deleted, which garbles later edits.)
+  private undoStack: { name: string; bytes: Uint8Array; id: number }[] = [];
+  private redoStack: { name: string; bytes: Uint8Array; id: number }[] = [];
+  private stateId = 0;
+  private nextStateId = 1;
   private savedId = 0;
+  private password = "";
+  static readonly MAX_UNDO = 60;
+  static readonly MAX_UNDO_BYTES = 400 * 1024 * 1024;
 
   constructor(protected mupdf: M) {}
 
@@ -99,19 +106,21 @@ export class PdfEngine {
     this.close();
     this.doc = pdf;
     this.title = title;
+    this.password = "";
     if (pdf.needsPassword()) return null;
     return this.afterOpen();
   }
 
   authenticate(password: string): DocInfo | null {
     if (!this.requireDoc().authenticatePassword(password)) return null;
+    this.password = password;
     return this.afterOpen();
   }
 
   private afterOpen(): DocInfo {
-    const doc = this.requireDoc();
-    doc.enableJournal();
-    this.stepIds = [];
+    this.undoStack = [];
+    this.redoStack = [];
+    this.stateId = 0;
     this.savedId = 0;
     return this.info();
   }
@@ -131,8 +140,8 @@ export class PdfEngine {
       pageCount: n,
       pages,
       title: doc.getMetaData("info:Title") || this.title,
-      canUndo: doc.canUndo(),
-      canRedo: doc.canRedo(),
+      canUndo: this.undoStack.length > 0,
+      canRedo: this.redoStack.length > 0,
       dirty: this.isDirty(),
     };
   }
@@ -147,21 +156,18 @@ export class PdfEngine {
 
   /** Cheap status for the toolbar (no page walk). */
   state(): { canUndo: boolean; canRedo: boolean; dirty: boolean; undoName: string; redoName: string } {
-    const doc = this.requireDoc();
-    let undoName = "";
-    let redoName = "";
-    try {
-      const j = doc.getJournal();
-      undoName = j.steps[j.position - 1] ?? "";
-      redoName = j.steps[j.position] ?? "";
-    } catch {
-      /* journal unavailable */
-    }
-    return { canUndo: doc.canUndo(), canRedo: doc.canRedo(), dirty: this.isDirty(), undoName, redoName };
+    this.requireDoc();
+    return {
+      canUndo: this.undoStack.length > 0,
+      canRedo: this.redoStack.length > 0,
+      dirty: this.isDirty(),
+      undoName: this.undoStack[this.undoStack.length - 1]?.name ?? "",
+      redoName: this.redoStack[this.redoStack.length - 1]?.name ?? "",
+    };
   }
 
   isDirty(): boolean {
-    return this.currentStepId() !== this.savedId;
+    return this.stateId !== this.savedId;
   }
 
   /** Serialize the current document; by default this also marks it as saved. */
@@ -175,21 +181,46 @@ export class PdfEngine {
   }
 
   markSaved(): void {
-    this.savedId = this.currentStepId();
+    this.savedId = this.stateId;
   }
 
   undo(): DocInfo {
-    const doc = this.requireDoc();
-    if (doc.canUndo()) doc.undo();
-    this.clearText();
+    const prev = this.undoStack.pop();
+    if (prev) {
+      this.redoStack.push({ name: prev.name, bytes: this.snapshot(), id: this.stateId });
+      this.restore(prev.bytes);
+      this.stateId = prev.id;
+    }
     return this.info();
   }
 
   redo(): DocInfo {
-    const doc = this.requireDoc();
-    if (doc.canRedo()) doc.redo();
-    this.clearText();
+    const next = this.redoStack.pop();
+    if (next) {
+      this.undoStack.push({ name: next.name, bytes: this.snapshot(), id: this.stateId });
+      this.restore(next.bytes);
+      this.stateId = next.id;
+    }
     return this.info();
+  }
+
+  /** The document as it is right now (fast, uncompressed; only used for undo). */
+  private snapshot(): Uint8Array {
+    const buf = this.requireDoc().saveToBuffer("");
+    const out = buf.asUint8Array().slice();
+    buf.destroy();
+    return out;
+  }
+
+  /** Replace the open document with a snapshot (fresh engine state, fresh caches). */
+  private restore(bytes: Uint8Array): void {
+    const d = this.mupdf.Document.openDocument(bytes, "application/pdf");
+    const pdf = d.asPDF();
+    if (!pdf) throw new Error("Undo failed");
+    if (pdf.needsPassword() && !pdf.authenticatePassword(this.password)) throw new Error("Undo failed (password)");
+    this.clearText();
+    this.doc?.destroy();
+    this.doc = pdf;
   }
 
   // ---------- rendering & text ----------
@@ -628,7 +659,7 @@ export class PdfEngine {
   setFieldText(index: number, widget: number, value: string): WidgetInfo[] {
     this.op("Fill field", index, (page) => {
       const w = page.getWidgets()[widget];
-      if (!w || w.getValue() === value) return;
+      if (!w || w.getValue() === value) return false;
       w.setTextValue(value);
       w.update();
     });
@@ -816,40 +847,32 @@ export class PdfEngine {
     this.lines.clear();
   }
 
-  private journalPos(): number {
+  /**
+   * Run a change as one undo step. If `fn` returns false nothing changed and no step is
+   * recorded; if it throws, the document is put back exactly as it was.
+   */
+  private journaled(name: string, fn: () => void | boolean): void {
+    const before = this.snapshot();
+    let changed: void | boolean;
     try {
-      return this.doc ? this.doc.getJournal().position : 0;
-    } catch {
-      return 0;
-    }
-  }
-
-  private currentStepId(): number {
-    const pos = this.journalPos();
-    return pos > 0 ? (this.stepIds[pos - 1] ?? -pos) : 0;
-  }
-
-  /** Wrap a change in one journal step (one undo step). */
-  private journaled(name: string, fn: () => void): void {
-    const doc = this.requireDoc();
-    const before = this.journalPos();
-    doc.beginOperation(name);
-    try {
-      fn();
-      doc.endOperation();
+      changed = fn();
     } catch (e) {
-      doc.abandonOperation();
+      this.restore(before);
       throw e;
     }
-    const after = this.journalPos();
-    if (after > before) {
-      this.stepIds.length = before;
-      this.stepIds.push(this.nextStepId++);
+    if (changed === false) return;
+    this.undoStack.push({ name, bytes: before, id: this.stateId });
+    this.stateId = this.nextStateId++;
+    this.redoStack = [];
+    // keep memory in check: drop the oldest steps
+    let total = this.undoStack.reduce((n, s) => n + s.bytes.length, 0);
+    while (this.undoStack.length > PdfEngine.MAX_UNDO || (total > PdfEngine.MAX_UNDO_BYTES && this.undoStack.length > 1)) {
+      total -= this.undoStack.shift()!.bytes.length;
     }
   }
 
   /** Run an undoable change on one page; returns that page's annotations afterwards. */
-  private op(name: string, index: number, fn: (p: MuPDF.PDFPage) => void): AnnotInfo[] {
+  private op(name: string, index: number, fn: (p: MuPDF.PDFPage) => void | boolean): AnnotInfo[] {
     this.journaled(name, () => this.withPage(index, fn));
     this.stext.get(index)?.destroy();
     this.stext.delete(index);
@@ -858,8 +881,7 @@ export class PdfEngine {
   }
 
   private docOp(name: string, fn: (doc: MuPDF.PDFDocument) => void): DocInfo {
-    const doc = this.requireDoc();
-    this.journaled(name, () => fn(doc));
+    this.journaled(name, () => fn(this.requireDoc()));
     this.clearText();
     return this.info();
   }

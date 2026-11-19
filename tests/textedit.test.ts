@@ -187,3 +187,77 @@ describe("live text editing: Word-style documents", () => {
     expect(dark).toBeGreaterThan(2);
   });
 });
+
+describe("undo never breaks later edits", () => {
+  // MuPDF's journal left its font/image caches pointing at objects that undo removed,
+  // so the next edit drew garbled letters, a wrong text-box font or a "DRAFT" stamp.
+  it("edit, undo, edit again: the text is still correct", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("report.pdf"));
+    const b = find(e, 0, "This report");
+    const text = b.runs.map((r) => r.text).join("");
+    edit(e, 0, b.id, [{ text: text + " One.", style: 0 }]);
+    e.undo();
+    const b2 = find(e, 0, "This report");
+    edit(e, 0, b2.id, [{ text: text + " Two.", style: 0 }]);
+    const t = e.pageText(0).replace(/\s+/g, " ");
+    expect(t).toContain("contributed to the setup of the lab. Two.");
+    expect(t).not.toMatch(/\$OOH|\u0000/);
+    e.undo();
+    e.undo();
+    e.redo();
+    expect(e.pageText(0).replace(/\s+/g, " ")).toContain("lab. Two.");
+  });
+
+  it("picture signature placed again after an undo keeps its picture", () => {
+    const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, 100, 40], true);
+    const px = pix.getPixels();
+    px.fill(0);
+    for (let y = 10; y < 30; y++)
+      for (let x = 10; x < 90; x++) {
+        const i = (y * 100 + x) * 4;
+        px[i] = 26; px[i + 1] = 58; px[i + 2] = 143; px[i + 3] = 255;
+      }
+    const png = pix.asPNG().slice();
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.addImageStamp(0, [60, 400, 260, 480], png);
+    e.undo();
+    e.addImageStamp(0, [60, 400, 260, 480], png);
+    const img = e.render(0, 1);
+    const at = (x: number, y: number) => Array.from(img.data.slice((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+    const c = at(160, 440);
+    expect(c[2]).toBeGreaterThan(c[0] + 60); // blue bar, not a red DRAFT stamp
+  });
+
+  it("tracks unsaved changes and undo names", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.addShape(0, "Square", [10, 10, 50, 50], [1, 0, 0], 1);
+    e.addShape(0, "Circle", [10, 10, 50, 50], [1, 0, 0], 1);
+    expect(e.state()).toMatchObject({ canUndo: true, undoName: "Shape", dirty: true });
+    e.save();
+    expect(e.state().dirty).toBe(false);
+    e.undo();
+    expect(e.state()).toMatchObject({ dirty: true, canRedo: true, redoName: "Shape" });
+    e.redo();
+    expect(e.state().dirty).toBe(false);
+    // filling a field with the same value is not a change
+    const w = e.listWidgets(0);
+    expect(w).toHaveLength(0);
+  });
+});
+
+describe("hyphens survive re-editing", () => {
+  it("keeps compound hyphens when papgi's own lines are read back", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("paper.pdf"));
+    const b = find(e, 0, "Voltage references");
+    const text = b.runs.map((r) => r.text).join("");
+    edit(e, 0, b.id, [{ text: text + " Edited.", style: 0 }]);
+    const again = find(e, 0, "Voltage references").runs.map((r) => r.text).join("");
+    expect(again).toContain("analog-to-digital");
+    expect(again).toContain("base-emitter");
+    expect(again).toContain("achievable");
+  });
+});

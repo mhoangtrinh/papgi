@@ -349,6 +349,21 @@ try {
   check("undo a text edit", (await engine("pageText", 0)).replace(/\s+/g, " ").includes("Edited live in papgi."));
   await page.keyboard.press("Control+y");
   await page.waitForTimeout(500);
+  // the reported bug: undo, then edit again -> letters came out shifted ("$OOH" for "Alle")
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(500);
+  const au = (await engine("search", "Edited live in papgi"))[0].quads[0];
+  const aup = await pt(au[0] + 3, (au[1] + au[5]) / 2);
+  await page.mouse.click(aup[0], aup[1]);
+  await page.waitForSelector(".para-editor");
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type(" After undo.");
+  await page.keyboard.press("Control+Enter");
+  await page.waitForSelector(".para-editor", { state: "detached", timeout: 15000 });
+  await page.waitForTimeout(500);
+  ptxt = (await engine("pageText", 0)).replace(/\s+/g, " ");
+  check("edit after undo is not garbled", ptxt.includes("Edited live in papgi. After undo.") && !/\$OOH|\u0000/.test(ptxt));
+  await page.screenshot({ path: shots + "desktop-textedit-after-undo-light.png" });
   await page.keyboard.press("v");
 
   // save -> download and verify the file in Node
@@ -358,7 +373,7 @@ try {
   const doc = mupdf.Document.openDocument(fs.readFileSync(savedPath), "application/pdf").asPDF();
   const kinds = doc.loadPage(0).getAnnotations().map((x) => x.getType());
   const savedText = doc.loadPage(0).toStructuredText("").asText().replace(/\s+/g, " ");
-  check("saved PDF contains the edited text", savedText.includes("Edited twice in papgi."));
+  check("saved PDF contains the edited text", savedText.includes("Edited live in papgi. After undo."));
   check("saved PDF contains the annotations", kinds.includes("Highlight") && kinds.includes("FreeText") && kinds.includes("Ink") && kinds.includes("Stamp"), kinds.join(","));
   await page.waitForTimeout(200);
   check("clean after save", !(await page.locator("#docname.dirty").isVisible()));

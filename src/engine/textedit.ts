@@ -336,7 +336,15 @@ export function extractBlocks(page: MuPDF.PDFPage): Extracted {
         const first = g.chars[0].c;
         const word = /\S*$/.exec(prev.text)?.[0] ?? "";
         if (word.endsWith("-") && /\p{L}/u.test(first)) {
-          if (/\p{Ll}/u.test(first) && !word.slice(0, -1).includes("-") && /\p{L}{2}-$/u.test(word)) prev.text = prev.text.slice(0, -1);
+          // Hyphen at the line end: a typesetter's break inside a word is removed, a compound's
+          // hyphen stays ("analog-to-|digital", "analog-|to-digital"). Lines papgi wrote itself
+          // only ever break at real hyphens; its fonts are embedded whole (no "ABCDEF+" tag).
+          const nextWord = g.chars.map((c) => c.c).join("").split(/\s/)[0];
+          const prevLine = ls[li - 1].chars;
+          const hyphenFont = prevLine[prevLine.length - 1]?.font.getName() ?? "";
+          const typesetBreak =
+            /\p{Ll}/u.test(first) && !word.slice(0, -1).includes("-") && !nextWord.includes("-") && /\p{L}{2}-$/u.test(word) && /^[A-Z]{6}\+/.test(hyphenFont);
+          if (typesetBreak) prev.text = prev.text.slice(0, -1);
         } else runs.push({ text: " ", style: prev.style });
       }
       for (const ch of g.chars) {
