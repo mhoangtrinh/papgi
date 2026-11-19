@@ -909,6 +909,21 @@ textarea.field-input {
   -webkit-user-select: text;
 }
 
+/* a finished text box, shown until the page image includes it */
+.text-editor.pending {
+  border-color: transparent;
+  pointer-events: none;
+  caret-color: transparent;
+}
+
+.text-editor.pending.new {
+  background: transparent;
+}
+
+.g-pending {
+  pointer-events: none;
+}
+
 /* floating mini toolbar */
 .floating {
   position: absolute;
@@ -1561,6 +1576,12 @@ body:not(.has-doc) .options {
   outline: 1.5px dashed var(--accent);
   outline-offset: 2px;
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
+}
+
+/* dropped: stays put (fully visible) until the page shows the moved annotation */
+.drag-ghost.dropped {
+  opacity: 1;
+  outline: none;
 }
 
 .drag-ghost.outline {

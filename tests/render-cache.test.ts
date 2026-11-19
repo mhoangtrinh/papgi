@@ -112,4 +112,34 @@ describe("drawing with cached page contents", () => {
     expect(e.pageText(0)).toContain("Edited after undo and redo.");
     same(e, 0);
   });
+
+  it("an undo copy made ahead of time restores the right state", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    const count = () => e.listAnnots(0).length;
+    e.prepareUndo();
+    e.addFreeText(0, [100, 100], "one", 12, [0, 0, 0]);
+    e.prepareUndo();
+    e.prepareUndo(); // (twice: still the same copy)
+    e.addFreeText(0, [100, 140], "two", 12, [0, 0, 0]);
+    e.addFreeText(0, [100, 180], "three", 12, [0, 0, 0]); // (no copy prepared: made on the spot)
+    e.prepareUndo();
+    e.undo(); // the prepared copy must not be used after the document changed
+    e.prepareUndo();
+    e.addInk(0, [[[50, 50], [80, 90]]], [0, 0, 1], 2);
+    expect(count()).toBe(3);
+    e.undo();
+    expect(count()).toBe(2);
+    e.undo();
+    expect(count()).toBe(1);
+    e.prepareUndo();
+    e.redo();
+    expect(count()).toBe(2);
+    e.prepareUndo();
+    e.undo();
+    e.undo();
+    expect(count()).toBe(0);
+    expect(e.state().dirty).toBe(false);
+    same(e, 0);
+  });
 });

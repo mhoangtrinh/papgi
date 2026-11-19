@@ -110,9 +110,27 @@ try {
   await page.mouse.move(...p0);
   await page.mouse.down();
   for (let i = 1; i <= 20; i++) await page.mouse.move(p0[0] + i * 6, p0[1] + Math.sin(i / 3) * 20);
+  // watch every frame from release until the page image has the stroke: it must never vanish
+  await page.evaluate(() => {
+    window.__strokeGone = 0;
+    const el = document.querySelector(".page");
+    const pv = window.papgi.viewer.pages[0];
+    const v0 = pv.version;
+    const t0 = performance.now();
+    const watch = () => {
+      const shown = el.querySelector(".g-preview polyline, .g-pending polyline");
+      const drawn = pv.version > v0 && pv.renderedVersion >= pv.version;
+      if (drawn) return; // the page image has it now
+      if (!shown) window.__strokeGone++;
+      if (performance.now() - t0 < 3000) requestAnimationFrame(watch);
+    };
+    window.addEventListener("pointerup", () => requestAnimationFrame(watch), { once: true });
+  });
   await page.mouse.up();
   await page.waitForTimeout(300);
   annots = await engine("listAnnots", 0);
+  await page.waitForTimeout(1300);
+  check("pen: the stroke never vanishes between release and the redrawn page", (await page.evaluate(() => window.__strokeGone)) === 0 && (await page.locator(".g-pending").count()) === 0);
   check("pen draws ink", annots.some((x) => x.kind === "Ink"), JSON.stringify({ kinds: annots.map((x) => x.kind), toast: await page.evaluate(() => document.querySelector(".toast")?.textContent), tool: await page.evaluate(() => document.querySelector(".pages").dataset.tool), focus: await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80)) }));
 
   // shapes: rectangle and arrow

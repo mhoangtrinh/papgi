@@ -582,25 +582,39 @@ export class Viewer {
       switch (d.kind) {
         case "move": {
           d.pv.el.classList.remove("moving");
-          d.ghost?.remove();
           if (!d.moved) {
+            d.ghost?.remove();
             if (this.selected) this.drawAnnotSelection();
             return;
           }
           const target = this.pageAt(e.clientX, e.clientY) ?? d.pv;
+          // the picture being dragged stays where it was dropped until the page shows the move
+          const ghost = d.ghost;
+          ghost?.classList.add("dropped");
           if (target === d.pv) {
             const dx = d.last[0] - d.start[0];
             const dy = d.last[1] - d.start[1];
-            this.afterAnnotEdit(d.pv, await eng.moveAnnot(d.pv.index, d.annot.index, dx, dy));
+            try {
+              this.afterAnnotEdit(d.pv, await eng.moveAnnot(d.pv.index, d.annot.index, dx, dy));
+            } finally {
+              if (ghost) this.keepUntilRendered(d.pv, ghost);
+            }
             return;
           }
           // dropped on another page: keep the same grab point under the pointer
           const p = this.toPagePoint(target, e);
           const topLeft: Point = [p[0] - (d.start[0] - d.annot.rect[0]), p[1] - (d.start[1] - d.annot.rect[1])];
-          const res = await eng.moveAnnotToPage(d.pv.index, d.annot.index, target.index, topLeft);
+          let res: Awaited<ReturnType<typeof eng.moveAnnotToPage>>;
+          try {
+            res = await eng.moveAnnotToPage(d.pv.index, d.annot.index, target.index, topLeft);
+          } catch (err) {
+            ghost?.remove();
+            throw err;
+          }
           this.selectAnnot(null);
           this.afterAnnotEdit(d.pv, res.from);
           this.afterAnnotEdit(target, res.to);
+          if (ghost) this.keepUntilRendered(target, ghost);
           this.selectAnnot({ page: target.index, index: res.index });
           break;
         }
@@ -630,13 +644,26 @@ export class Viewer {
           this.clearPreview(d.pv);
           this.clearSelection();
           if (!quads.length) return;
-          this.afterAnnotEdit(d.pv, await eng.addMarkup(d.pv.index, kind, quads, color));
+          const held = this.holdQuads(d.pv, quads, kind, s.colors.highlight);
+          try {
+            this.afterAnnotEdit(d.pv, await eng.addMarkup(d.pv.index, kind, quads, color));
+            held.release(true);
+          } catch (err) {
+            held.release(false);
+            throw err;
+          }
           break;
         }
         case "pen": {
-          this.clearPreview(d.pv, false);
+          const held = this.holdPreview(d.pv);
           const stroke = simplifyStroke(d.points, 0.25 / this.zoom + 0.1);
-          this.afterAnnotEdit(d.pv, await eng.addInk(d.pv.index, [stroke], hexToRgb(s.colors.pen), s.penWidth));
+          try {
+            this.afterAnnotEdit(d.pv, await eng.addInk(d.pv.index, [stroke], hexToRgb(s.colors.pen), s.penWidth));
+            held.release(true);
+          } catch (err) {
+            held.release(false);
+            throw err;
+          }
           break;
         }
         case "shape": {
@@ -647,11 +674,18 @@ export class Viewer {
             return;
           }
           const color = hexToRgb(s.colors.shape);
-          const annots =
-            s.shapeKind === "Arrow"
-              ? await eng.addArrow(d.pv.index, d.start, d.last, color, s.shapeWidth)
-              : await eng.addShape(d.pv.index, s.shapeKind, r, color, s.shapeWidth);
-          this.afterAnnotEdit(d.pv, annots, false);
+          const held = this.holdPreview(d.pv);
+          try {
+            const annots =
+              s.shapeKind === "Arrow"
+                ? await eng.addArrow(d.pv.index, d.start, d.last, color, s.shapeWidth)
+                : await eng.addShape(d.pv.index, s.shapeKind, r, color, s.shapeWidth);
+            this.afterAnnotEdit(d.pv, annots);
+            held.release(true);
+          } catch (err) {
+            held.release(false);
+            throw err;
+          }
           break;
         }
         case "click": {
@@ -751,19 +785,11 @@ export class Viewer {
     if (a?.kind === "FreeText") this.openEditor(pv, a);
   }
 
-  private afterAnnotEdit(pv: PageView, annots: AnnotInfo[], clearPreviewLater = true): void {
+  private afterAnnotEdit(pv: PageView, annots: AnnotInfo[]): void {
     pv.annots = annots;
     pv.version++;
     pv.dataVersion = pv.version;
     pv.blocks = null;
-    // Keep the live preview until the new render lands, so nothing flickers.
-    const v = pv.version;
-    const waitAndClear = () => {
-      if (pv.renderedVersion >= v || this.pages[pv.index] !== pv) this.clearPreview(pv);
-      else requestAnimationFrame(waitAndClear);
-    };
-    if (clearPreviewLater) waitAndClear();
-    else requestAnimationFrame(waitAndClear);
     this.host.engine.lineBoxes(pv.index).then((l) => (pv.lines = l)).catch(() => {});
     if (this.selected?.page === pv.index) this.drawAnnotSelection();
     this.schedule();
@@ -840,12 +866,59 @@ export class Viewer {
     const s = this.selection;
     if (!s?.quads.length) return;
     const pv = this.pages[s.page];
-    const annots = await this.host.engine.addMarkup(s.page, kind, s.quads, hexToRgb(this.host.settings.colors.highlight));
+    const quads = s.quads;
     this.clearSelection();
-    this.afterAnnotEdit(pv, annots);
+    const held = this.holdQuads(pv, quads, kind, this.host.settings.colors.highlight);
+    try {
+      this.afterAnnotEdit(pv, await this.host.engine.addMarkup(s.page, kind, quads, hexToRgb(this.host.settings.colors.highlight)));
+      held.release(true);
+    } catch (err) {
+      held.release(false);
+      throw err;
+    }
   }
 
   // ---------- previews ----------
+
+  /**
+   * What you just drew/placed stays on screen until the page image shows it, so nothing
+   * blinks while the change is saved and the page redrawn. Moves the live preview into its own
+   * group (a new stroke can start meanwhile); call `release` once the change is made.
+   */
+  private holdPreview(pv: PageView): { el: SVGGElement; release: (ok: boolean) => void } {
+    const g = document.createElementNS(SVGNS, "g") as SVGGElement;
+    g.classList.add("g-pending");
+    const prev = pv.svg.querySelector(".g-preview")!;
+    g.append(...Array.from(prev.childNodes));
+    pv.svg.insertBefore(g, prev);
+    return { el: g, release: (ok) => (ok ? this.keepUntilRendered(pv, g) : g.remove()) };
+  }
+
+  /** Remove `el` once the page image includes the latest change. */
+  private keepUntilRendered(pv: PageView, el: Element): void {
+    const v = pv.version;
+    const check = () => {
+      if (!el.isConnected) return;
+      if (pv.renderedVersion >= v || this.pages[pv.index] !== pv) el.remove();
+      else requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  }
+
+  /** A held preview of highlight/underline/strike-out quads. */
+  private holdQuads(pv: PageView, quads: Quad[], kind: string, color: string): { release: (ok: boolean) => void } {
+    const g = pv.svg.querySelector(".g-preview")!;
+    g.innerHTML = quads
+      .map((q) => {
+        const x0 = Math.min(q[0], q[4]), x1 = Math.max(q[2], q[6]), y0 = Math.min(q[1], q[3]), y1 = Math.max(q[5], q[7]);
+        if (kind === "Highlight") return `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" class="markq" fill="${color}"/>`;
+        const h = y1 - y0;
+        const y = kind === "StrikeOut" ? y0 + h * 0.55 : y1 - h * 0.08;
+        return `<line x1="${x0}" x2="${x1}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="${Math.max(0.6, h * 0.07)}"/>`;
+      })
+      .join("");
+    return this.holdPreview(pv);
+  }
 
   private clearPreview(pv: PageView, all = true): void {
     pv.svg.querySelector(".g-preview")?.replaceChildren();
@@ -898,10 +971,15 @@ export class Viewer {
 
   private moveGhost(e: PointerEvent): void {
     const pv = this.pageFromEvent(e);
+    if (!pv) return this.hideGhost();
+    this.showGhost(pv, this.toPagePoint(pv, e));
+  }
+
+  /** The signature preview centred on p. */
+  private showGhost(pv: PageView, p: Point): void {
     const s = this.host.settings;
     const sig = this.host.activeSignature();
-    if (!pv || !sig) return this.hideGhost();
-    const p = this.toPagePoint(pv, e);
+    if (!sig) return this.hideGhost();
     if (!this.ghost || this.ghost.ownerSVGElement !== pv.svg) {
       this.hideGhost();
       this.ghost = document.createElementNS(SVGNS, "g") as SVGGElement;
@@ -925,15 +1003,29 @@ export class Viewer {
     if (!this.host.activeSignature() && !(await this.host.needSignature())) return;
     const sig = this.host.activeSignature();
     if (!sig) return;
-    this.hideGhost();
-    if (sig.kind === "image") {
-      const r = this.imageSignatureRect(sig, p);
-      this.afterAnnotEdit(pv, await this.host.engine.addImageStamp(pv.index, r, dataUrlBytes(sig.image.src)));
-      return;
+    // the signature stays where you clicked while it is added
+    this.showGhost(pv, p);
+    const held = this.ghost ? (this.ghost.cloneNode(true) as SVGGElement) : null;
+    if (held) {
+      held.classList.remove("ghost");
+      held.classList.add("g-pending");
+      pv.svg.append(held);
     }
-    const strokes = placeStrokes(sig.strokes, p[0], p[1], s.signatureWidth);
-    const w = (1.6 * s.signatureWidth) / 150;
-    this.afterAnnotEdit(pv, await this.host.engine.addInk(pv.index, strokes, hexToRgb(s.colors.sign), w));
+    this.hideGhost();
+    try {
+      if (sig.kind === "image") {
+        const r = this.imageSignatureRect(sig, p);
+        this.afterAnnotEdit(pv, await this.host.engine.addImageStamp(pv.index, r, dataUrlBytes(sig.image.src)));
+      } else {
+        const strokes = placeStrokes(sig.strokes, p[0], p[1], s.signatureWidth);
+        const w = (1.6 * s.signatureWidth) / 150;
+        this.afterAnnotEdit(pv, await this.host.engine.addInk(pv.index, strokes, hexToRgb(s.colors.sign), w));
+      }
+      if (held) this.keepUntilRendered(pv, held);
+    } catch (err) {
+      held?.remove();
+      throw err;
+    }
   }
 
   // ---------- annotation selection ----------
@@ -1210,11 +1302,17 @@ export class Viewer {
     const ta = this.editor;
     if (!ta) return;
     this.editor = null;
-    ta.remove();
-    if (!commit) return;
     const pv = this.pages[Number(ta.dataset.page)];
-    if (!pv) return;
     const text = ta.value.replace(/\s+$/, "");
+    if (!commit || !pv || (!text && !ta.dataset.annot)) {
+      ta.remove();
+      return;
+    }
+    // the typed text stays on screen (exactly where the box draws it) until the page shows it
+    ta.readOnly = true;
+    ta.tabIndex = -1;
+    ta.classList.add("pending", ta.dataset.annot ? "covering" : "new");
+    ta.blur();
     const size = Number(ta.dataset.size);
     const color = hexToRgb(ta.dataset.color!);
     const eng = this.host.engine;
@@ -1223,7 +1321,16 @@ export class Viewer {
       : text
         ? eng.addFreeText(pv.index, [Number(ta.dataset.x), Number(ta.dataset.y)], text, size, color)
         : null;
-    job?.then((annots) => this.afterAnnotEdit(pv, annots)).catch((err) => toast(err.message, "error"));
+    if (!job) return void ta.remove();
+    job
+      .then((annots) => {
+        this.afterAnnotEdit(pv, annots);
+        this.keepUntilRendered(pv, ta);
+      })
+      .catch((err) => {
+        ta.remove();
+        toast(err.message, "error");
+      });
   }
 
   // ---------- form fields ----------

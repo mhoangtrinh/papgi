@@ -133,6 +133,7 @@ export class PdfEngine {
   }
 
   close(): void {
+    this.ready = null;
     this.clearText();
     this.dropContent();
     this.dropSteps([...this.undoStack, ...this.redoStack]);
@@ -257,6 +258,7 @@ export class PdfEngine {
       if (doc.needsPassword() && !doc.authenticatePassword(this.password)) throw new Error("Undo failed (password)");
     }
     this.clearText();
+    this.ready = null;
     // drawn page contents stay for pages the step didn't change
     this.dropContent(step.content);
     this.doc?.destroy();
@@ -279,6 +281,18 @@ export class PdfEngine {
     }
   }
 
+  /**
+   * A copy of the document made ahead of time (when idle), so the next change doesn't have to
+   * wait for it. Only valid while the document hasn't changed since (it's dropped by every
+   * change, undo, redo, open and close).
+   */
+  private ready: { doc: MuPDF.PDFDocument; bytes: Uint8Array } | null = null;
+
+  /** Make the undo copy for the next change now (the worker calls this when idle). */
+  prepareUndo(): void {
+    if (this.doc && (!this.ready || this.ready.doc !== this.doc)) this.ready = { doc: this.doc, bytes: this.snapshot() };
+  }
+
   /** The document as it is right now (fast, uncompressed; only used for undo). */
   private snapshot(): Uint8Array {
     const buf = this.requireDoc().saveToBuffer("");
@@ -294,6 +308,7 @@ export class PdfEngine {
     if (!pdf) throw new Error("Undo failed");
     if (pdf.needsPassword() && !pdf.authenticatePassword(this.password)) throw new Error("Undo failed (password)");
     this.clearText();
+    this.ready = null;
     this.dropContent();
     this.doc?.destroy();
     this.doc = pdf;
@@ -1001,7 +1016,8 @@ export class PdfEngine {
    * recorded; if it throws, the document is put back exactly as it was.
    */
   private journaled(name: string, fn: () => void | boolean, content: number[] | "all" = "all"): void {
-    const before = this.snapshot();
+    const before = this.ready?.doc === this.doc ? this.ready!.bytes : this.snapshot();
+    this.ready = null;
     let changed: void | boolean;
     try {
       changed = fn();

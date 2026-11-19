@@ -60,8 +60,26 @@ interface Call {
   args: unknown[];
 }
 
+// When nothing has been asked for a moment, prepare the undo copy for the next change,
+// so the change itself (a stroke, a text box...) shows up sooner.
+let idle = 0;
+let pending = 0;
+const whenIdle = () => {
+  clearTimeout(idle);
+  idle = self.setTimeout(() => {
+    if (pending) return;
+    try {
+      engine.prepareUndo();
+    } catch {
+      // (only an optimisation)
+    }
+  }, 250);
+};
+
 self.onmessage = async (ev: MessageEvent<Call>) => {
   const { id, method, args } = ev.data;
+  pending++;
+  clearTimeout(idle);
   try {
     const fn = (engine as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
     if (typeof fn !== "function") throw new Error(`Unknown method ${method}`);
@@ -72,6 +90,9 @@ self.onmessage = async (ev: MessageEvent<Call>) => {
     (self as unknown as Worker).postMessage({ id, result }, transfer);
   } catch (e) {
     (self as unknown as Worker).postMessage({ id, error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    pending--;
+    whenIdle();
   }
 };
 
