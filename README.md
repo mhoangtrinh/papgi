@@ -38,6 +38,7 @@ Planned next: edit existing text (line edits with matched fonts, then paragraph 
 | Ctrl + wheel, Ctrl +/−, Ctrl+0 | Zoom, fit width |
 | Delete | Delete the selected annotation (or selected pages in the sidebar) |
 | Double-click a text box | Edit it (Ctrl+Enter to finish, Esc to cancel) |
+| Drag an annotation | Move it, also onto another page |
 
 In the sidebar: click a page to jump, Ctrl/Shift-click to select several, drag to reorder.
 

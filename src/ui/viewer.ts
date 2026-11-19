@@ -45,7 +45,7 @@ const MAX_PIXELS = 24e6;
 export const PALETTE = ["#ffd400", "#5fd068", "#2f6fed", "#e5484d", "#8e4ec6", "#1c1c1c"];
 
 type Drag =
-  | { kind: "move"; pv: PageView; annot: AnnotInfo; start: Point; last: Point }
+  | { kind: "move"; pv: PageView; annot: AnnotInfo; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null }
   | { kind: "select"; pv: PageView; start: Point; last: Point }
   | { kind: "pan"; startX: number; startY: number; left: number; top: number }
   | { kind: "mark"; pv: PageView; start: Point; last: Point; onText: boolean }
@@ -410,9 +410,11 @@ export class Viewer {
         if (a) {
           this.clearSelection();
           this.selectAnnot({ page: pv.index, index: a.index });
-          this.drag = { kind: "move", pv, annot: a, start: p, last: p };
+          const drag: Drag = { kind: "move", pv, annot: a, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null };
+          this.drag = drag;
           capture();
           e.preventDefault();
+          void this.makeGhost(drag);
         } else if (this.onText(pv, p)) {
           this.selectAnnot(null);
           this.clearSelection();
@@ -468,9 +470,11 @@ export class Viewer {
     switch (d.kind) {
       case "move": {
         d.last = p;
-        const g = d.pv.svg.querySelector(".g-annsel") as SVGGElement;
-        g.setAttribute("transform", `translate(${p[0] - d.start[0]} ${p[1] - d.start[1]})`);
+        if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) break;
+        d.moved = true;
         d.pv.el.classList.add("moving");
+        this.hideFloating();
+        this.positionGhost(d, e);
         break;
       }
       case "select":
@@ -506,13 +510,26 @@ export class Viewer {
       switch (d.kind) {
         case "move": {
           d.pv.el.classList.remove("moving");
-          const g = d.pv.svg.querySelector(".g-annsel") as SVGGElement;
-          g.removeAttribute("transform");
-          const dx = d.last[0] - d.start[0];
-          const dy = d.last[1] - d.start[1];
-          if (Math.hypot(dx, dy) * this.zoom < 2) return;
-          const annots = await eng.moveAnnot(d.pv.index, d.annot.index, dx, dy);
-          this.afterAnnotEdit(d.pv, annots);
+          d.ghost?.remove();
+          if (!d.moved) {
+            if (this.selected) this.drawAnnotSelection();
+            return;
+          }
+          const target = this.pageAt(e.clientX, e.clientY) ?? d.pv;
+          if (target === d.pv) {
+            const dx = d.last[0] - d.start[0];
+            const dy = d.last[1] - d.start[1];
+            this.afterAnnotEdit(d.pv, await eng.moveAnnot(d.pv.index, d.annot.index, dx, dy));
+            return;
+          }
+          // dropped on another page: keep the same grab point under the pointer
+          const p = this.toPagePoint(target, e);
+          const topLeft: Point = [p[0] - (d.start[0] - d.annot.rect[0]), p[1] - (d.start[1] - d.annot.rect[1])];
+          const res = await eng.moveAnnotToPage(d.pv.index, d.annot.index, target.index, topLeft);
+          this.selectAnnot(null);
+          this.afterAnnotEdit(d.pv, res.from);
+          this.afterAnnotEdit(target, res.to);
+          this.selectAnnot({ page: target.index, index: res.index });
           break;
         }
         case "select": {
@@ -590,8 +607,66 @@ export class Viewer {
     if (d && "pv" in d) {
       this.clearPreview(d.pv);
       d.pv.el.classList.remove("moving");
-      d.pv.svg.querySelector(".g-annsel")?.removeAttribute("transform");
+      if (d.kind === "move") d.ghost?.remove();
     }
+  }
+
+  /** The page under a screen point, or the nearest one if the point is in a gap. */
+  private pageAt(x: number, y: number): PageView | null {
+    let best: PageView | null = null;
+    let bestDist = Infinity;
+    for (const pv of this.pages) {
+      const r = pv.el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return pv;
+      const dist = Math.max(r.top - y, 0, y - r.bottom) + Math.max(r.left - x, 0, x - r.right);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = pv;
+      }
+    }
+    return bestDist < 80 ? best : null;
+  }
+
+  /** A picture of the annotation that follows the pointer while dragging (even across pages). */
+  private async makeGhost(d: Extract<Drag, { kind: "move" }>): Promise<void> {
+    const dpr = window.devicePixelRatio || 1;
+    let bmp: ImageBitmap | null = null;
+    try {
+      bmp = await this.host.engine.renderAnnotBitmap(d.pv.index, d.annot.index, this.zoom * dpr);
+    } catch {
+      /* fall back to an outline */
+    }
+    if (this.drag !== d) {
+      bmp?.close();
+      return;
+    }
+    const c = document.createElement("canvas");
+    c.className = "drag-ghost";
+    c.style.width = `${rectWidth(d.annot.rect) * this.zoom}px`;
+    c.style.height = `${rectHeight(d.annot.rect) * this.zoom}px`;
+    if (bmp) {
+      c.width = bmp.width;
+      c.height = bmp.height;
+      c.getContext("2d")!.drawImage(bmp, 0, 0);
+      bmp.close();
+    } else c.classList.add("outline");
+    d.ghost = c;
+    this.pagesEl.append(c);
+    if (!d.moved) c.style.display = "none";
+  }
+
+  private positionGhost(d: Extract<Drag, { kind: "move" }>, e: PointerEvent): void {
+    const g = d.ghost;
+    if (!g) return;
+    g.style.display = "";
+    const host = this.pagesEl.getBoundingClientRect();
+    // keep the grab point under the pointer
+    const offX = (d.start[0] - d.annot.rect[0]) * this.zoom;
+    const offY = (d.start[1] - d.annot.rect[1]) * this.zoom;
+    g.style.left = `${e.clientX - host.left - offX}px`;
+    g.style.top = `${e.clientY - host.top - offY}px`;
+    const over = this.pageAt(e.clientX, e.clientY);
+    g.classList.toggle("nowhere", !over);
   }
 
   private onDblClick(e: MouseEvent): void {

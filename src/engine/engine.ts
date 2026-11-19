@@ -399,20 +399,94 @@ export class PdfEngine {
     return this.op("Move", index, (page) => {
       const a = page.getAnnotations()[annot];
       if (!a) throw new Error("No such annotation");
-      if (a.hasInkList()) {
-        a.setInkList(a.getInkList().map((s) => s.map(([x, y]) => [x + dx, y + dy] as Point)));
-      } else if (a.hasQuadPoints()) {
-        a.setQuadPoints(a.getQuadPoints().map((q) => q.map((v, i) => v + (i % 2 ? dy : dx)) as Quad));
-      } else if (a.hasLine()) {
-        const [p, q] = a.getLine();
-        a.setLine([p[0] + dx, p[1] + dy], [q[0] + dx, q[1] + dy]);
-      } else if (a.hasVertices()) {
-        a.setVertices(a.getVertices().map(([x, y]) => [x + dx, y + dy] as Point));
-      } else if (a.hasRect()) {
-        const r = a.getRect();
-        a.setRect([r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
+      shiftAnnot(a, dx, dy);
+    });
+  }
+
+  /**
+   * Move an annotation to another page so that its top-left corner lands at `topLeft`
+   * (page space of the target page). One undo step. Returns both pages' annotations
+   * and the annotation's index on the target page.
+   */
+  moveAnnotToPage(from: number, annot: number, to: number, topLeft: Point): { from: AnnotInfo[]; to: AnnotInfo[]; index: number } {
+    if (from === to) throw new Error("Same page");
+    const doc = this.requireDoc();
+    let newIndex = -1;
+    this.journaled("Move to page", () => {
+      let movedId = -1;
+      const srcPage = doc.loadPage(from);
+      try {
+        const a = srcPage.getAnnotations()[annot];
+        if (!a) throw new Error("No such annotation");
+        const obj = a.getObject();
+        if (!obj.isIndirect()) throw new Error("Can't move this annotation");
+        movedId = obj.asIndirect();
+        const popup = obj.get("Popup");
+        const moving = [obj, ...(popup.isDictionary() && popup.isIndirect() ? [popup] : [])];
+        const ids = new Set(moving.map((o) => o.asIndirect()));
+        // take the annotation (and its popup) off the source page...
+        const srcAnnots = srcPage.getObject().get("Annots");
+        for (let i = srcAnnots.length - 1; i >= 0; i--) {
+          const it = srcAnnots.get(i);
+          if (it.isIndirect() && ids.has(it.asIndirect())) srcAnnots.delete(i);
+        }
+        // ...and put it on the target page
+        const dstObj = doc.findPage(to);
+        let dstAnnots = dstObj.get("Annots");
+        if (!dstAnnots.isArray()) {
+          dstAnnots = doc.newArray();
+          dstObj.put("Annots", dstAnnots);
+        }
+        for (const o of moving) {
+          o.put("P", dstObj);
+          dstAnnots.push(o);
+        }
+      } finally {
+        srcPage.destroy();
       }
-      a.update();
+      // position it on the target page (in that page's coordinates)
+      this.withPage(to, (page) => {
+        const list = page.getAnnotations();
+        newIndex = list.findIndex((x) => x.getObject().asIndirect() === movedId);
+        const a = list[newIndex];
+        if (!a) throw new Error("Move failed");
+        const r = a.getBounds();
+        shiftAnnot(a, topLeft[0] - r[0], topLeft[1] - r[1]);
+      });
+    });
+    this.clearText();
+    return { from: this.listAnnots(from), to: this.listAnnots(to), index: newIndex };
+  }
+
+  /** Render one annotation on its own (transparent background), for drag previews. */
+  renderAnnot(index: number, annot: number, scale: number): RGBAImage | null {
+    const m = this.mupdf;
+    return this.withPage(index, (page) => {
+      const a = page.getAnnotations()[annot];
+      if (!a) return null;
+      const pix = a.toPixmap(m.Matrix.scale(scale, scale), m.ColorSpace.DeviceRGB, true);
+      try {
+        const w = pix.getWidth();
+        const h = pix.getHeight();
+        const src = pix.getPixels();
+        const stride = pix.getStride();
+        const data = new Uint8ClampedArray(w * h * 4);
+        for (let y = 0; y < h; y++)
+          for (let x = 0; x < w; x++) {
+            const s = y * stride + x * 4;
+            const d = (y * w + x) * 4;
+            const al = src[s + 3];
+            // MuPDF pixmaps are premultiplied; ImageData is not
+            const k = al ? 255 / al : 0;
+            data[d] = src[s] * k;
+            data[d + 1] = src[s + 1] * k;
+            data[d + 2] = src[s + 2] * k;
+            data[d + 3] = al;
+          }
+        return { width: w, height: h, data };
+      } finally {
+        pix.destroy();
+      }
     });
   }
 
@@ -705,4 +779,22 @@ export class PdfEngine {
     this.clearText();
     return this.info();
   }
+}
+
+/** Translate any kind of annotation by (dx, dy) in page space. */
+function shiftAnnot(a: MuPDF.PDFAnnotation, dx: number, dy: number): void {
+  if (a.hasInkList()) {
+    a.setInkList(a.getInkList().map((s) => s.map(([x, y]) => [x + dx, y + dy] as Point)));
+  } else if (a.hasQuadPoints()) {
+    a.setQuadPoints(a.getQuadPoints().map((q) => q.map((v, i) => v + (i % 2 ? dy : dx)) as Quad));
+  } else if (a.hasLine()) {
+    const [p, q] = a.getLine();
+    a.setLine([p[0] + dx, p[1] + dy], [q[0] + dx, q[1] + dy]);
+  } else if (a.hasVertices()) {
+    a.setVertices(a.getVertices().map(([x, y]) => [x + dx, y + dy] as Point));
+  } else if (a.hasRect()) {
+    const r = a.getRect();
+    a.setRect([r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
+  }
+  a.update();
 }

@@ -359,3 +359,77 @@ describe("PdfEngine: image stamps", () => {
     expect(moved[0].rect[0]).toBeCloseTo(110, 0);
   });
 });
+
+describe("PdfEngine: moving annotations between pages", () => {
+  function stampPng() {
+    const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, 100, 40], true);
+    const px = pix.getPixels();
+    px.fill(0);
+    for (let y = 10; y < 30; y++)
+      for (let x = 10; x < 90; x++) {
+        const i = (y * 100 + x) * 4;
+        px[i] = 26; px[i + 1] = 58; px[i + 2] = 143; px[i + 3] = 255;
+      }
+    return pix.asPNG().slice();
+  }
+
+  it("moves every kind of annotation to another page, at the requested spot", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.addImageStamp(0, [100, 300, 300, 380], stampPng());
+    e.addInk(0, [[[50, 400], [120, 450]]], [0, 0, 1], 2);
+    e.addFreeText(0, [60, 500], "note", 12, [0, 0, 0]);
+    const hit = e.search("This is page 1")[0];
+    e.addMarkup(0, "Highlight", hit.quads, [1, 1, 0]);
+    expect(e.listAnnots(0).map((a) => a.kind)).toEqual(["Stamp", "Ink", "FreeText", "Highlight"]);
+
+    for (const kind of ["Stamp", "Ink", "FreeText", "Highlight"]) {
+      const a = e.listAnnots(0).find((x) => x.kind === kind)!;
+      const res = e.moveAnnotToPage(0, a.index, 2, [200, 600]);
+      const moved = res.to[res.index];
+      expect(moved.kind).toBe(kind);
+      expect(moved.rect[0]).toBeCloseTo(200, 0);
+      expect(moved.rect[1]).toBeCloseTo(600, 0);
+      expect(res.from.some((x) => x.kind === kind)).toBe(false);
+    }
+    expect(e.listAnnots(0)).toHaveLength(0);
+    expect(e.listAnnots(2)).toHaveLength(4);
+
+    // the stamp image is drawn on its new page
+    const st = e.listAnnots(2).find((x) => x.kind === "Stamp")!;
+    const img = e.render(2, 1);
+    const cx = Math.round((st.rect[0] + st.rect[2]) / 2), cy = Math.round((st.rect[1] + st.rect[3]) / 2);
+    const px = Array.from(img.data.slice((cy * img.width + cx) * 4, (cy * img.width + cx) * 4 + 3));
+    expect(px[2]).toBeGreaterThan(px[0] + 60);
+  });
+
+  it("is one undo step and survives saving", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.addImageStamp(0, [100, 300, 300, 380], stampPng());
+    e.moveAnnotToPage(0, 0, 3, [50, 50]);
+    e.undo();
+    expect(e.listAnnots(0).map((a) => a.kind)).toEqual(["Stamp"]);
+    expect(e.listAnnots(3)).toHaveLength(0);
+    e.redo();
+    expect(e.listAnnots(3).map((a) => a.kind)).toEqual(["Stamp"]);
+    const e2 = new PdfEngine(mupdf);
+    e2.open(e.save());
+    expect(e2.listAnnots(0)).toHaveLength(0);
+    const moved = e2.listAnnots(3)[0];
+    expect(moved.kind).toBe("Stamp");
+    expect(moved.rect[0]).toBeCloseTo(50, 0);
+  });
+
+  it("renders a single annotation with a transparent background", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.addImageStamp(0, [100, 300, 300, 380], stampPng());
+    const img = e.renderAnnot(0, 0, 1)!;
+    expect(img.width).toBeGreaterThan(190);
+    expect(img.data[3]).toBe(0); // corner transparent
+    const mid = ((img.height >> 1) * img.width + (img.width >> 1)) * 4;
+    expect(img.data[mid + 3]).toBe(255);
+    expect(img.data[mid + 2]).toBeGreaterThan(120);
+  });
+});

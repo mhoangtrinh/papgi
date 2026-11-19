@@ -8,6 +8,13 @@ export class WorkerEngine extends PdfEngine {
     const img = this.render(index, scale);
     return createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
   }
+
+  /** One annotation on a transparent background (drag preview). */
+  async renderAnnotBitmap(index: number, annot: number, scale: number): Promise<ImageBitmap | null> {
+    const img = this.renderAnnot(index, annot, scale);
+    if (!img || !img.width || !img.height) return null;
+    return createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+  }
 }
 
 const engine = new WorkerEngine(mupdf);

@@ -352,6 +352,42 @@ try {
   await page.locator(".thumb").nth(2).dragTo(page.locator(".thumb").nth(0), { targetPosition: { x: 20, y: 5 } });
   await page.waitForTimeout(500);
   check("drag to reorder", (await first()) === "Page 5", await first());
+
+  // drag an annotation from page 1 onto page 2
+  await page.evaluate(() => { window.papgi.viewer.setZoom(0.5); document.querySelector(".viewer").scrollTop = 0; });
+  await page.waitForTimeout(500);
+  const raw = async (i, x, y) => {
+    const b = await pageBox(i);
+    const info = await page.evaluate((k) => window.papgi.info.pages[k], i);
+    return [b.x + ((x - info.x) / info.w) * b.width, b.y + ((y - info.y) / info.h) * b.height];
+  };
+  await page.keyboard.press("p");
+  const d0 = await raw(0, 120, 600);
+  await page.mouse.move(...d0);
+  await page.mouse.down();
+  for (let i = 1; i <= 12; i++) await page.mouse.move(d0[0] + i * 5, d0[1] + Math.sin(i) * 8);
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const inkBefore = (await engine("listAnnots", 0)).find((x) => x.kind === "Ink");
+  await page.keyboard.press("v");
+  const grab = await raw(0, inkBefore.rect[0] + 2, (inkBefore.rect[1] + inkBefore.rect[3]) / 2);
+  const dropAt = await raw(1, 200, 250);
+  await page.mouse.move(...grab);
+  await page.mouse.down();
+  await page.mouse.move(...dropAt, { steps: 15 });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: shots + "desktop-drag-across-pages.png" });
+  const ghostVisible = await page.locator(".drag-ghost").isVisible();
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  const pg0 = await engine("listAnnots", 0);
+  const pg1 = await engine("listAnnots", 1);
+  const movedInk = pg1.find((x) => x.kind === "Ink");
+  check("drag ghost follows the pointer across pages", ghostVisible);
+  check("annotation dragged to the next page", !pg0.some((x) => x.kind === "Ink") && !!movedInk && Math.abs(movedInk.rect[0] - 198) < 15 && Math.abs((movedInk.rect[1] + movedInk.rect[3]) / 2 - 250) < 15, JSON.stringify(movedInk?.rect));
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(400);
+  check("undo brings it back to page 1", (await engine("listAnnots", 0)).some((x) => x.kind === "Ink") && !(await engine("listAnnots", 1)).some((x) => x.kind === "Ink"));
   await page.screenshot({ path: shots + "desktop-pages-light.png" });
 
   // --- scan sample: area highlight ---
