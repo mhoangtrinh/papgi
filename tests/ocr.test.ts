@@ -149,9 +149,6 @@ describe("recognise a scan, then select and edit it", () => {
       if (img.data[i] < 120) dark++;
     }
     expect(dark).toBeLessThan(4);
-    const out = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, img.width, img.height], true);
-    out.getPixels().set(img.data);
-    fs.writeFileSync("/tmp/sc/ocr-edit.png", out.asPNG());
   });
 
   it("undo takes the recognised text away again", () => {
