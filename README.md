@@ -18,7 +18,7 @@ In Edge/Chrome, **Save (Ctrl+S) writes back to the file you opened**. In other b
 | View | Fast, sharp rendering (MuPDF in WebAssembly), thumbnails, zoom, search |
 | Text | Select and copy text; highlight, underline, strike out |
 | Draw | Pen, rectangles, ellipses, arrows, text boxes |
-| Sign | Draw your signature once (saved on this device), click to place it |
+| Sign | Draw your signature, or use a photo/scan of it (paper removed automatically, crop, recolour); saved on this device, click to place |
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
 | Pages | Reorder by drag and drop, rotate, delete, insert other PDFs, add blank pages, save pages as a new PDF |
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
@@ -62,9 +62,11 @@ src/
   engine/client.ts   promise-based proxy to the worker
   core/geometry.ts   coordinates, stroke simplification, zoom steps (pure, tested)
   core/pages.ts      page selection, reorder and range logic (pure, tested)
+  core/signature.ts  turns a signature photo into transparent, cropped ink (pure, tested)
   ui/viewer.ts       pages, rendering, tools, form fields, search highlights
   ui/sidebar.ts      thumbnails and page actions
-  ui/dialogs.ts      toasts, modals, signature pad
+  ui/dialogs.ts      toasts and modals
+  ui/signature-dialog.ts  draw or picture signature
   ui/icons.ts        icons
   app.ts             toolbar, files, shortcuts, wiring
   files.ts           open/save (File System Access API with download fallback)

@@ -8,6 +8,7 @@ import {
 } from "../core/geometry";
 import { icon } from "./icons";
 import { toast } from "./dialogs";
+import { dataUrlBytes } from "./signature-dialog";
 
 export interface ViewerHost {
   engine: Engine;
@@ -17,6 +18,7 @@ export interface ViewerHost {
   currentPageChanged(index: number): void;
   zoomChanged(zoom: number): void;
   needSignature(): Promise<boolean>;
+  signatureKind(): "drawn" | "image";
   busy<T>(p: Promise<T>): Promise<T>;
 }
 
@@ -737,32 +739,54 @@ export class Viewer {
     this.ghost = null;
   }
 
+  /** Page rect for the picture signature centred on p, or null if there is none. */
+  private imageSignatureRect(p: Point): Rect | null {
+    const s = this.host.settings;
+    const img = s.signatureImage;
+    if (!img) return null;
+    const w = s.signatureWidth;
+    const h = (w * img.h) / img.w;
+    return [p[0] - w / 2, p[1] - h / 2, p[0] + w / 2, p[1] + h / 2];
+  }
+
   private moveGhost(e: PointerEvent): void {
     const pv = this.pageFromEvent(e);
-    const sig = this.host.settings.signature;
-    if (!pv || !sig?.length) return this.hideGhost();
+    const s = this.host.settings;
+    const kind = this.host.signatureKind();
+    const has = kind === "image" ? !!s.signatureImage : !!s.signature?.length;
+    if (!pv || !has) return this.hideGhost();
     const p = this.toPagePoint(pv, e);
-    const strokes = placeStrokes(sig, p[0], p[1], this.host.settings.signatureWidth);
     if (!this.ghost || this.ghost.ownerSVGElement !== pv.svg) {
       this.hideGhost();
       this.ghost = document.createElementNS(SVGNS, "g") as SVGGElement;
       this.ghost.classList.add("ghost");
       pv.svg.append(this.ghost);
     }
-    const w = (1.6 * this.host.settings.signatureWidth) / 150;
+    if (kind === "image") {
+      const r = this.imageSignatureRect(p)!;
+      this.ghost.innerHTML = `<image href="${s.signatureImage!.src}" x="${r[0]}" y="${r[1]}" width="${rectWidth(r)}" height="${rectHeight(r)}" preserveAspectRatio="none"/>`;
+      return;
+    }
+    const strokes = placeStrokes(s.signature!, p[0], p[1], s.signatureWidth);
+    const w = (1.6 * s.signatureWidth) / 150;
     this.ghost.innerHTML = strokes
-      .map((s) => `<polyline points="${s.map((q) => q.join(",")).join(" ")}" fill="none" stroke="${this.host.settings.colors.sign}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`)
+      .map((st) => `<polyline points="${st.map((q) => q.join(",")).join(" ")}" fill="none" stroke="${s.colors.sign}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`)
       .join("");
   }
 
   private async placeSignature(pv: PageView, p: Point): Promise<void> {
     const s = this.host.settings;
-    if (!s.signature?.length) {
-      if (!(await this.host.needSignature())) return;
+    const kind = this.host.signatureKind();
+    const has = kind === "image" ? !!s.signatureImage : !!s.signature?.length;
+    if (!has && !(await this.host.needSignature())) return;
+    this.hideGhost();
+    if (this.host.signatureKind() === "image" && s.signatureImage) {
+      const r = this.imageSignatureRect(p)!;
+      this.afterAnnotEdit(pv, await this.host.engine.addImageStamp(pv.index, r, dataUrlBytes(s.signatureImage.src)));
+      return;
     }
     const strokes = placeStrokes(s.signature!, p[0], p[1], s.signatureWidth);
     const w = (1.6 * s.signatureWidth) / 150;
-    this.hideGhost();
     this.afterAnnotEdit(pv, await this.host.engine.addInk(pv.index, strokes, hexToRgb(s.colors.sign), w));
   }
 
@@ -865,8 +889,7 @@ export class Viewer {
       pv,
       a.rect,
       "annot",
-      `${PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("")}
-       <span class="sep"></span>
+      `${a.kind === "Stamp" ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
        ${a.kind === "FreeText" ? `<button data-act="edit" title="Edit text">${icon("edit")}</button>` : ""}
        <button data-act="delete" title="Delete (Del)">${icon("trash")}</button>`,
     );

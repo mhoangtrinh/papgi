@@ -6,6 +6,13 @@ export type Tool = "select" | "highlight" | "pen" | "text" | "shape" | "sign";
 export type MarkKind = "Highlight" | "Underline" | "StrikeOut";
 export type ShapeKind = "Square" | "Circle" | "Arrow";
 
+/** A signature made from a picture: transparent PNG as a data URL, with its pixel size. */
+export interface SignatureImage {
+  src: string;
+  w: number;
+  h: number;
+}
+
 export interface Settings {
   theme: Theme;
   tool: Tool;
@@ -17,6 +24,8 @@ export interface Settings {
   shapeKind: ShapeKind;
   sidebar: boolean;
   signature: Point[][] | null;
+  signatureImage: SignatureImage | null;
+  signatureKind: "drawn" | "image";
   signatureWidth: number;
 }
 
@@ -41,6 +50,8 @@ export const DEFAULTS: Settings = {
   shapeKind: "Square",
   sidebar: true,
   signature: null,
+  signatureImage: null,
+  signatureKind: "drawn",
   signatureWidth: 150,
 };
 

@@ -157,7 +157,7 @@ try {
   await page.mouse.down();
   for (let i = 1; i <= 30; i++) await page.mouse.move(pad.x + 60 + i * 12, pad.y + 120 + Math.sin(i / 2) * 30);
   await page.mouse.up();
-  await page.click('.modal .btn.primary');
+  await page.click('.modal-actions .btn.primary');
   await page.waitForTimeout(400);
   annots = await engine("listAnnots", 0);
   check("signature placed where clicked after drawing it", annots.filter((x) => x.kind === "Ink").length === 2);
@@ -168,6 +168,41 @@ try {
   annots = await engine("listAnnots", 0);
   check("saved signature placed again with one click", annots.filter((x) => x.kind === "Ink").length === 3);
   await page.screenshot({ path: shots + "desktop-annotated-light.png" });
+
+  // signature from a picture: photo with shading and a desk edge -> transparent ink
+  await page.click('[data-act="redraw"]');
+  await page.waitForSelector(".sigdlg");
+  await page.click('[data-tab="image"]');
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser"), page.click('.pic-empty [data-act="pick"]')]);
+  await chooser.setFiles(new URL("./fixtures/signature-photo.jpg", import.meta.url).pathname);
+  await page.waitForSelector(".pic-work:not([hidden]) .out-canvas:not([hidden])");
+  await page.waitForTimeout(300);
+  const fullOut = await page.evaluate(() => { const c = document.querySelector(".out-canvas"); return [c.width, c.height]; });
+  // crop away the desk: drag over the top 85% of the photo
+  const sb = await page.locator(".src-canvas").boundingBox();
+  await page.mouse.move(sb.x + 2, sb.y + 2);
+  await page.mouse.down();
+  await page.mouse.move(sb.x + sb.width - 2, sb.y + sb.height * 0.85, { steps: 5 });
+  await page.mouse.up();
+  await page.click('[data-ink="blue"]');
+  await page.waitForTimeout(300);
+  const cropOut = await page.evaluate(() => { const c = document.querySelector(".out-canvas"); return [c.width, c.height]; });
+  check("picture signature: crop removes the desk edge", cropOut[1] < fullOut[1] && cropOut[1] < 260, `${fullOut} -> ${cropOut}`);
+  await page.screenshot({ path: shots + "desktop-signature-picture-light.png" });
+  await page.click(".modal-actions .btn.primary");
+  await page.waitForTimeout(300);
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")));
+  check("picture signature saved as a transparent PNG", stored.signatureKind === "image" && stored.signatureImage?.src.startsWith("data:image/png"));
+  const sp = await pt(150, 760);
+  await page.mouse.move(...sp);
+  await page.waitForTimeout(100);
+  await page.mouse.click(...sp);
+  await page.waitForTimeout(500);
+  annots = await engine("listAnnots", 0);
+  check("picture signature placed as a stamp", annots.some((x) => x.kind === "Stamp"));
+  // switch back to the drawn one
+  await page.click('[data-sig="drawn"]');
+  check("can switch between drawn and picture signature", (await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")).signatureKind)) === "drawn");
 
   // select + move the text box, then delete the rectangle via keyboard
   await page.keyboard.press("v");
@@ -225,7 +260,7 @@ try {
   await dl.saveAs(savedPath);
   const doc = mupdf.Document.openDocument(fs.readFileSync(savedPath), "application/pdf").asPDF();
   const kinds = doc.loadPage(0).getAnnotations().map((x) => x.getType());
-  check("saved PDF contains the annotations", kinds.includes("Highlight") && kinds.includes("FreeText") && kinds.includes("Ink"), kinds.join(","));
+  check("saved PDF contains the annotations", kinds.includes("Highlight") && kinds.includes("FreeText") && kinds.includes("Ink") && kinds.includes("Stamp"), kinds.join(","));
   await page.waitForTimeout(200);
   check("clean after save", !(await page.locator("#docname.dirty").isVisible()));
 
@@ -282,7 +317,7 @@ try {
   await page.locator(".thumb").nth(2).click({ modifiers: ["Shift"] });
   await page.click('[data-act="delete"]');
   await page.waitForSelector(".modal");
-  await page.click(".modal .btn.primary");
+  await page.click(".modal-actions .btn.primary");
   await page.waitForTimeout(500);
   info = await page.evaluate(() => window.papgi.info);
   check("delete pages 2-3", info.pageCount === 3);

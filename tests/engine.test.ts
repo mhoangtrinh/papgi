@@ -324,3 +324,38 @@ describe("PdfEngine: state", () => {
     expect(e.state()).toMatchObject({ canRedo: true, redoName: "Shape", dirty: true });
   });
 });
+
+describe("PdfEngine: image stamps", () => {
+  it("places a transparent PNG and keeps the page visible behind it", () => {
+    // 200x80 PNG: transparent with a solid blue bar in the middle
+    const pix = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, [0, 0, 200, 80], true);
+    const px = pix.getPixels();
+    px.fill(0); // fully transparent (clear() would keep alpha opaque)
+    for (let y = 30; y < 50; y++)
+      for (let x = 20; x < 180; x++) {
+        const i = (y * 200 + x) * 4;
+        px[i] = 26; px[i + 1] = 58; px[i + 2] = 143; px[i + 3] = 255;
+      }
+    const png = pix.asPNG().slice();
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    // over the red header band of page 1 (y 0..120 pt)
+    const list = e.addImageStamp(0, [100, 20, 300, 100], png);
+    expect(list.map((a) => a.kind)).toEqual(["Stamp"]);
+    const img = e.render(0, 1);
+    const at = (x: number, y: number) => Array.from(img.data.slice((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+    // centre of the bar is blue
+    const c = at(200, 60);
+    expect(c[2]).toBeGreaterThan(c[0] + 60);
+    // transparent part still shows the red band
+    const t = at(110, 25);
+    expect(t[0]).toBeGreaterThan(200);
+    expect(t[1]).toBeLessThan(90);
+    // survives a save
+    const e2 = new PdfEngine(mupdf);
+    e2.open(e.save());
+    expect(e2.listAnnots(0).map((a) => a.kind)).toEqual(["Stamp"]);
+    const moved = e2.moveAnnot(0, 0, 10, 10);
+    expect(moved[0].rect[0]).toBeCloseTo(110, 0);
+  });
+});

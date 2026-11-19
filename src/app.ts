@@ -4,7 +4,8 @@ import type { DocInfo, SearchHit } from "./engine/engine";
 import { Viewer, PALETTE } from "./ui/viewer";
 import { Sidebar } from "./ui/sidebar";
 import { icon } from "./ui/icons";
-import { toast, askPassword, confirmDialog, drawSignature, showShortcuts, modal } from "./ui/dialogs";
+import { toast, askPassword, confirmDialog, showShortcuts, modal } from "./ui/dialogs";
+import { signatureDialog } from "./ui/signature-dialog";
 import { loadSettings, saveSettings, type Settings, type Tool, type Theme } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
 import { nextZoom, ZOOM_STEPS } from "./core/geometry";
@@ -69,6 +70,7 @@ export class App {
         currentPageChanged: (i) => this.currentChanged(i),
         zoomChanged: (z) => (this.$<HTMLButtonElement>("#zoom-label").textContent = `${Math.round(z * 100)}%`),
         needSignature: () => this.editSignature(),
+        signatureKind: () => this.signatureKind(),
         busy: (p) => this.busy(p),
       },
       main,
@@ -387,10 +389,16 @@ export class App {
       case "shape":
         html = seg("shape", [["Square", "square", "Rectangle"], ["Circle", "circle", "Ellipse"], ["Arrow", "arrow", "Arrow"]], s.shapeKind) + swatches() + range("shapeWidth", 0.5, 12, 0.5, s.shapeWidth, "Width");
         break;
-      case "sign":
-        html = swatches() + range("signatureWidth", 60, 300, 5, s.signatureWidth, "Size", "") +
-          `<button class="btn small" data-act="redraw">${s.signature ? "Redraw signature" : "Draw signature"}</button><span class="muted hint">Click on the page to place it</span>`;
+      case "sign": {
+        const both = !!s.signature?.length && !!s.signatureImage;
+        const kind = this.signatureKind();
+        html =
+          (both ? seg("sig", [["drawn", "pen", "Drawn signature"], ["image", "image", "Signature from a picture"]], kind) : "") +
+          (kind === "drawn" ? swatches() : "") +
+          range("signatureWidth", 60, 300, 5, s.signatureWidth, "Size", "") +
+          `<button class="btn small" data-act="redraw">${s.signature || s.signatureImage ? "Edit signature" : "Add signature"}</button><span class="muted hint">Click on the page to place it</span>`;
         break;
+      }
     }
     el.innerHTML = html;
   }
@@ -418,23 +426,40 @@ export class App {
     if (b.dataset.color) s.colors[t] = b.dataset.color;
     else if (b.dataset.mark) s.markKind = b.dataset.mark as Settings["markKind"];
     else if (b.dataset.shape) s.shapeKind = b.dataset.shape as Settings["shapeKind"];
+    else if (b.dataset.sig) s.signatureKind = b.dataset.sig as Settings["signatureKind"];
     else if (b.dataset.act === "redraw") return void this.editSignature();
     else return;
     saveSettings(s);
     this.renderOptions();
   }
 
+  /** Which saved signature the Sign tool places (falls back to whichever exists). */
+  private signatureKind(): "drawn" | "image" {
+    const s = this.settings;
+    if (s.signatureKind === "image" && s.signatureImage) return "image";
+    if (s.signature?.length) return "drawn";
+    return s.signatureImage ? "image" : s.signatureKind;
+  }
+
   private async editSignature(): Promise<boolean> {
-    const strokes = await drawSignature(this.settings.colors.sign, this.settings.signature);
-    if (!strokes) return false;
-    if (!strokes.length) {
-      toast("Signature is empty", "error");
+    const s = this.settings;
+    const res = await signatureDialog({ color: s.colors.sign, strokes: s.signature, image: s.signatureImage, start: this.signatureKind() });
+    if (!res) return false;
+    if (res.kind === "clear") {
+      if (!(await confirmDialog("Delete signatures?", "Your saved signatures will be removed from this device.", "Delete", true))) return false;
+      s.signature = null;
+      s.signatureImage = null;
+      saveSettings(s);
+      this.renderOptions();
+      toast("Signatures deleted");
       return false;
     }
-    this.settings.signature = strokes;
-    saveSettings(this.settings);
+    if (res.kind === "drawn") s.signature = res.strokes;
+    else s.signatureImage = res.image;
+    s.signatureKind = res.kind;
+    saveSettings(s);
     this.renderOptions();
-    if (this.settings.tool !== "sign") this.setTool("sign");
+    if (s.tool !== "sign") this.setTool("sign");
     toast("Signature saved on this device");
     return true;
   }

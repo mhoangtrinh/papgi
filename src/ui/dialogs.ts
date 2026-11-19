@@ -1,6 +1,4 @@
 // Toasts and modal dialogs (password, signature pad, shortcuts, confirm).
-import type { Point } from "../core/geometry";
-import { simplifyStroke } from "../core/geometry";
 import { icon } from "./icons";
 
 let toastTimer = 0;
@@ -83,70 +81,6 @@ export async function askPassword(name: string, wrong: boolean): Promise<string 
 export async function confirmDialog(title: string, text: string, ok: string, danger = false): Promise<boolean> {
   const v = await modal({ title, body: `<p>${text}</p>`, actions: [{ label: "Cancel", value: "" }, { label: ok, value: "ok", primary: true, danger }] });
   return v === "ok";
-}
-
-/** Signature pad. Resolves to strokes in pad coordinates, or null if cancelled. */
-export async function drawSignature(color: string, existing: Point[][] | null): Promise<Point[][] | null> {
-  const wrap = document.createElement("div");
-  wrap.className = "sigpad";
-  wrap.innerHTML = `<p class="muted">Sign inside the box with your mouse, pen or finger.</p>
-    <canvas width="600" height="220" aria-label="Signature pad"></canvas>
-    <div class="sig-line"></div>
-    <button class="btn small" data-act="clear">Clear</button>`;
-  const canvas = wrap.querySelector("canvas")!;
-  const ctx = canvas.getContext("2d")!;
-  let strokes: Point[][] = existing ? existing.map((s) => s.slice()) : [];
-  let current: Point[] | null = null;
-
-  const redraw = () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    ctx.lineCap = ctx.lineJoin = "round";
-    for (const s of [...strokes, ...(current ? [current] : [])]) {
-      ctx.beginPath();
-      s.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-      if (s.length === 1) ctx.lineTo(s[0][0] + 0.1, s[0][1] + 0.1);
-      ctx.stroke();
-    }
-  };
-  const pos = (e: PointerEvent): Point => {
-    const r = canvas.getBoundingClientRect();
-    return [((e.clientX - r.left) / r.width) * canvas.width, ((e.clientY - r.top) / r.height) * canvas.height];
-  };
-  canvas.addEventListener("pointerdown", (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    current = [pos(e)];
-    redraw();
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    if (!current) return;
-    for (const ce of e.getCoalescedEvents?.() ?? [e]) current.push(pos(ce));
-    redraw();
-  });
-  const end = () => {
-    if (current) strokes.push(simplifyStroke(current, 0.6));
-    current = null;
-    redraw();
-  };
-  canvas.addEventListener("pointerup", end);
-  canvas.addEventListener("pointercancel", end);
-  wrap.querySelector('[data-act="clear"]')!.addEventListener("click", () => {
-    strokes = [];
-    redraw();
-  });
-  redraw();
-  const v = await modal({
-    title: "Your signature",
-    body: wrap,
-    wide: true,
-    actions: [
-      { label: "Cancel", value: "" },
-      { label: "Save signature", value: "ok", primary: true },
-    ],
-  });
-  if (v !== "ok") return null;
-  return strokes.filter((s) => s.length > 0);
 }
 
 export function showShortcuts(): void {

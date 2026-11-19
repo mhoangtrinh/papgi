@@ -338,6 +338,21 @@ export class PdfEngine {
     });
   }
 
+  /** Place an image (PNG/JPEG bytes, transparency kept) as a stamp, e.g. a signature picture. */
+  addImageStamp(index: number, rect: Rect, imageBytes: Uint8Array): AnnotInfo[] {
+    return this.op("Signature", index, (page) => {
+      const img = new this.mupdf.Image(imageBytes);
+      try {
+        const a = page.createAnnotation("Stamp");
+        a.setRect(rect);
+        a.setStampImage(img);
+        a.update();
+      } finally {
+        img.destroy();
+      }
+    });
+  }
+
   /** Text box with its top-left corner at `at`. Size follows the text. */
   addFreeText(index: number, at: Point, text: string, size: number, color: RGB): AnnotInfo[] {
     if (!text.trim()) return this.listAnnots(index);
