@@ -680,18 +680,14 @@ export class App {
   private async undo(): Promise<void> {
     if (!this.info) return;
     this.viewer.closeEditor(true);
-    const st = await this.engine.state();
-    if (!st.canUndo) return;
-    const info = await this.busy(this.engine.undo());
-    this.afterHistory(info, `Undid: ${st.undoName}`);
+    const r = await this.busy(this.engine.undoStep());
+    if (r) await this.afterHistory(r.info, `Undid: ${r.name}`);
   }
 
   private async redo(): Promise<void> {
     if (!this.info) return;
-    const st = await this.engine.state();
-    if (!st.canRedo) return;
-    const info = await this.busy(this.engine.redo());
-    this.afterHistory(info, `Redid: ${st.redoName}`);
+    const r = await this.busy(this.engine.redoStep());
+    if (r) await this.afterHistory(r.info, `Redid: ${r.name}`);
   }
 
   private async afterHistory(info: DocInfo, msg: string): Promise<void> {

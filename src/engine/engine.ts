@@ -90,6 +90,8 @@ export class PdfEngine {
   private nextStateId = 1;
   private savedId = 0;
   private password = "";
+  /** About how big the open document is (for the undo memory budget). */
+  private docSize = 0;
   static readonly MAX_UNDO = 60;
   static readonly MAX_UNDO_BYTES = 400 * 1024 * 1024;
 
@@ -108,6 +110,7 @@ export class PdfEngine {
     }
     this.close();
     this.doc = pdf;
+    this.docSize = bytes.length;
     this.title = title;
     this.password = "";
     if (pdf.needsPassword()) return null;
@@ -121,6 +124,7 @@ export class PdfEngine {
   }
 
   private afterOpen(): DocInfo {
+    this.dropSteps([...this.undoStack, ...this.redoStack]);
     this.undoStack = [];
     this.redoStack = [];
     this.stateId = 0;
@@ -131,6 +135,9 @@ export class PdfEngine {
   close(): void {
     this.clearText();
     this.dropContent();
+    this.dropSteps([...this.undoStack, ...this.redoStack]);
+    this.undoStack = [];
+    this.redoStack = [];
     this.doc?.destroy();
     this.doc = null;
   }
@@ -191,9 +198,16 @@ export class PdfEngine {
   undo(): DocInfo {
     const prev = this.undoStack.pop();
     if (prev) {
-      this.redoStack.push({ name: prev.name, bytes: this.snapshot(), id: this.stateId, content: prev.content });
-      this.restore(prev.bytes, prev.content);
-      this.stateId = prev.id;
+      // the current document itself is kept for redo (no copy needed)
+      const cur = this.currentStep(prev.name, prev.content);
+      try {
+        this.switchTo(prev);
+      } catch (e) {
+        this.doc = cur.doc!;
+        this.undoStack.push(prev);
+        throw e;
+      }
+      this.redoStack.push(cur);
     }
     return this.info();
   }
@@ -201,11 +215,68 @@ export class PdfEngine {
   redo(): DocInfo {
     const next = this.redoStack.pop();
     if (next) {
-      this.undoStack.push({ name: next.name, bytes: this.snapshot(), id: this.stateId, content: next.content });
-      this.restore(next.bytes, next.content);
-      this.stateId = next.id;
+      const cur = this.currentStep(next.name, next.content);
+      try {
+        this.switchTo(next);
+      } catch (e) {
+        this.doc = cur.doc!;
+        this.redoStack.push(next);
+        throw e;
+      }
+      this.undoStack.push(cur);
+      this.trimHistory();
     }
     return this.info();
+  }
+
+  /** Undo in one call: null if there's nothing to undo, else the document info and the step's name. */
+  undoStep(): { info: DocInfo; name: string } | null {
+    const name = this.undoStack[this.undoStack.length - 1]?.name;
+    return name === undefined ? null : { info: this.undo(), name };
+  }
+
+  redoStep(): { info: DocInfo; name: string } | null {
+    const name = this.redoStack[this.redoStack.length - 1]?.name;
+    return name === undefined ? null : { info: this.redo(), name };
+  }
+
+  /** The open document as an undo/redo step (handed over as is, not copied). */
+  private currentStep(name: string, content: number[] | "all"): UndoStep {
+    const doc = this.requireDoc();
+    this.doc = null;
+    return { name, id: this.stateId, content, doc, size: this.docSize };
+  }
+
+  /** Make a step's document the open one. */
+  private switchTo(step: UndoStep): void {
+    let doc = step.doc;
+    if (!doc) {
+      const d = this.mupdf.Document.openDocument(step.bytes!, "application/pdf");
+      doc = d.asPDF() ?? undefined;
+      if (!doc) throw new Error("Undo failed");
+      if (doc.needsPassword() && !doc.authenticatePassword(this.password)) throw new Error("Undo failed (password)");
+    }
+    this.clearText();
+    // drawn page contents stay for pages the step didn't change
+    this.dropContent(step.content);
+    this.doc?.destroy();
+    this.doc = doc;
+    this.docSize = step.size;
+    this.stateId = step.id;
+  }
+
+  private dropSteps(steps: UndoStep[]): void {
+    for (const st of steps) st.doc?.destroy();
+  }
+
+  /** Keep the history within MAX_UNDO steps and MAX_UNDO_BYTES (oldest undo steps go first). */
+  private trimHistory(): void {
+    let total = [...this.undoStack, ...this.redoStack].reduce((n, st) => n + st.size, 0);
+    while (this.undoStack.length > PdfEngine.MAX_UNDO || (total > PdfEngine.MAX_UNDO_BYTES && this.undoStack.length > 1)) {
+      const st = this.undoStack.shift()!;
+      total -= st.size;
+      this.dropSteps([st]);
+    }
   }
 
   /** The document as it is right now (fast, uncompressed; only used for undo). */
@@ -216,17 +287,14 @@ export class PdfEngine {
     return out;
   }
 
-  /**
-   * Replace the open document with a snapshot (fresh engine state, fresh caches). Drawn page
-   * contents are kept for pages the undone/redone step didn't change (`content`).
-   */
-  private restore(bytes: Uint8Array, content: number[] | "all" = "all"): void {
+  /** Put the document back as it was in `bytes` (after a failed change). */
+  private restore(bytes: Uint8Array): void {
     const d = this.mupdf.Document.openDocument(bytes, "application/pdf");
     const pdf = d.asPDF();
     if (!pdf) throw new Error("Undo failed");
     if (pdf.needsPassword() && !pdf.authenticatePassword(this.password)) throw new Error("Undo failed (password)");
     this.clearText();
-    this.dropContent(content);
+    this.dropContent();
     this.doc?.destroy();
     this.doc = pdf;
   }
@@ -944,14 +1012,13 @@ export class PdfEngine {
     if (changed === false) return;
     // pages whose contents (not just annotations or fields) may look different now
     this.dropContent(content);
-    this.undoStack.push({ name, bytes: before, id: this.stateId, content });
+    this.undoStack.push({ name, bytes: before, id: this.stateId, content, size: before.length });
+    this.docSize = before.length;
     this.stateId = this.nextStateId++;
+    this.dropSteps(this.redoStack);
     this.redoStack = [];
     // keep memory in check: drop the oldest steps
-    let total = this.undoStack.reduce((n, s) => n + s.bytes.length, 0);
-    while (this.undoStack.length > PdfEngine.MAX_UNDO || (total > PdfEngine.MAX_UNDO_BYTES && this.undoStack.length > 1)) {
-      total -= this.undoStack.shift()!.bytes.length;
-    }
+    this.trimHistory();
   }
 
   /** Run an undoable change on one page; returns that page's annotations afterwards. */
@@ -973,9 +1040,13 @@ export class PdfEngine {
 
 interface UndoStep {
   name: string;
-  bytes: Uint8Array;
+  /** The document then: saved bytes, or (for redo, and undo after redo) the document itself. */
+  bytes?: Uint8Array;
+  doc?: MuPDF.PDFDocument;
   id: number;
+  /** Pages whose contents (not just annotations) the step changed. */
   content: number[] | "all";
+  size: number;
 }
 
 /** Translate any kind of annotation by (dx, dy) in page space. */

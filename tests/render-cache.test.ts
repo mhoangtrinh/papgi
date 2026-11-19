@@ -10,7 +10,7 @@ const font = (n: string) => new Uint8Array(fs.readFileSync(new URL(`../public/fo
 
 function fresh(e: PdfEngine, index: number, scale: number) {
   const f = new PdfEngine(mupdf);
-  f.open(e.save());
+  f.open(e.save(false)); // (without marking the document saved)
   return f.render(index, scale);
 }
 function same(e: PdfEngine, index: number, scale = 1.3) {
@@ -71,5 +71,45 @@ describe("drawing with cached page contents", () => {
     e.open(sample("paper.pdf"));
     for (let i = 0; i < 12; i++) e.render(i % e.info().pageCount, 3 + i * 0.1);
     expect((e as unknown as { contentBytes: number }).contentBytes).toBeLessThanOrEqual(PdfEngine.CONTENT_CACHE_BYTES);
+  });
+
+  it("undo and redo back and forth, then edit again", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("paper.pdf"));
+    for (const f of fs.readdirSync(new URL("../public/fonts", import.meta.url)).filter((f) => /\.(otf|ttf)$/.test(f))) e.registerFont(f, font(f));
+    const count = () => e.listAnnots(0).length;
+    e.render(0, 1.3);
+    e.addFreeText(0, [100, 100], "one", 12, [0, 0, 0]);
+    e.addFreeText(0, [100, 140], "two", 12, [0, 0, 0]);
+    const b = e.textBlocks(0).find((x) => x.editable && x.lines.length > 2)!;
+    e.replaceText(0, b.id, [{ text: "Edited once.", style: 0 }]);
+    e.addFreeText(0, [100, 180], "three", 12, [0, 0, 0]);
+    expect(count()).toBe(3);
+    e.undo();
+    e.undo();
+    expect(e.pageText(0)).not.toContain("Edited once.");
+    same(e, 0);
+    e.redo();
+    expect(e.pageText(0)).toContain("Edited once.");
+    same(e, 0);
+    e.redo();
+    expect(count()).toBe(3);
+    same(e, 0);
+    for (let i = 0; i < 4; i++) e.undo();
+    expect(count()).toBe(0);
+    expect(e.state().dirty).toBe(false);
+    same(e, 0);
+    for (let i = 0; i < 2; i++) e.redo();
+    expect(count()).toBe(2);
+    // a new change drops what could be redone; editing text afterwards still works cleanly
+    const b2 = e.textBlocks(0).find((x) => x.editable && x.lines.length > 2)!;
+    e.replaceText(0, b2.id, [{ text: "Edited after undo and redo.", style: 0 }]);
+    expect(e.state().canRedo).toBe(false);
+    expect(e.pageText(0)).toContain("Edited after undo and redo.");
+    same(e, 0);
+    e.undo();
+    e.redo();
+    expect(e.pageText(0)).toContain("Edited after undo and redo.");
+    same(e, 0);
   });
 });
