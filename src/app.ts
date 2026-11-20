@@ -12,6 +12,10 @@ import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settin
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
 import { nextZoom, strokesBounds, ZOOM_STEPS } from "./core/geometry";
 import { afterDelete, formatRange, movedSelection } from "./core/pages";
+import { Hub } from "./hub/hub";
+import { FLOWS } from "./hub/flows";
+import { TOOL_LIST, type ToolId } from "./hub/registry";
+import { rememberFile } from "./recent";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "select", label: "Select", key: "V", icon: "select" },
@@ -23,19 +27,16 @@ const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "sign", label: "Sign", key: "S", icon: "sign" },
 ];
 
-const SAMPLES = [
-  { file: "paper.pdf", label: "Paper" },
-  { file: "form.pdf", label: "Form" },
-  { file: "report.pdf", label: "Word report" },
-  { file: "scan.pdf", label: "Scan" },
-  { file: "pages.pdf", label: "5 pages" },
-];
 
 export class App {
   engine: Engine;
   settings: Settings = loadSettings();
   private viewer!: Viewer;
   private sidebar!: Sidebar;
+  private hub!: Hub;
+  /** The open file is one of the samples (not added to recent files). */
+  private sampleOpen = false;
+  private openingSample = false;
   private info: DocInfo | null = null;
   private file: { name: string; handle: FileSystemFileHandle | null } | null = null;
   private dirty = false;
@@ -90,7 +91,24 @@ export class App {
     this.setTool(this.settings.tool);
     this.renderOptions();
     this.updateUi();
-    onLaunchFiles((f) => this.open(f));
+    this.hub = new Hub(
+      {
+        engine,
+        ready,
+        openInEditor: (f, then) => this.openInEditor(f, then),
+        editorDoc: () => (this.info && this.file ? this.file.name : null),
+        showEditor: () => (location.hash = "#edit"),
+        pickPdf: async () => (await pickPdfs(false))[0] ?? null,
+        cycleTheme: () => this.cycleTheme(),
+        themeIcon: () => this.themeIcon(),
+        openSample: (name) => void this.openSample(name),
+      },
+      document.body,
+    );
+    this.hub.bindDrag();
+    window.addEventListener("hashchange", () => this.route());
+    this.route();
+    onLaunchFiles((f) => void this.openInEditor(f));
     ready.catch((e) => toast(`The PDF engine failed to load: ${e.message}`, "error"));
   }
 
@@ -98,8 +116,15 @@ export class App {
     return `
     <header class="topbar">
       <div class="tb-group">
+        <div class="menu-wrap">
+          <button class="brand brand-btn" id="btn-tools" title="All tools" aria-haspopup="menu"><span class="logo">${icon("file")}</span><span class="brand-name">papgi</span>${icon("down", "caret")}</button>
+          <div class="menu tools-menu" id="tools-menu" role="menu" hidden>
+            <button data-goto="home">${icon("home")}All tools</button>
+            <hr>
+            ${TOOL_LIST.filter((t) => t.id !== "edit").map((t) => `<button data-goto="${t.id}">${icon(t.icon)}${t.name}${FLOWS[t.id]?.takes === "pdf" ? `<span class="muted small">this PDF</span>` : ""}</button>`).join("")}
+          </div>
+        </div>
         <button class="icon-btn" id="btn-sidebar" title="Pages panel">${icon("sidebar")}</button>
-        <div class="brand"><span class="logo">${icon("file")}</span>papgi</div>
         <button class="icon-btn" id="btn-open" title="Open (Ctrl+O)">${icon("open")}</button>
         <button class="icon-btn" id="btn-save" title="Save (Ctrl+S)">${icon("save")}</button>
       </div>
@@ -161,12 +186,10 @@ export class App {
         <p class="muted">Annotate, highlight, fill forms, sign and rearrange pages. Everything stays on this device.</p>
         <button class="btn primary big" id="empty-open">${icon("open")}Open PDF</button>
         <p class="muted small">or drop a file anywhere</p>
-        <div class="samples"><span class="muted small">Try a sample:</span>
-          ${SAMPLES.map((s) => `<button class="chip" data-sample="${s.file}">${s.label}</button>`).join("")}
-        </div>
+        <button class="btn flat" id="empty-tools">${icon("tools")}All tools</button>
       </div>
     </div>
-    <div class="dropzone" id="dropzone"><div>Drop PDF to open</div></div>`;
+    <div class="dropzone" id="dropzone"><div>Drop files here</div></div>`;
   }
 
   // ---------- wiring ----------
@@ -175,6 +198,14 @@ export class App {
     const on = (id: string, fn: () => void) => this.$(id).addEventListener("click", fn);
     on("#btn-open", () => this.openPicker());
     on("#empty-open", () => this.openPicker());
+    on("#empty-tools", () => (location.hash = ""));
+    on("#btn-tools", () => this.toggleMenu(undefined, "#tools-menu"));
+    this.$("#tools-menu").addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-goto]");
+      if (!b) return;
+      this.toggleMenu(false, "#tools-menu");
+      void this.gotoTool(b.dataset.goto as ToolId | "home");
+    });
     on("#btn-save", () => this.save());
     on("#btn-undo", () => this.undo());
     on("#btn-redo", () => this.redo());
@@ -197,7 +228,10 @@ export class App {
       this.menuAction(b.dataset.menu!);
     });
     document.addEventListener("pointerdown", (e) => {
-      if (!(e.target as HTMLElement).closest(".menu-wrap")) this.toggleMenu(false);
+      if (!(e.target as HTMLElement).closest(".menu-wrap")) {
+        this.toggleMenu(false);
+        this.toggleMenu(false, "#tools-menu");
+      }
     });
     this.$(".tools").addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tool]");
@@ -205,10 +239,6 @@ export class App {
     });
     this.$("#options").addEventListener("click", (e) => this.onOption(e));
     this.$("#options").addEventListener("input", (e) => this.onOption(e));
-    this.$("#empty").addEventListener("click", (e) => {
-      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-sample]");
-      if (b) this.openSample(b.dataset.sample!);
-    });
 
     const pageInput = this.$<HTMLInputElement>("#page-input");
     pageInput.addEventListener("change", () => {
@@ -238,7 +268,7 @@ export class App {
     let depth = 0;
     const dialogOpen = () => !!document.querySelector(".modal-back");
     window.addEventListener("dragenter", (e) => {
-      if (!e.dataTransfer?.types.includes("Files") || dialogOpen()) return;
+      if (!e.dataTransfer?.types.includes("Files") || dialogOpen() || this.hub.draggingRow()) return;
       depth++;
       dz.classList.add("show");
     });
@@ -254,22 +284,25 @@ export class App {
     window.addEventListener("drop", async (e) => {
       if (!e.dataTransfer?.types.includes("Files")) return;
       e.preventDefault();
-      if (dialogOpen()) return;
       depth = 0;
       dz.classList.remove("show");
-      const item = [...e.dataTransfer.items].find((it) => it.kind === "file");
-      if (!item) return;
-      const withHandle = item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> };
-      const file = item.getAsFile();
-      const handlePromise = withHandle.getAsFileSystemHandle?.();
-      let handle: FileSystemFileHandle | null = null;
-      try {
-        const h = await handlePromise;
-        if (h && h.kind === "file") handle = h as FileSystemFileHandle;
-      } catch {
-        /* not supported */
+      if (dialogOpen()) return;
+      const items = [...e.dataTransfer.items].filter((it) => it.kind === "file");
+      // (read everything now: the drop data is gone after the first await)
+      const pending = items.map((item) => {
+        const withHandle = item as DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> };
+        return { file: item.getAsFile(), handle: withHandle.getAsFileSystemHandle?.().catch(() => null) };
+      });
+      const files: OpenedFile[] = [];
+      for (const p of pending) {
+        if (!p.file) continue;
+        const h = await p.handle;
+        files.push(await fileToOpened(p.file, h && h.kind === "file" ? (h as FileSystemFileHandle) : null));
       }
-      if (file) this.open(await fileToOpened(file, handle));
+      if (!files.length) return;
+      if (this.hub.visible()) return void this.hub.drop(files);
+      const pdf = files.find((f) => /\.pdf$/i.test(f.name)) ?? files[0];
+      await this.openInEditor(pdf);
     });
 
     document.addEventListener("keydown", (e) => this.onKey(e));
@@ -294,6 +327,7 @@ export class App {
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     if (document.querySelector(".modal-back")) return;
+    if (this.hub?.visible()) return;
     if (mod && k === "s") {
       e.preventDefault();
       return void (e.shiftKey ? this.saveCopy() : this.save());
@@ -538,7 +572,7 @@ export class App {
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#16181d" : "#f6f7f9");
     const btn = document.querySelector("#btn-theme");
     if (btn) {
-      btn.innerHTML = icon(t === "auto" ? "auto" : t === "dark" ? "moon" : "sun");
+      btn.innerHTML = icon(this.themeIcon());
       btn.setAttribute("title", `Theme: ${t}`);
     }
   }
@@ -551,9 +585,75 @@ export class App {
     toast(`Theme: ${this.settings.theme}`);
   }
 
-  private toggleMenu(force?: boolean): void {
-    const m = this.$("#menu");
+  private toggleMenu(force?: boolean, sel = "#menu"): void {
+    const m = this.$(sel);
     m.hidden = force === undefined ? !m.hidden : !force;
+  }
+
+  private themeIcon(): string {
+    const t = this.settings.theme;
+    return t === "auto" ? "auto" : t === "dark" ? "moon" : "sun";
+  }
+
+  // ---------- views: start screen, tool pages, editor ----------
+
+  /** Show what the address says: "" = start screen, #edit = editor, #merge etc. = tool pages. */
+  private route(): void {
+    const h = decodeURIComponent(location.hash.slice(1));
+    if (h === "edit") {
+      this.hub.hide();
+      document.title = this.file && this.info ? `${this.file.name} · papgi` : "papgi";
+      return;
+    }
+    this.viewer.closeEditor(true);
+    void this.viewer.closeParagraph(true);
+    this.hub.show(FLOWS[h] ? (h as ToolId) : "home");
+  }
+
+  /** Open a file in the editor and show it; `then` gets a tool or action ready. */
+  async openInEditor(f: OpenedFile, then?: "sign" | "ocr"): Promise<void> {
+    await this.open(f);
+    if (!this.info || this.file?.name !== f.name) return;
+    if (location.hash !== "#edit") location.hash = "#edit";
+    else this.route();
+    if (then === "sign") this.setTool("sign");
+    if (then === "ocr") void this.recognize();
+  }
+
+  /** From the editor's tools menu: the start screen, an action here, or a tool with this PDF. */
+  private async gotoTool(id: ToolId | "home"): Promise<void> {
+    if (id === "home") return void (location.hash = "");
+    if (id === "sign") return this.setTool("sign");
+    if (id === "ocr") return void this.recognize();
+    if (!FLOWS[id]) return;
+    let file: OpenedFile | null = null;
+    if (this.info && this.file && FLOWS[id].takes === "pdf") {
+      this.viewer.closeEditor(true);
+      await this.viewer.closeParagraph(true);
+      file = { name: this.file.name, bytes: await this.busy(this.engine.save(false)), handle: null };
+    }
+    this.hub.go(id);
+    if (file) await this.hub.drop([file]);
+  }
+
+  /** Remember the open file in "Recent files", with a small picture of page 1. */
+  private async remember(bytes: Uint8Array): Promise<void> {
+    if (!this.info || !this.file || this.sampleOpen) return;
+    const file = this.file;
+    let thumb = "";
+    try {
+      const p = this.info.pages[0];
+      const bmp = await this.engine.renderBitmap(0, 120 / Math.max(p.w, p.h));
+      const c = document.createElement("canvas");
+      c.width = bmp.width;
+      c.height = bmp.height;
+      c.getContext("2d")!.drawImage(bmp, 0, 0);
+      bmp.close();
+      thumb = c.toDataURL("image/jpeg", 0.72);
+    } catch {
+      /* no picture */
+    }
+    await rememberFile({ name: file.name, bytes, handle: file.handle, pages: this.info.pageCount, thumb });
   }
 
   private menuAction(a: string): void {
@@ -588,15 +688,20 @@ export class App {
     try {
       const res = await fetch(`./samples/${name}`);
       if (!res.ok) throw new Error(`Couldn't load the sample (${res.status})`);
-      await this.open({ name, bytes: new Uint8Array(await res.arrayBuffer()), handle: null });
+      this.openingSample = true;
+      await this.openInEditor({ name, bytes: new Uint8Array(await res.arrayBuffer()), handle: null });
     } catch (e) {
       toast((e as Error).message, "error");
     }
   }
 
   async open(f: OpenedFile): Promise<void> {
+    const sample = this.openingSample;
+    this.openingSample = false;
     if (this.dirty && !(await confirmDialog("Discard changes?", "The current document has unsaved changes.", "Discard", true))) return;
     await this.ready;
+    // (the engine takes over the bytes; keep a copy for "Recent files")
+    const keep = f.bytes.slice();
     try {
       let info = await this.busy(this.engine.open(f.bytes, f.name));
       let wrong = false;
@@ -611,7 +716,9 @@ export class App {
         wrong = true;
       }
       this.file = { name: f.name, handle: f.handle };
+      this.sampleOpen = sample;
       this.setDoc(info);
+      void this.remember(keep);
       if (info.pageCount > 0 && !(await this.engine.pageText(0)).trim()) {
         const scanned = info.pageCount === 1 || !(await this.engine.pageText(Math.min(1, info.pageCount - 1))).trim();
         if (scanned) toast("This looks like a scan: there's no text to select yet.", "info", { label: "Recognize text", run: () => void this.recognize() });
@@ -642,6 +749,7 @@ export class App {
         await writeToHandle(this.file.handle, bytes);
         await this.engine.markSaved();
         toast(`Saved ${this.file.name}`);
+        void this.remember(bytes);
       } else {
         const bytes = await this.busy(this.engine.save(false));
         const res = await saveAs(bytes, this.file.name);
@@ -649,6 +757,7 @@ export class App {
         if (res) this.file = { name: res.name, handle: res };
         await this.engine.markSaved();
         toast(res ? `Saved ${res.name}` : "Downloaded");
+        void this.remember(bytes);
       }
       this.updateUi(await this.engine.state());
     } catch (e) {

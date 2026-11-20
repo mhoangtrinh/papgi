@@ -91,3 +91,27 @@ export function formatRange(indices: number[]): string {
   }
   return parts.join(", ");
 }
+
+/**
+ * Split groups from text like "1-3, 4, 5-" (1-based): each comma-separated part becomes one file.
+ * Returns null if any part is not a valid range.
+ */
+export function parseGroups(text: string, count: number): number[][] | null {
+  const parts = text.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const out: number[][] = [];
+  for (const part of parts) {
+    const g = parseRange(part, count);
+    if (!g) return null;
+    out.push(g);
+  }
+  return out;
+}
+
+/** Groups of `n` pages: [0..n-1], [n..2n-1], ... */
+export function everyN(count: number, n: number): number[][] {
+  const size = Math.max(1, Math.floor(n));
+  const out: number[][] = [];
+  for (let i = 0; i < count; i += size) out.push([...Array(Math.min(size, count - i)).keys()].map((k) => i + k));
+  return out;
+}

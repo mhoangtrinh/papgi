@@ -1,6 +1,6 @@
 # papgi
 
-A PDF editor that runs in your browser. Annotate, highlight, fill forms, sign and rearrange pages. Files never leave your device, and it works offline once loaded.
+PDF tools that run in your browser: edit text, annotate, fill and sign, merge, split, compress, and convert between PDFs and pictures. Files never leave your device, and it works offline once loaded.
 
 **Live:** https://mhoangtrinh.github.io/papgi/
 
@@ -11,9 +11,28 @@ A PDF editor that runs in your browser. Annotate, highlight, fill forms, sign an
 
 In Edge/Chrome, **Save (Ctrl+S) writes back to the file you opened**. In other browsers, Save downloads a copy.
 
+The start screen lists all tools and your recent files; the papgi button at the top left of the editor switches tools. Tools have their own addresses (e.g. `…/papgi/#merge`) to bookmark, and an installed papgi offers them on right-click of its icon (Windows).
+
 Updates: when a new version is ready, papgi switches to it right away if no document is open; otherwise it shows a small "Reload" bar so unsaved work isn't lost.
 
-## What it does (stage 1)
+## Tools
+
+| Tool | |
+|---|---|
+| Edit PDF | The editor (below) |
+| Fill & sign | Opens a PDF in the editor with the signature tool ready |
+| Merge PDFs | Combine PDFs in any order (drag or arrows); form fields, annotations and signatures come along. Password-protected files ask for the password |
+| Split PDF | Single pages, every N pages, or custom ranges (“1-3, 4, 5-”); several files come as one ZIP |
+| Compress PDF | Light (clean-up only), Recommended (pictures to 150 dpi) or Strong (96 dpi): pictures sharper than the page needs are scaled down and saved as JPEG; text and drawings stay sharp. Never returns a bigger file |
+| Images to PDF | JPG, PNG, GIF, BMP, TIFF (and HEIC/WebP where the browser can read them) on A4, Letter or picture-sized pages; phone photos keep the right way up |
+| PDF to images | PNG or JPG at 72/150/300 dpi, all or chosen pages; ZIP, or Share (e.g. to Photos) on a phone |
+| Recognize text | Opens a scan in the editor and runs OCR (below) |
+
+From the editor, the tools menu sends the open PDF straight to Merge, Split, Compress or PDF to images. Results can be downloaded, shared, or opened in the editor.
+
+**Recent files** are kept in this browser only. In Edge/Chrome on a computer papgi remembers the file itself and reopens it from disk; elsewhere it keeps a copy (files up to 40 MB). Samples aren't listed. Remove single files with × or all with *Clear*.
+
+## The editor
 
 | | |
 |---|---|
@@ -28,7 +47,7 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
 | **Scans (OCR)** | Recognize text on scanned pages (⋯ menu → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 
-Planned next: bold/italic changes while editing text, export to Word.
+Planned next: PDF to Word (as pictures, or fully editable), bold/italic changes while editing text.
 
 Text editing limits: formulas and sub/superscripts inside an edited paragraph are flattened onto one line; rotated text can't be edited yet. On scans, edit only after recognizing the text; Chinese, Japanese, Korean, Arabic and other scripts aren't supported for recognition.
 
@@ -80,6 +99,14 @@ src/
   core/ocrlangs.ts   the recognition languages on offer
   ui/ocr.ts          recognition dialog, progress, and the tesseract.js runner
   ui/print.ts        printing (browser PDF viewer, or rendered pages)
+  engine/tools.ts    merge, split, images <-> PDF, compress (work on copies; unit-tested in Node)
+  hub/registry.ts    the list of tools
+  hub/flows.ts       each stand-alone tool's options and what it runs
+  hub/hub.ts         start screen (tools, recent files) and the tool pages
+  hub/images.ts      recognising dropped files; HEIC/WebP -> JPEG via the browser
+  core/zip.ts        small ZIP writer (pure, tested)
+  core/exif.ts       camera orientation of JPEG photos (pure, tested)
+  recent.ts          recent files in IndexedDB
   ui/viewer.ts       pages, rendering, tools, form fields, search highlights
   ui/sidebar.ts      thumbnails and page actions
   ui/dialogs.ts      toasts and modals

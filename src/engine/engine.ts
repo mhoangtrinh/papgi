@@ -7,6 +7,10 @@ import type { Point, Quad, Rect } from "../core/geometry";
 import type { Run } from "../core/textlayout";
 import { extractBlocks, fontsNeeded, replaceBlock, type EditBlock, type EditResult, type EditOptions } from "./textedit";
 import { addOcrWords, isOcrPage, OCR_FONT_FILE, type OcrWord } from "./ocr";
+import {
+  compressPdf, graftPages, imagesToPdf, mergePdfs, pageToImage, pagesToImages, pdfPageCount, splitPdf,
+  type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PdfInput, type RenderOptions,
+} from "./tools";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
@@ -893,68 +897,9 @@ export class PdfEngine {
       throw new Error("That PDF is password-protected");
     }
     try {
-      return this.docOp("Insert pages", (doc) => {
-        const map = doc.newGraftMap();
-        const n = src.countPages();
-        for (let i = 0; i < n; i++) {
-          // graftPage leaves annotations behind; copy them over without their
-          // back-pointer to the old page (which would drag the old page tree along).
-          const srcAnnots = src.findPage(i).get("Annots");
-          if (srcAnnots.isArray()) srcAnnots.forEach((a) => a.delete("P"));
-          map.graftPage(at + i, src, i);
-          if (srcAnnots.isArray()) {
-            const page = doc.findPage(at + i);
-            const arr = doc.newArray();
-            srcAnnots.forEach((a) => {
-              const g = map.graftObject(a);
-              g.put("P", page);
-              arr.push(g);
-            });
-            page.put("Annots", arr);
-          }
-        }
-        this.mergeForm(doc, src, map, at, n);
-      });
+      return this.docOp("Insert pages", (doc) => graftPages(doc, src, [...Array(src.countPages()).keys()], at));
     } finally {
       src.destroy();
-    }
-  }
-
-  /** Grafted pages keep their widget annotations; register their fields so they stay fillable. */
-  private mergeForm(doc: MuPDF.PDFDocument, src: MuPDF.PDFDocument, map: MuPDF.PDFGraftMap, at: number, n: number): void {
-    const srcForm = src.getTrailer().get("Root").get("AcroForm");
-    if (!srcForm.isDictionary()) return;
-    const root = doc.getTrailer().get("Root");
-    let form = root.get("AcroForm");
-    if (!form.isDictionary()) {
-      form = doc.addObject(doc.newDictionary());
-      root.put("AcroForm", form);
-    }
-    let fields = form.get("Fields");
-    if (!fields.isArray()) {
-      fields = doc.newArray();
-      form.put("Fields", fields);
-    }
-    for (const key of ["DR", "DA", "NeedAppearances"]) {
-      const v = srcForm.get(key);
-      if (!v.isNull() && form.get(key).isNull()) form.put(key, map.graftObject(v));
-    }
-    const have = new Set<number>();
-    fields.forEach((f) => {
-      if (f.isIndirect()) have.add(f.asIndirect());
-    });
-    for (let i = at; i < at + n; i++) {
-      const annots = doc.findPage(i).get("Annots");
-      if (!annots.isArray()) continue;
-      annots.forEach((a) => {
-        if (a.get("Subtype").isNull() || a.get("Subtype").asName() !== "Widget") return;
-        let top = a;
-        for (let guard = 0; guard < 32 && top.get("Parent").isDictionary(); guard++) top = top.get("Parent");
-        if (top.isIndirect() && !have.has(top.asIndirect())) {
-          have.add(top.asIndirect());
-          fields.push(top);
-        }
-      });
     }
   }
 
@@ -978,6 +923,36 @@ export class PdfEngine {
     buf.destroy();
     out.destroy();
     return bytes;
+  }
+
+  // ---------- stand-alone tools (they don't touch the open document) ----------
+
+  toolPageCount(f: PdfInput): number {
+    return pdfPageCount(this.mupdf, f);
+  }
+
+  toolMerge(files: (PdfInput & { pages?: number[] })[]): Uint8Array {
+    return mergePdfs(this.mupdf, files);
+  }
+
+  toolSplit(f: PdfInput, groups: number[][], baseName: string): OutFile[] {
+    return splitPdf(this.mupdf, f, groups, baseName);
+  }
+
+  toolImagesToPdf(images: ImageInput[], opts: ImagesToPdfOptions): Uint8Array {
+    return imagesToPdf(this.mupdf, images, opts);
+  }
+
+  toolPageToImage(f: PdfInput, index: number, opts: RenderOptions): Uint8Array {
+    return pageToImage(this.mupdf, f, index, opts);
+  }
+
+  toolPagesToImages(f: PdfInput, pages: number[], opts: RenderOptions): Uint8Array[] {
+    return pagesToImages(this.mupdf, f, pages, opts);
+  }
+
+  toolCompress(f: PdfInput, opts: CompressOptions): CompressResult {
+    return compressPdf(this.mupdf, f, opts);
   }
 
   // ---------- internals ----------

@@ -78,6 +78,29 @@ export async function saveAs(bytes: Uint8Array, suggestedName: string): Promise<
   return null;
 }
 
+const SAVE_TYPES: Record<string, { description: string; accept: Record<string, string[]> }> = {
+  "application/pdf": { description: "PDF documents", accept: { "application/pdf": [".pdf"] } },
+  "application/zip": { description: "ZIP archive", accept: { "application/zip": [".zip"] } },
+  "image/png": { description: "PNG picture", accept: { "image/png": [".png"] } },
+  "image/jpeg": { description: "JPG picture", accept: { "image/jpeg": [".jpg", ".jpeg"] } },
+};
+
+/** Save a result file: a "Save as" dialog where the browser has one, otherwise a download. */
+export async function saveFile(bytes: Uint8Array, name: string, type: string): Promise<void> {
+  const t = SAVE_TYPES[type];
+  if (fsw.showSaveFilePicker && t) {
+    try {
+      const handle = await fsw.showSaveFilePicker({ suggestedName: name, types: [t], id: "papgi-tools" });
+      await writeToHandle(handle, bytes);
+      return;
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
+      // (e.g. not allowed in this context): fall back to a download
+    }
+  }
+  download(bytes, name, type);
+}
+
 export function download(bytes: Uint8Array, name: string, type = "application/pdf"): void {
   const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type }));
   const a = document.createElement("a");

@@ -1,7 +1,9 @@
 // Browser check with Playwright + Chromium: desktop and phone sizes, light and dark.
 // Usage: npm run build && npm run e2e
 import { chromium } from "@playwright/test";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import fs from "node:fs";
 import * as mupdf from "mupdf";
 import sharp from "sharp";
@@ -42,9 +44,9 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   await page.goto(URL_);
-  await page.waitForSelector(".empty-card");
-  await page.screenshot({ path: shots + "desktop-empty-light.png" });
-  check("empty state shows", await page.isVisible("#empty-open"));
+  await page.waitForSelector(".hub-home");
+  await page.screenshot({ path: shots + "desktop-home-light.png" });
+  check("start screen shows the tools", (await page.locator(".tool-card").count()) === 8 && (await page.isVisible("#hub")));
 
   const engine = (fn, ...args) => page.evaluate(([f, a]) => window.papgi.engine[f](...a), [fn, args]);
   const waitRendered = async () => {
@@ -73,6 +75,7 @@ try {
   await page.click('[data-sample="paper.pdf"]');
   await waitRendered();
   check("paper opens and renders", (await page.locator(".page").count()) === 1);
+  check("a sample opens in the editor", (await page.evaluate(() => location.hash)) === "#edit" && !(await page.isVisible("#hub")));
   await page.screenshot({ path: shots + "desktop-paper-light.png" });
 
   // select text with the select tool and highlight it from the floating menu
@@ -684,6 +687,151 @@ try {
   check("OCR: menu entry", await page.locator('[data-menu="ocr"]').isVisible());
   await page.keyboard.press("Escape");
 
+  // ---------------- tools ----------------
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "papgi-e2e-"));
+    const samplesDir = new URL("../public/samples/", import.meta.url).pathname;
+    // downloads instead of "Save as" dialogs (headless browsers can't show those)
+    await page.evaluate(() => {
+      window.showSaveFilePicker = undefined;
+    });
+    const download = async (click) => {
+      const [d] = await Promise.all([page.waitForEvent("download", { timeout: 30000 }), click()]);
+      const p = path.join(tmp, d.suggestedFilename());
+      await d.saveAs(p);
+      return { name: d.suggestedFilename(), bytes: new Uint8Array(fs.readFileSync(p)) };
+    };
+    const pdfPages = (bytes) => mupdf.Document.openDocument(bytes, "application/pdf").countPages();
+    const zipNames = (bytes) => {
+      const f = path.join(tmp, "x.zip");
+      fs.writeFileSync(f, bytes);
+      return execSync(`python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print('\\n'.join(z.namelist()))" ${f}`).toString().trim().split("\n");
+    };
+    const choose = async (files) => {
+      const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.click(".drop-area")]);
+      await fc.setFiles(files);
+    };
+    const waitDone = () => page.waitForSelector(".flow-result:not([hidden])", { timeout: 60000 });
+
+    // from the editor: compress the open document
+    await page.click("#btn-tools");
+    check("tools menu in the editor", await page.locator("#tools-menu").isVisible());
+    await page.click('#tools-menu [data-goto="compress"]');
+    await page.waitForSelector('[data-flow="compress"] .file-row');
+    check("tools menu: Compress opens with this PDF", (await page.textContent(".file-row")).includes("scan.pdf") && (await page.evaluate(() => location.hash)) === "#compress");
+    await page.click("[data-act=run]");
+    await waitDone();
+    const comp = await download(() => page.click("[data-act=save-all]"));
+    check("compress: makes a working PDF", comp.name === "scan (compressed).pdf" && pdfPages(comp.bytes) === 1, `${comp.name} ${comp.bytes.length} B: ${await page.textContent(".result-head")}`);
+    await page.screenshot({ path: shots + "desktop-tool-compress-light.png" });
+    // back to the editor: the document is still open there
+    await page.click(".to-editor");
+    check("back to the editor keeps the document", (await page.evaluate(() => location.hash)) === "#edit" && (await page.locator(".page").count()) === 1);
+
+    // merge: home -> card -> two files -> reorder -> merge
+    await page.click("#btn-tools");
+    await page.click('#tools-menu [data-goto="home"]');
+    await page.waitForSelector(".hub-home");
+    await page.click('[data-tool="merge"]');
+    await page.waitForSelector('[data-flow="merge"]');
+    check("merge: button waits for 2 files", await page.locator("[data-act=run]").isDisabled());
+    await choose([path.join(samplesDir, "form.pdf"), path.join(samplesDir, "pages.pdf")]);
+    await page.waitForFunction(() => document.querySelectorAll(".file-row").length === 2);
+    await page.click('[data-move="0"][data-dir="1"]');
+    const order = await page.$$eval(".file-row .file-text b", (bs) => bs.map((b) => b.textContent));
+    check("merge: files can be reordered", order.join() === "pages.pdf,form.pdf", order.join());
+    await page.click("[data-act=run]");
+    await waitDone();
+    const merged = await download(() => page.click("[data-act=save-all]"));
+    check("merge: one PDF with all pages, in order", pdfPages(merged.bytes) === 5 + pdfPages(fs.readFileSync(path.join(samplesDir, "form.pdf"))) && mupdf.Document.openDocument(merged.bytes, "application/pdf").loadPage(0).toStructuredText().asText().includes("page 1 of 5"));
+    await page.screenshot({ path: shots + "desktop-tool-merge-light.png" });
+
+    // split, opened straight from its address
+    await page.goto(URL_ + "#split");
+    await page.waitForSelector('[data-flow="split"]');
+    await page.evaluate(() => (window.showSaveFilePicker = undefined));
+    check("tools open from their address", (await page.textContent(".flow-head h1")) === "Split PDF");
+    await choose([path.join(samplesDir, "pages.pdf")]);
+    await page.waitForSelector(".file-row");
+    await page.click('[data-choose="mode"][data-value="ranges"]');
+    await page.fill('[data-input="ranges"]', "1-2, 9");
+    check("split: bad ranges are explained", (await page.locator("[data-act=run]").isDisabled()) && /between 1 and 5/.test(await page.textContent(".flow-error")));
+    await page.fill('[data-input="ranges"]', "1-2, 3-");
+    await page.click("[data-act=run]");
+    await waitDone();
+    const parts = await download(() => page.click("[data-act=save-all]"));
+    check("split: a ZIP with one PDF per range", JSON.stringify(zipNames(parts.bytes)) === JSON.stringify(["pages-p1-2.pdf", "pages-p3-5.pdf"]), zipNames(parts.bytes).join());
+
+    // PDF to images
+    await page.goto(URL_ + "#pdf-to-images");
+    await page.waitForSelector('[data-flow="pdf-to-images"]');
+    await page.evaluate(() => (window.showSaveFilePicker = undefined));
+    await choose([path.join(samplesDir, "pages.pdf")]);
+    await page.waitForSelector(".file-row");
+    await page.click('[data-choose="format"][data-value="jpeg"]');
+    await page.fill('[data-input="pages"]', "2-3");
+    await page.click("[data-act=run]");
+    await waitDone();
+    const pics = await download(() => page.click("[data-act=save-all]"));
+    check("PDF to images: chosen pages as JPGs", JSON.stringify(zipNames(pics.bytes)) === JSON.stringify(["pages-2.jpg", "pages-3.jpg"]), zipNames(pics.bytes).join());
+    const one = await download(() => page.click('[data-out="0"]'));
+    check("PDF to images: single picture download", one.bytes[0] === 0xff && one.bytes[1] === 0xd8);
+
+    // images to PDF, then open the result in the editor
+    const img1 = path.join(tmp, "Foto 1.png");
+    const img2 = path.join(tmp, "IMG_2.jpg");
+    await sharp({ create: { width: 900, height: 600, channels: 3, background: { r: 30, g: 120, b: 200 } } }).png().toFile(img1);
+    await sharp({ create: { width: 600, height: 900, channels: 3, background: { r: 200, g: 60, b: 40 } } }).jpeg().withMetadata({ orientation: 6 }).toFile(img2);
+    await page.goto(URL_ + "#images-to-pdf");
+    await page.waitForSelector('[data-flow="images-to-pdf"]');
+    await choose([img1, img2]);
+    await page.waitForFunction(() => document.querySelectorAll(".file-row").length === 2);
+    await page.screenshot({ path: shots + "desktop-tool-images-light.png" });
+    await page.click("[data-act=run]");
+    await waitDone();
+    await page.click("[data-act=open-result]");
+    // the edited scan is still open in the editor: papgi asks before replacing it
+    await page.waitForSelector(".modal-back");
+    check("opening a result over unsaved work asks first", /unsaved changes/.test(await page.textContent(".modal-back")));
+    await page.click(".modal-actions .btn.primary");
+    await page.waitForFunction(() => document.querySelector("#docname .name")?.textContent === "Images.pdf", null, { timeout: 15000 });
+    await waitRendered();
+    const imgInfo = await page.evaluate(() => window.papgi.info.pages.map((p) => [Math.round(p.w), Math.round(p.h)]));
+    check("images to PDF: one A4 page per picture, turned to fit", JSON.stringify(imgInfo) === JSON.stringify([[842, 595], [842, 595]]), JSON.stringify(imgInfo));
+    check("images to PDF: opens in the editor", (await page.evaluate(() => location.hash)) === "#edit" && (await page.textContent("#docname .name")) === "Images.pdf");
+
+    // recent files
+    await page.goto(URL_);
+    await page.waitForSelector(".recent-item", { timeout: 10000 });
+    const recent = await page.$$eval(".recent-item .recent-text b", (bs) => bs.map((b) => b.textContent));
+    check("recent files list opened files (not samples)", recent[0] === "Images.pdf" && !recent.includes("paper.pdf"), recent.join());
+    await page.screenshot({ path: shots + "desktop-home-recent-light.png" });
+    await page.click(".recent-item");
+    await waitRendered();
+    check("recent file reopens in the editor", (await page.textContent("#docname .name")) === "Images.pdf" && (await page.locator(".page").count()) === 2);
+    await page.goto(URL_);
+    await page.waitForSelector(".recent-item");
+    await page.click(".recent-x");
+    await page.waitForTimeout(300);
+    check("recent file can be removed", (await page.locator(".recent-item").count()) === recent.length - 1);
+
+    // dropping two PDFs on the start screen goes to Merge
+    await page.evaluate(async () => {
+      const dt = new DataTransfer();
+      for (const n of ["pages.pdf", "form.pdf"]) dt.items.add(new File([await (await fetch("./samples/" + n)).arrayBuffer()], n, { type: "application/pdf" }));
+      for (const type of ["dragenter", "dragover", "drop"]) window.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => document.querySelectorAll('[data-flow="merge"] .file-row').length === 2, null, { timeout: 15000 });
+    check("dropping PDFs on the start screen opens Merge with them", (await page.evaluate(() => location.hash)) === "#merge");
+
+    // dark start screen
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto(URL_);
+    await page.waitForSelector(".hub-home");
+    await page.screenshot({ path: shots + "desktop-home-dark.png" });
+    await page.emulateMedia({ colorScheme: "light" });
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 
@@ -694,8 +842,18 @@ try {
     const perr = [];
     pp.on("pageerror", (e) => perr.push(e.message));
     await pp.goto(URL_);
-    await pp.waitForSelector(".empty-card");
-    await pp.screenshot({ path: shots + `phone-empty-${scheme}.png` });
+    await pp.waitForSelector(".hub-home");
+    await pp.screenshot({ path: shots + `phone-home-${scheme}.png` });
+    check(`phone ${scheme}: start screen fits`, !(await pp.evaluate(() => document.querySelector("#hub").scrollWidth > window.innerWidth)));
+    await pp.goto(URL_ + "#split");
+    await pp.waitForSelector('[data-flow="split"]');
+    const [pfc] = await Promise.all([pp.waitForEvent("filechooser"), pp.tap(".drop-area")]);
+    await pfc.setFiles([new URL("../public/samples/pages.pdf", import.meta.url).pathname]);
+    await pp.waitForSelector(".file-row");
+    await pp.screenshot({ path: shots + `phone-tool-split-${scheme}.png` });
+    check(`phone ${scheme}: tool page fits`, !(await pp.evaluate(() => document.querySelector("#hub").scrollWidth > window.innerWidth)));
+    await pp.goto(URL_);
+    await pp.waitForSelector(".hub-home");
     await pp.tap('[data-sample="form.pdf"]');
     await pp.waitForSelector(".page.rendered", { timeout: 20000 });
     await pp.waitForTimeout(400);

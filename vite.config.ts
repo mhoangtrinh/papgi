@@ -14,7 +14,7 @@ export default defineConfig({
       manifest: {
         name: "papgi",
         short_name: "papgi",
-        description: "Annotate, fill, sign and rearrange PDFs. Files stay on your device.",
+        description: "Edit, sign, merge, split, compress and convert PDFs. Files stay on your device.",
         theme_color: "#2f6fed",
         background_color: "#f6f7f9",
         display: "standalone",
@@ -26,6 +26,14 @@ export default defineConfig({
           { src: "pwa-512-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
         file_handlers: [{ action: "./", accept: { "application/pdf": [".pdf"] } }],
+        // right-click the installed app (Windows) / long-press (Android) to jump to a tool
+        shortcuts: [
+          { name: "Merge PDFs", url: "./#merge" },
+          { name: "Split PDF", url: "./#split" },
+          { name: "Compress PDF", url: "./#compress" },
+          { name: "Images to PDF", url: "./#images-to-pdf" },
+          { name: "PDF to images", url: "./#pdf-to-images" },
+        ],
         launch_handler: { client_mode: "focus-existing" },
       } as Record<string, unknown>,
       workbox: {
