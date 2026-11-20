@@ -125,8 +125,29 @@ export class App {
           </div>
         </div>
         <button class="icon-btn" id="btn-sidebar" title="Pages panel">${icon("sidebar")}</button>
-        <button class="icon-btn" id="btn-open" title="Open (Ctrl+O)">${icon("open")}</button>
-        <button class="icon-btn" id="btn-save" title="Save (Ctrl+S)">${icon("save")}</button>
+        <div class="menu-wrap">
+          <button class="menu-label" id="btn-file" aria-haspopup="menu" title="Open, save, print">${icon("open", "ml-icon")}<span>File</span></button>
+          <div class="menu left" id="file-menu" role="menu" hidden>
+            <button data-menu="open">${icon("open")}Open…<kbd>Ctrl O</kbd></button>
+            <button data-menu="save" data-needs-doc>${icon("save")}Save<kbd>Ctrl S</kbd></button>
+            <button data-menu="saveas" data-needs-doc>${icon("extract")}Save a copy…<kbd>Ctrl ⇧ S</kbd></button>
+            <button data-menu="print" data-needs-doc>${icon("print")}Print…<kbd>Ctrl P</kbd></button>
+            <hr>
+            <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
+            <button data-menu="about">${icon("file")}About papgi</button>
+          </div>
+        </div>
+        <div class="menu-wrap">
+          <button class="menu-label" id="btn-doc" aria-haspopup="menu" title="Recognize text, sign, pages, compress…">${icon("tools", "ml-icon")}<span>Document</span></button>
+          <div class="menu left" id="doc-menu" role="menu" hidden>
+            <button data-menu="ocr" data-needs-doc>${icon("scan")}Recognize text (OCR)…</button>
+            <button data-menu="signature">${icon("sign")}Add a signature…</button>
+            <button data-menu="insert" data-needs-doc>${icon("insert")}Insert PDF at end…</button>
+            <button data-menu="flatten" data-needs-doc>${icon("flatten")}Flatten forms &amp; annotations</button>
+            <hr>
+            ${TOOL_LIST.filter((t) => FLOWS[t.id]?.takes === "pdf").map((t) => `<button data-goto="${t.id}" data-needs-doc>${icon(t.icon)}${t.id === "merge" ? "Merge with other PDFs…" : `${t.name}…`}</button>`).join("")}
+          </div>
+        </div>
       </div>
       <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name"></span></div>
       <div class="tb-group">
@@ -145,23 +166,6 @@ export class App {
       <div class="tb-group">
         <button class="icon-btn" id="btn-search" title="Search (Ctrl+F)">${icon("search")}</button>
         <button class="icon-btn" id="btn-theme" title="Theme">${icon("auto")}</button>
-        <div class="menu-wrap">
-          <button class="icon-btn" id="btn-more" title="More" aria-haspopup="menu">${icon("more")}</button>
-          <div class="menu" id="menu" role="menu" hidden>
-            <button data-menu="open">${icon("open")}Open…<kbd>Ctrl O</kbd></button>
-            <button data-menu="save">${icon("save")}Save<kbd>Ctrl S</kbd></button>
-            <button data-menu="saveas">${icon("extract")}Save a copy…<kbd>Ctrl ⇧ S</kbd></button>
-            <button data-menu="print">${icon("print")}Print…<kbd>Ctrl P</kbd></button>
-            <hr>
-            <button data-menu="insert">${icon("insert")}Insert PDF at end…</button>
-            <button data-menu="ocr">${icon("scan")}Recognize text (OCR)…</button>
-            <button data-menu="flatten">${icon("flatten")}Flatten forms &amp; annotations</button>
-            <button data-menu="signature">${icon("sign")}Add a signature…</button>
-            <hr>
-            <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
-            <button data-menu="about">${icon("file")}About papgi</button>
-          </div>
-        </div>
       </div>
       <div class="searchbar" id="searchbar" hidden>
         <input id="search-input" type="search" placeholder="Search in document" aria-label="Search">
@@ -196,7 +200,6 @@ export class App {
 
   private bind(): void {
     const on = (id: string, fn: () => void) => this.$(id).addEventListener("click", fn);
-    on("#btn-open", () => this.openPicker());
     on("#empty-open", () => this.openPicker());
     on("#empty-tools", () => (location.hash = ""));
     on("#btn-tools", () => this.toggleMenu(undefined, "#tools-menu"));
@@ -206,7 +209,6 @@ export class App {
       this.toggleMenu(false, "#tools-menu");
       void this.gotoTool(b.dataset.goto as ToolId | "home");
     });
-    on("#btn-save", () => this.save());
     on("#btn-undo", () => this.undo());
     on("#btn-redo", () => this.redo());
     on("#btn-zoom-in", () => this.viewer.setZoom(nextZoom(this.viewer.zoom, 1)));
@@ -220,18 +222,18 @@ export class App {
       this.sidebar.show(this.settings.sidebar);
       this.updateUi();
     });
-    on("#btn-more", () => this.toggleMenu());
-    this.$("#menu").addEventListener("click", (e) => {
-      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-menu]");
-      if (!b) return;
-      this.toggleMenu(false);
-      this.menuAction(b.dataset.menu!);
-    });
+    on("#btn-file", () => this.toggleMenu(undefined, "#file-menu"));
+    on("#btn-doc", () => this.toggleMenu(undefined, "#doc-menu"));
+    for (const id of ["#file-menu", "#doc-menu"])
+      this.$(id).addEventListener("click", (e) => {
+        const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-menu], button[data-goto]");
+        if (!b) return;
+        this.toggleMenu(false, id);
+        if (b.dataset.goto) void this.gotoTool(b.dataset.goto as ToolId);
+        else this.menuAction(b.dataset.menu!);
+      });
     document.addEventListener("pointerdown", (e) => {
-      if (!(e.target as HTMLElement).closest(".menu-wrap")) {
-        this.toggleMenu(false);
-        this.toggleMenu(false, "#tools-menu");
-      }
+      if (!(e.target as HTMLElement).closest(".menu-wrap")) this.closeMenus();
     });
     this.$(".tools").addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tool]");
@@ -374,6 +376,7 @@ export class App {
     }
     if (mod || e.altKey) return;
     if (e.key === "Escape") {
+      this.closeMenus();
       this.viewer.clearSelection();
       this.viewer.selectAnnot(null);
       if (this.settings.tool !== "select") this.setTool("select");
@@ -585,9 +588,20 @@ export class App {
     toast(`Theme: ${this.settings.theme}`);
   }
 
-  private toggleMenu(force?: boolean, sel = "#menu"): void {
+  private toggleMenu(force: boolean | undefined, sel: string): void {
     const m = this.$(sel);
-    m.hidden = force === undefined ? !m.hidden : !force;
+    const show = force === undefined ? m.hidden === true : force;
+    // (one menu at a time)
+    if (show) this.closeMenus();
+    m.hidden = !show;
+    m.previousElementSibling?.classList.toggle("open", show);
+  }
+
+  private closeMenus(): void {
+    for (const id of ["#tools-menu", "#file-menu", "#doc-menu"]) {
+      this.$(id).hidden = true;
+      this.$(id).previousElementSibling?.classList.remove("open");
+    }
   }
 
   private themeIcon(): string {
@@ -969,9 +983,10 @@ export class App {
       this.$("#btn-undo").title = st.canUndo ? `Undo ${st.undoName} (Ctrl+Z)` : "Undo (Ctrl+Z)";
       this.$("#btn-redo").title = st.canRedo ? `Redo ${st.redoName} (Ctrl+Y)` : "Redo (Ctrl+Y)";
     }
-    for (const id of ["#btn-save", "#btn-search", "#btn-zoom-in", "#btn-zoom-out", "#zoom-label", "#page-input"]) {
+    for (const id of ["#btn-search", "#btn-zoom-in", "#btn-zoom-out", "#zoom-label", "#page-input"]) {
       this.$<HTMLButtonElement>(id).disabled = !has;
     }
+    document.querySelectorAll<HTMLButtonElement>(".menu [data-needs-doc]").forEach((b) => (b.disabled = !has));
     if (!has) {
       this.$<HTMLButtonElement>("#btn-undo").disabled = true;
       this.$<HTMLButtonElement>("#btn-redo").disabled = true;

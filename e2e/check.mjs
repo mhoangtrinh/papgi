@@ -707,8 +707,13 @@ try {
   await page.waitForTimeout(500);
   await page.screenshot({ path: shots + "desktop-scan-light.png" });
   // the menu entry
-  await page.click("#btn-more");
-  check("OCR: menu entry", await page.locator('[data-menu="ocr"]').isVisible());
+  await page.click("#btn-doc");
+  check("OCR: in the Document menu (left of the top bar)", await page.locator('#doc-menu [data-menu="ocr"]').isVisible());
+  await page.screenshot({ path: shots + "desktop-doc-menu-light.png" });
+  await page.click("#btn-file");
+  check("File menu: open, save, print; one menu at a time", (await page.locator('#file-menu [data-menu="print"]').isVisible()) && !(await page.locator("#doc-menu").isVisible()));
+  const leftOfZoom = await page.evaluate(() => document.querySelector("#btn-file").getBoundingClientRect().right < document.querySelector("#zoom-label").getBoundingClientRect().left);
+  check("File/Document menus sit on the left", leftOfZoom);
   await page.keyboard.press("Escape");
 
   // ---------------- tools ----------------
@@ -882,6 +887,12 @@ try {
     await pp.waitForSelector(".page.rendered", { timeout: 20000 });
     await pp.waitForTimeout(400);
     await pp.screenshot({ path: shots + `phone-form-${scheme}.png` });
+    check(`phone ${scheme}: papgi (tools), File and Document buttons in the top bar`, (await pp.isVisible("#btn-tools")) && (await pp.isVisible("#btn-file")) && (await pp.isVisible("#btn-doc")));
+    await pp.tap("#btn-doc");
+    await pp.screenshot({ path: shots + `phone-doc-menu-${scheme}.png` });
+    const menuFits = await pp.evaluate(() => { const r = document.querySelector("#doc-menu").getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; });
+    check(`phone ${scheme}: Document menu fits on screen`, menuFits);
+    await pp.tap("#btn-doc");
     const overflow = await pp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     check(`phone ${scheme}: no page overflow`, !overflow);
     check(`phone ${scheme}: no errors`, perr.length === 0, perr.join(" | "));

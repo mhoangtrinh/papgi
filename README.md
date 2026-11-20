@@ -11,7 +11,7 @@ PDF tools that run in your browser: edit text, annotate, fill and sign, merge, s
 
 In Edge/Chrome, **Save (Ctrl+S) writes back to the file you opened**. In other browsers, Save downloads a copy.
 
-The start screen lists all tools and your recent files; the papgi button at the top left of the editor switches tools. Tools have their own addresses (e.g. `…/papgi/#merge`) to bookmark, and an installed papgi offers them on right-click of its icon (Windows).
+The start screen lists all tools and your recent files. In the editor, the top-left bar has the papgi button (switch tools), **File** (open, save, print) and **Document** (recognize text, signatures, insert, flatten, send this PDF to Merge/Split/Compress/PDF to images). Tools have their own addresses (e.g. `…/papgi/#merge`) to bookmark, and an installed papgi offers them on right-click of its icon (Windows).
 
 Updates: when a new version is ready, papgi switches to it right away if no document is open; otherwise it shows a small "Reload" bar so unsaved work isn't lost.
 
@@ -40,10 +40,10 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | Draw | Pen, rectangles, ellipses, arrows, text boxes |
 | Sign | Keep up to 5 signatures, drawn or from a photo/scan (paper removed automatically, crop, recolour, or drop/paste the image); saved on this device, pick one and click to place |
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
-| Print | Ctrl+P or ⋯ → Print: prints the document as it is now (edits, annotations, signatures, filled forms). Chrome/Edge use their PDF print dialog (sharp vector output); iPhone, Safari and Firefox print the rendered pages (about 200 dpi). |
+| Print | Ctrl+P or File → Print: prints the document as it is now (edits, annotations, signatures, filled forms). Chrome/Edge use their PDF print dialog (sharp vector output); iPhone, Safari and Firefox print the rendered pages (about 200 dpi). |
 | Pages | Reorder by drag and drop, rotate, delete, insert other PDFs, add blank pages, save pages as a new PDF |
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
-| **Scans (OCR)** | Recognize text on scanned pages (⋯ menu → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
+| **Scans (OCR)** | Recognize text on scanned pages (Document → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 
 Planned next: PDF to Word (as pictures, or fully editable), bold/italic changes while editing text.
 
