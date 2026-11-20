@@ -1,7 +1,7 @@
 // The stand-alone tools' settings and what they do. The page around them (file list, options,
 // result) is in flow-view.ts; the PDF work happens in the engine worker (engine/tools.ts).
 import type { Engine } from "../engine/client";
-import type { OutFile } from "../engine/tools";
+import type { CompressResult, OutFile } from "../engine/tools";
 import { parseGroups } from "../core/pages";
 import { formatSize } from "../recent";
 import type { ToolId } from "./registry";
@@ -66,11 +66,28 @@ export interface FlowDef {
   /** Problem with the current options, shown instead of running. */
   check?(items: Item[], opts: Record<string, string>, order?: PageSlot[]): string | null;
   run(ctx: RunContext): Promise<RunResult>;
+  /** Shows the result size of each choice of one option before running. */
+  estimate?: { key: string; size(engine: Engine, items: Item[], value: string): Promise<{ before: number; after: number }> };
 }
 
 const stem = (name: string) => name.replace(/\.[^.]+$/, "");
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const src = (it: Item) => ({ name: it.name, bytes: it.bytes, password: it.password });
+
+/** Compressed copies, made once per file and level (for the size preview and the result). */
+const compressCache = new WeakMap<Item, Map<string, Promise<CompressResult>>>();
+const compressPreset = (level: string) => (level === "light" ? { dpi: 0, quality: 80 } : level === "strong" ? { dpi: 96, quality: 60 } : { dpi: 150, quality: 75 });
+function compressed(engine: Engine, it: Item, level: string): Promise<CompressResult> {
+  let m = compressCache.get(it);
+  if (!m) compressCache.set(it, (m = new Map()));
+  let p = m.get(level);
+  if (!p) {
+    p = engine.toolCompress(src(it), compressPreset(level));
+    m.set(level, p);
+    p.catch(() => m.delete(level));
+  }
+  return p;
+}
 
 export const FLOWS: Record<string, FlowDef> = {
   merge: {
@@ -160,14 +177,26 @@ export const FLOWS: Record<string, FlowDef> = {
       },
     ],
     action: (items) => (items.length > 1 ? `Compress ${items.length} files` : "Compress"),
+    estimate: {
+      key: "level",
+      async size(engine, items, level) {
+        let before = 0;
+        let after = 0;
+        for (const it of items) {
+          const r = await compressed(engine, it, level);
+          before += r.before;
+          after += Math.min(r.after, r.before);
+        }
+        return { before, after };
+      },
+    },
     async run({ engine, items, opts, progress, cancelled }) {
-      const preset = opts.level === "light" ? { dpi: 0, quality: 80 } : opts.level === "strong" ? { dpi: 96, quality: 60 } : { dpi: 150, quality: 75 };
       const files: OutFile[] = [];
       let before = 0;
       let after = 0;
       for (let i = 0; i < items.length && !cancelled(); i++) {
         progress(i, items.length, `Compressing ${items[i].name}…`);
-        const r = await engine.toolCompress(src(items[i]), preset);
+        const r = await compressed(engine, items[i], opts.level);
         before += r.before;
         after += r.after;
         files.push({ name: `${stem(items[i].name)} (compressed).pdf`, bytes: r.bytes, type: "application/pdf" });

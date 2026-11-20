@@ -797,6 +797,13 @@ try {
     await page.click('#tools-menu [data-goto="compress"]');
     await page.waitForSelector('[data-flow="compress"] .file-row');
     check("tools menu: Compress opens with this PDF", (await page.textContent(".file-row")).includes("scan.pdf") && (await page.evaluate(() => location.hash)) === "#compress");
+    // the size of each level shows before compressing
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-est]")].every((e) => /\d/.test(e.textContent)), null, { timeout: 30000 });
+    const ests = await page.$$eval("[data-est]", (e) => e.map((x) => x.textContent));
+    check("compress: sizes shown before running", ests.length === 3 && /KB|MB/.test(ests[0]) && /KB|MB|already/.test(await page.textContent(".est-line")), ests.join() + " / " + (await page.textContent(".est-line")));
+    await page.click('[data-choose="level"][data-value="strong"]');
+    check("compress: the line follows the chosen level", (await page.textContent(".est-line")).includes(ests[2]), await page.textContent(".est-line"));
+    await page.screenshot({ path: shots + "desktop-tool-compress-estimate-light.png" });
     await page.click("[data-act=run]");
     await waitDone();
     const comp = await download(() => page.click("[data-act=save-all]"));
@@ -851,6 +858,22 @@ try {
     check("merge: the PDF follows the page view", mdoc.countPages() === formPages + 4 && text(1).includes("page 5 of 5") && b0[2] - b0[0] > b0[3] - b0[1], `${mdoc.countPages()} pages; p2: ${text(1).slice(0, 30)}`);
     // the order resets to file order
     await page.click("[data-act=reset-order]");
+    // full-size viewer: opens at the double-clicked page, arrows move, Esc closes
+    await page.dblclick(".flow .ptile >> nth=2");
+    await page.waitForFunction(() => document.querySelectorAll(".pv-sheet.ready").length >= 1, null, { timeout: 15000 });
+    check("merge: viewer opens at the chosen page", (await page.locator(".pv-page").count()) === formPages + 5 && (await page.textContent(".pv-where")).startsWith("Page 3 of"), await page.textContent(".pv-where"));
+    await page.screenshot({ path: shots + "desktop-tool-merge-view-light.png" });
+    await page.keyboard.press("ArrowDown");
+    await page.waitForFunction(() => document.querySelector(".pv-where").textContent.startsWith("Page 4"), null, { timeout: 5000 }).catch(() => {});
+    check("merge viewer: next page", (await page.textContent(".pv-where")).startsWith("Page 4"), await page.textContent(".pv-where"));
+    await page.keyboard.press("Escape");
+    check("merge viewer: Esc closes, the tool stays", (await page.locator(".pviewer").count()) === 0 && (await page.evaluate(() => location.hash)) === "#merge");
+    // bigger tiles
+    const w0 = (await page.locator(".flow .ptile >> nth=0").boundingBox()).width;
+    await page.fill("[data-size]", "240");
+    const w1 = (await page.locator(".flow .ptile >> nth=0").boundingBox()).width;
+    check("merge: page size slider", w1 > w0 * 1.5, `${w0} -> ${w1}`);
+    await page.fill("[data-size]", "124");
     check("merge: reset order", (await labels()).join(" ") === [...Array(formPages)].map((_, i) => `A·${i + 1}`).concat([1, 2, 3, 4, 5].map((i) => `B·${i}`)).join(" "));
 
     // split, opened straight from its address
@@ -998,6 +1021,14 @@ try {
     await pfc.setFiles([new URL("../public/samples/pages.pdf", import.meta.url).pathname]);
     await pp.waitForSelector(".file-row");
     await pp.screenshot({ path: shots + `phone-tool-split-${scheme}.png` });
+    await pp.tap(".split-view [data-act=view]");
+    await pp.waitForFunction(() => document.querySelectorAll(".pv-sheet.ready").length >= 1, null, { timeout: 15000 });
+    await pp.waitForTimeout(200);
+    await pp.screenshot({ path: shots + `phone-tool-view-${scheme}.png` });
+    const sheetW = (await pp.locator(".pv-sheet >> nth=0").boundingBox()).width;
+    check(`phone ${scheme}: viewer pages fit the screen`, sheetW > 300 && sheetW <= 390, String(sheetW));
+    await pp.tap('[data-pv="close"]');
+    check(`phone ${scheme}: viewer closes`, (await pp.locator(".pviewer").count()) === 0 && (await pp.evaluate(() => location.hash)) === "#split");
     check(`phone ${scheme}: tool page fits`, !(await pp.evaluate(() => document.querySelector("#hub").scrollWidth > window.innerWidth)));
     await pp.goto(URL_);
     await pp.waitForSelector(".hub-home");

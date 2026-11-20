@@ -7,11 +7,26 @@ import { saveFile } from "../files";
 import { icon } from "../ui/icons";
 import { askPassword, confirmDialog, toast } from "../ui/dialogs";
 import { zip } from "../core/zip";
-import { ago, forgetAll, forgetFile, formatSize, listRecent, readRecent, type RecentFile } from "../recent";
+import {
+  ago,
+  forgetAll,
+  forgetFile,
+  formatSize,
+  listRecent,
+  readRecent,
+  type RecentFile,
+} from "../recent";
 import { TOOL_LIST, tool, type ToolDef, type ToolId } from "./registry";
-import { FLOWS, type FlowDef, type Item, type Option, type PageSlot } from "./flows";
+import {
+  FLOWS,
+  type FlowDef,
+  type Item,
+  type Option,
+  type PageSlot,
+} from "./flows";
 import { FILE_COLORS, PageGrid, type GridFile } from "./pagegrid";
 import { everyN, parseGroups, splitNames } from "../core/pages";
+import { openViewer } from "./viewer";
 import { isPdf, normalizeImage, looksLikeImage } from "./images";
 
 export interface HubHost {
@@ -37,7 +52,8 @@ export const SAMPLES = [
 ];
 
 const OPTS_KEY = "papgi.tools.v1";
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const esc = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 function loadOpts(id: string): Record<string, string> {
   try {
@@ -92,7 +108,10 @@ export class Hub {
     // (drop areas and recent files act as buttons from the keyboard too)
     this.el.addEventListener("keydown", (e) => {
       const t = e.target as HTMLElement;
-      if ((e.key === "Enter" || e.key === " ") && t.getAttribute("role") === "button") {
+      if (
+        (e.key === "Enter" || e.key === " ") &&
+        t.getAttribute("role") === "button"
+      ) {
         e.preventDefault();
         t.click();
       }
@@ -112,17 +131,27 @@ export class Hub {
     if (!changed) return;
     if (route !== this.route) this.reset();
     this.route = route;
-    this.flow = route === "home" || route === "open" ? null : (FLOWS[route] ?? null);
-    if (this.flow) this.opts = { ...Object.fromEntries(this.flow.options.map((o) => [o.key, o.value])), ...loadOpts(route) };
+    this.flow =
+      route === "home" || route === "open" ? null : (FLOWS[route] ?? null);
+    if (this.flow)
+      this.opts = {
+        ...Object.fromEntries(this.flow.options.map((o) => [o.key, o.value])),
+        ...loadOpts(route),
+      };
     this.render();
     this.el.scrollTop = 0;
-    document.title = this.flow ? `${this.flow.title} · papgi` : route === "open" ? "Open PDF · papgi" : "papgi";
+    document.title = this.flow
+      ? `${this.flow.title} · papgi`
+      : route === "open"
+        ? "Open PDF · papgi"
+        : "papgi";
   }
 
   /** Switch now (the address changes too, for back/forward and bookmarks). */
   go(route: "home" | ToolId): void {
     const hash = route === "home" ? "" : `#${route}`;
-    if (location.hash !== hash) history.pushState(null, "", hash || location.pathname + location.search);
+    if (location.hash !== hash)
+      history.pushState(null, "", hash || location.pathname + location.search);
     this.show(route);
   }
 
@@ -138,12 +167,20 @@ export class Hub {
     if (this.route === "open") {
       const pdf = files.find((f) => isPdf(f.bytes));
       if (pdf) return void this.host.openInEditor(pdf);
-      return toast(looksLikeImage(files[0].name, files[0].bytes) ? "That's a picture: use Images to PDF to make a PDF from it" : "That isn't a PDF", "error");
+      return toast(
+        looksLikeImage(files[0].name, files[0].bytes)
+          ? "That's a picture: use Images to PDF to make a PDF from it"
+          : "That isn't a PDF",
+        "error",
+      );
     }
     // start screen: pick the tool that fits
     const pdfs = files.filter((f) => isPdf(f.bytes));
-    const images = files.filter((f) => !isPdf(f.bytes) && looksLikeImage(f.name, f.bytes));
-    if (pdfs.length === 1 && files.length === 1) return void this.host.openInEditor(pdfs[0]);
+    const images = files.filter(
+      (f) => !isPdf(f.bytes) && looksLikeImage(f.name, f.bytes),
+    );
+    if (pdfs.length === 1 && files.length === 1)
+      return void this.host.openInEditor(pdfs[0]);
     if (pdfs.length > 1 && !images.length) {
       this.go("merge");
       return this.addFiles(pdfs);
@@ -173,8 +210,14 @@ export class Hub {
 
   private header(): string {
     const doc = this.host.editorDoc();
-    const t = this.flow ? tool(this.flow.id) : this.route === "open" ? tool("open") : undefined;
-    const title = t ? `<div class="hub-title">${icon(t.icon)}<span>${t.name}</span></div>` : "";
+    const t = this.flow
+      ? tool(this.flow.id)
+      : this.route === "open"
+        ? tool("open")
+        : undefined;
+    const title = t
+      ? `<div class="hub-title">${icon(t.icon)}<span>${t.name}</span></div>`
+      : "";
     return `
       <header class="hub-top">
         <button class="hub-brand" data-go="home" title="All tools"><span class="logo">${icon("file")}</span><span>papgi</span></button>
@@ -188,7 +231,13 @@ export class Hub {
   }
 
   private render(): void {
-    this.el.innerHTML = this.header() + (this.flow ? this.flowHtml(this.flow) : this.route === "open" ? this.openHtml() : this.homeHtml());
+    this.el.innerHTML =
+      this.header() +
+      (this.flow
+        ? this.flowHtml(this.flow)
+        : this.route === "open"
+          ? this.openHtml()
+          : this.homeHtml());
     if (this.flow?.pageView) {
       this.grid = new PageGrid({
         order: () => this.order,
@@ -202,6 +251,7 @@ export class Hub {
         file: (id) => this.files.get(id),
         thumb: (s) => this.thumbs.get(`${s.item}:${s.page}`) ?? "",
         scroller: this.el,
+        open: (i) => this.view(i),
       });
       this.el.querySelector(".grid-host")!.append(this.grid.el);
     }
@@ -273,7 +323,8 @@ export class Hub {
   }
 
   private flowHtml(f: FlowDef): string {
-    const what = f.takes === "pdf" ? (f.multiple ? "PDFs" : "a PDF") : "pictures";
+    const what =
+      f.takes === "pdf" ? (f.multiple ? "PDFs" : "a PDF") : "pictures";
     return `
       <main class="hub-main flow${f.pageView && f.takes === "image" ? " files-as-pages" : ""}" data-flow="${f.id}">
         <div class="flow-head">
@@ -290,8 +341,8 @@ export class Hub {
         ${
           f.pageView
             ? `<section class="flow-pages" hidden>
-          <div class="sec-head"><h2>${f.takes === "image" ? "Pictures" : "Pages"} <span class="muted page-count"></span></h2><button class="btn flat small" data-act="reset-order" title="Everything back, in the original order">Reset</button></div>
-          <p class="muted small pages-hint">Preview: drag to reorder (on a phone: press and hold, then drag). Hover to turn or remove.</p>
+          <div class="sec-head"><h2>${f.takes === "image" ? "Pictures" : "Pages"} <span class="muted page-count"></span></h2>${this.sizeHtml()}<button class="btn flat small" data-act="view" title="See every page full size, in this order">${icon("eye")}View</button><button class="btn flat small" data-act="reset-order" title="Everything back, in the original order">Reset</button></div>
+          <p class="muted small pages-hint">Preview: drag to reorder (on a phone: press and hold, then drag). Hover to turn or remove; double-click to see a page full size.</p>
           <div class="grid-host"></div>
         </section>`
             : ""
@@ -300,7 +351,7 @@ export class Hub {
         ${
           f.splitView
             ? `<section class="split-view" hidden>
-          <div class="sec-head"><h2>Preview <span class="muted split-count"></span></h2><button class="btn flat small" data-act="reset-parts" title="Back to what the options above give">Reset</button></div>
+          <div class="sec-head"><h2>Preview <span class="muted split-count"></span></h2>${this.sizeHtml()}<button class="btn flat small" data-act="view" title="See every page full size, file by file">${icon("eye")}View</button><button class="btn flat small" data-act="reset-parts" title="Back to what the options above give">Reset</button></div>
           <p class="muted small pages-hint">Each row becomes one file. Click ✂ between two pages to cut there, “Join” to put a file together with the one before; hover a page to turn or remove it.</p>
           <div class="split-rows"></div>
         </section>`
@@ -317,19 +368,25 @@ export class Hub {
 
   private optionHtml(o: Option): string {
     const v = this.opts[o.key] ?? o.value;
-    const show = !("showIf" in o) || !o.showIf || this.opts[o.showIf[0]] === o.showIf[1];
+    const show =
+      !("showIf" in o) || !o.showIf || this.opts[o.showIf[0]] === o.showIf[1];
     const wrap = (inner: string, hint = "") =>
       `<div class="opt" data-opt="${o.key}" ${show ? "" : "hidden"}><span class="opt-label">${o.label}</span><div class="opt-body">${inner}${hint ? `<p class="muted small opt-hint">${hint}</p>` : ""}</div></div>`;
     if (o.kind === "choice") {
       const cur = o.choices.find((c) => c[0] === v) ?? o.choices[0];
       return wrap(
-        `<div class="choice" role="radiogroup" aria-label="${o.label}">${o.choices.map(([val, label]) => `<button role="radio" aria-checked="${val === cur[0]}" class="${val === cur[0] ? "on" : ""}" data-choose="${o.key}" data-value="${val}">${label}</button>`).join("")}</div>`,
+        `<div class="choice" role="radiogroup" aria-label="${o.label}">${o.choices.map(([val, label]) => `<button role="radio" aria-checked="${val === cur[0]}" class="${val === cur[0] ? "on" : ""}" data-choose="${o.key}" data-value="${val}">${label}${this.flow?.estimate?.key === o.key ? `<small class="est" data-est="${val}"></small>` : ""}</button>`).join("")}</div>`,
         cur[2] ?? "",
       );
     }
     if (o.kind === "range")
-      return wrap(`<label class="range"><input type="range" data-input="${o.key}" min="${o.min}" max="${o.max}" step="${o.step}" value="${esc(v)}"><output>${esc(v)}${o.unit}</output></label>`);
-    return wrap(`<input class="field" type="text" data-input="${o.key}" placeholder="${esc(o.placeholder)}" value="${esc(v)}" autocomplete="off">`, o.hint ?? "");
+      return wrap(
+        `<label class="range"><input type="range" data-input="${o.key}" min="${o.min}" max="${o.max}" step="${o.step}" value="${esc(v)}"><output>${esc(v)}${o.unit}</output></label>`,
+      );
+    return wrap(
+      `<input class="field" type="text" data-input="${o.key}" placeholder="${esc(o.placeholder)}" value="${esc(v)}" autocomplete="off">`,
+      o.hint ?? "",
+    );
   }
 
   /** File list, run button and errors (without re-rendering options, so typing isn't disturbed). */
@@ -354,14 +411,24 @@ export class Hub {
     drop.classList.toggle("compact", this.items.length > 0);
     drop.hidden = !f.multiple && this.items.length > 0;
     const add = drop.querySelector("b")!;
-    add.textContent = this.items.length ? (f.takes === "pdf" ? "Add more PDFs" : "Add more pictures") : `Choose ${f.takes === "pdf" ? (f.multiple ? "PDFs" : "a PDF") : "pictures"}`;
+    add.textContent = this.items.length
+      ? f.takes === "pdf"
+        ? "Add more PDFs"
+        : "Add more pictures"
+      : `Choose ${f.takes === "pdf" ? (f.multiple ? "PDFs" : "a PDF") : "pictures"}`;
     if (f.pageView) {
       this.renderPagesHead();
       this.grid?.render();
     }
     if (f.splitView) this.renderSplit();
     this.renderAction();
+    const estKey = `${f.id}|${this.items.map((it) => it.id).join()}`;
+    if (estKey !== this.estKey) {
+      this.estKey = estKey;
+      void this.estimate();
+    }
   }
+  private estKey = "";
 
   private renderPagesHead(): void {
     const sec = this.el.querySelector<HTMLElement>(".flow-pages");
@@ -369,7 +436,8 @@ export class Hub {
     sec.hidden = !this.items.length;
     const total = this.items.reduce((n, it) => n + it.pages, 0);
     const n = this.order.length;
-    sec.querySelector(".page-count")!.textContent = n === total ? `(${n})` : `(${n} of ${total})`;
+    sec.querySelector(".page-count")!.textContent =
+      n === total ? `(${n})` : `(${n} of ${total})`;
   }
 
   // ---------- split preview ----------
@@ -380,9 +448,15 @@ export class Hub {
     if (!it) return void (this.parts = []);
     const o = this.opts;
     const groups =
-      o.mode === "every" ? everyN(it.pages, Number(o.n) || 1) : o.mode === "ranges" ? parseGroups(o.ranges ?? "", it.pages) : everyN(it.pages, 1);
+      o.mode === "every"
+        ? everyN(it.pages, Number(o.n) || 1)
+        : o.mode === "ranges"
+          ? parseGroups(o.ranges ?? "", it.pages)
+          : everyN(it.pages, 1);
     if (!groups) return;
-    this.parts = groups.map((g) => g.map((page) => ({ item: it.id, page, rotate: 0 })));
+    this.parts = groups.map((g) =>
+      g.map((page) => ({ item: it.id, page, rotate: 0 })),
+    );
   }
 
   private renderSplit(): void {
@@ -391,22 +465,35 @@ export class Hub {
     sec.hidden = !this.items.length;
     if (!this.items.length) return;
     const files = this.parts.filter((p) => p.length).length;
-    sec.querySelector(".split-count")!.textContent = `(${files} ${files === 1 ? "file" : "files"})`;
+    sec.querySelector(".split-count")!.textContent =
+      `(${files} ${files === 1 ? "file" : "files"})`;
     const color = this.files.get(this.items[0].id)?.color ?? "var(--accent)";
     const stemName = this.items[0].name.replace(/\.[^.]+$/, "");
     const kept = this.parts.filter((p) => p.length);
-    const names = splitNames(stemName, kept.map((p) => p.map((s) => s.page)), this.items[0].pages);
+    const names = splitNames(
+      stemName,
+      kept.map((p) => p.map((s) => s.page)),
+      this.items[0].pages,
+    );
     sec.querySelector(".split-rows")!.innerHTML = this.parts
       .map((part, r) => {
         if (!part.length) return "";
         const pages = part.map((s) => s.page + 1);
         const run = pages.every((v, i) => i === 0 || v === pages[i - 1] + 1);
-        const label = pages.length === 1 ? `page ${pages[0]}` : run ? `pages ${pages[0]}–${pages[pages.length - 1]}` : `${pages.length} pages`;
+        const label =
+          pages.length === 1
+            ? `page ${pages[0]}`
+            : run
+              ? `pages ${pages[0]}–${pages[pages.length - 1]}`
+              : `${pages.length} pages`;
         const tiles = part
           .map((s, c) => {
             const src = this.thumbs.get(`${s.item}:${s.page}`) ?? "";
             const turned = s.rotate % 180 !== 0;
-            const cut = c < part.length - 1 ? `<button class="scut" data-scut="${r},${c}" title="Cut here: pages after this become a new file">✂</button>` : "";
+            const cut =
+              c < part.length - 1
+                ? `<button class="scut" data-scut="${r},${c}" title="Cut here: pages after this become a new file">✂</button>`
+                : "";
             return `<div class="ptile stile" style="--file:${color}">
                 <div class="pthumb${turned ? " turned" : ""}">${src ? `<img src="${src}" alt="" draggable="false" style="transform: rotate(${s.rotate}deg)">` : `<span class="pload"></span>`}</div>
                 <div class="pmeta"><span class="pnum">${s.page + 1}</span></div>
@@ -423,12 +510,105 @@ export class Hub {
       .join("");
   }
 
+  /** Tile size of the page views (a slider; remembered). */
+  private sizeHtml(): string {
+    return `<label class="tile-size" title="Size of the pages">${icon("zoomOut")}<input type="range" min="90" max="300" step="10" value="${tileSize()}" data-size aria-label="Size of the pages">${icon("zoomIn")}</label>`;
+  }
+
+  /** Full-size look at the pages in their current order (split: file by file). */
+  private bigPics = new Map<string, Promise<string>>();
+  private view(at: number): void {
+    const split = !!this.flow?.splitView;
+    const slots = split ? this.parts.flat() : this.order;
+    if (!slots.length) return;
+    let fileNo = 0;
+    const fileOf = split
+      ? this.parts.flatMap((p) =>
+          p.length ? (fileNo++, p.map(() => fileNo)) : [],
+        )
+      : [];
+    const big = (s: PageSlot): Promise<string> => {
+      const key = `${s.item}:${s.page}`;
+      let p = this.bigPics.get(key);
+      if (!p) {
+        const it = this.items.find((x) => x.id === s.item);
+        if (!it) return Promise.reject(new Error("gone"));
+        if (it.kind === "image")
+          p = Promise.resolve(
+            URL.createObjectURL(
+              new Blob([it.bytes as Uint8Array<ArrayBuffer>]),
+            ),
+          );
+        else {
+          // sharp at the column's width (pages assumed about Letter/A4 wide)
+          const px =
+            Math.min(880, innerWidth - 32) * Math.min(2, devicePixelRatio || 1);
+          const dpi = Math.round(Math.max(72, Math.min(200, (px * 72) / 600)));
+          p = this.host.engine
+            .toolPagesToImages(
+              { name: it.name, bytes: it.bytes, password: it.password },
+              [s.page],
+              { format: "jpeg", dpi, quality: 85 },
+            )
+            .then(([b]) =>
+              URL.createObjectURL(
+                new Blob([b as Uint8Array<ArrayBuffer>], {
+                  type: "image/jpeg",
+                }),
+              ),
+            );
+        }
+        this.bigPics.set(key, p);
+        p.catch(() => this.bigPics.delete(key));
+      }
+      return p;
+    };
+    const many = this.items.length > 1;
+    const pages = slots.map((s, i) => {
+      const it = this.items.find((x) => x.id === s.item);
+      const gf = this.files.get(s.item);
+      const label = split
+        ? `file ${fileOf[i]}, page ${s.page + 1}`
+        : it?.kind === "image"
+          ? (it?.name ?? "")
+          : `${many && gf?.letter ? `${gf.letter} · ` : ""}page ${s.page + 1}${many && it ? ` of ${it.name}` : ""}`;
+      return {
+        rotate: s.rotate,
+        label,
+        color: gf?.color,
+        thumb:
+          it?.kind === "image"
+            ? it.thumb
+            : this.thumbs.get(`${s.item}:${s.page}`),
+        load: () => big(s),
+      };
+    });
+    openViewer(
+      pages,
+      Math.max(0, Math.min(at, pages.length - 1)),
+      split ? "Split preview" : (this.flow?.title ?? "Pages"),
+      () => {
+        // the big pictures take memory: let them go
+        for (const p of this.bigPics.values())
+          void p.then(
+            (u) => URL.revokeObjectURL(u),
+            () => {},
+          );
+        this.bigPics.clear();
+      },
+    );
+  }
+
   private editParts(d: DOMStringMap): void {
-    const [r, c] = (d.scut ?? d.sturn ?? d.sdel ?? `${d.sjoin},0`).split(",").map(Number);
+    const [r, c] = (d.scut ?? d.sturn ?? d.sdel ?? `${d.sjoin},0`)
+      .split(",")
+      .map(Number);
     const parts = this.parts.filter((p) => p.length).map((p) => p.slice());
     if (d.scut !== undefined) parts.splice(r + 1, 0, parts[r].splice(c + 1));
-    if (d.sjoin !== undefined && r > 0) parts.splice(r - 1, 2, [...parts[r - 1], ...parts[r]]);
-    if (d.sturn !== undefined) parts[r][c] = { ...parts[r][c], rotate: (parts[r][c].rotate + 90) % 360 };
+    if (d.sjoin !== undefined && r > 0)
+      parts.splice(r - 1, 2, [...parts[r - 1], ...parts[r]]);
+    if (d.sturn !== undefined)
+      parts[r][c] = { ...parts[r][c], rotate: (parts[r][c].rotate + 90) % 360 };
     if (d.sdel !== undefined) parts[r].splice(c, 1);
     this.parts = parts.filter((p) => p.length);
     this.results = [];
@@ -441,17 +621,25 @@ export class Hub {
   private async loadThumbs(it: Item): Promise<void> {
     for (let k = 0; k < it.pages; k += 6) {
       if (!this.files.has(it.id)) return;
-      const batch = [...Array(Math.min(6, it.pages - k)).keys()].map((j) => k + j);
+      const batch = [...Array(Math.min(6, it.pages - k)).keys()].map(
+        (j) => k + j,
+      );
       let imgs: Uint8Array[];
       try {
-        imgs = await this.host.engine.toolPagesToImages({ name: it.name, bytes: it.bytes, password: it.password }, batch, { format: "jpeg", dpi: 36, quality: 70 });
+        imgs = await this.host.engine.toolPagesToImages(
+          { name: it.name, bytes: it.bytes, password: it.password },
+          batch,
+          { format: "jpeg", dpi: 48, quality: 70 },
+        );
       } catch {
         return;
       }
       if (!this.files.has(it.id)) return;
       imgs.forEach((b, j) => {
         const key = `${it.id}:${batch[j]}`;
-        const url = URL.createObjectURL(new Blob([b as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
+        const url = URL.createObjectURL(
+          new Blob([b as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }),
+        );
         this.thumbs.set(key, url);
         this.grid?.setThumb(key, url);
         const box = this.el.querySelectorAll(".split-view .stile .pthumb");
@@ -465,11 +653,88 @@ export class Hub {
     if (!f) return;
     const run = this.el.querySelector<HTMLButtonElement>("[data-act=run]")!;
     const err = this.el.querySelector<HTMLElement>(".flow-error")!;
-    const problem = this.items.length >= f.min ? (f.check?.(this.items, this.opts, f.pageView ? this.order : undefined) ?? null) : null;
+    const problem =
+      this.items.length >= f.min
+        ? (f.check?.(
+            this.items,
+            this.opts,
+            f.pageView ? this.order : undefined,
+          ) ?? null)
+        : null;
     run.innerHTML = `${icon(tool(f.id)!.icon)}${f.action(this.items, this.order)}`;
     run.disabled = this.running || this.items.length < f.min || !!problem;
     err.textContent = problem ?? "";
     run.hidden = this.running;
+  }
+
+  /** Result size of each choice (Compress), worked out in the background. */
+  private estSeq = 0;
+  private estimates = new Map<
+    string,
+    { before: number; after: number } | null
+  >();
+  private async estimate(): Promise<void> {
+    const f = this.flow;
+    const seq = ++this.estSeq;
+    this.estimates.clear();
+    this.showEstimates();
+    if (!f?.estimate || !this.items.length) return;
+    const o = f.options.find((x) => x.key === f.estimate!.key);
+    if (o?.kind !== "choice") return;
+    const items = this.items.slice();
+    // the chosen level first, then the others
+    const values = o.choices
+      .map((c) => c[0])
+      .sort(
+        (a, b) =>
+          Number(b === this.opts[o.key]) - Number(a === this.opts[o.key]),
+      );
+    for (const v of values) {
+      let r: { before: number; after: number } | null = null;
+      try {
+        r = await f.estimate.size(this.host.engine, items, v);
+      } catch {
+        /* (a password or a broken file: the run explains it) */
+      }
+      if (seq !== this.estSeq) return;
+      this.estimates.set(v, r);
+      this.showEstimates();
+    }
+  }
+
+  private showEstimates(): void {
+    const f = this.flow;
+    if (!f?.estimate) return;
+    const row = this.el.querySelector<HTMLElement>(
+      `[data-opt="${f.estimate.key}"]`,
+    );
+    if (!row) return;
+    const pending = this.items.length > 0;
+    row.querySelectorAll<HTMLElement>("[data-est]").forEach((el) => {
+      const r = this.estimates.get(el.dataset.est!);
+      el.textContent = r
+        ? formatSize(r.after)
+        : pending && !this.estimates.has(el.dataset.est!)
+          ? "…"
+          : "";
+    });
+    let line = row.querySelector<HTMLElement>(".est-line");
+    if (!line) {
+      line = document.createElement("div");
+      line.className = "est-line";
+      row.querySelector(".opt-hint")?.after(line);
+    }
+    const r = this.estimates.get(this.opts[f.estimate.key]);
+    line.hidden = !pending;
+    line.innerHTML = !pending
+      ? ""
+      : r === undefined
+        ? `<span class="spin"></span> Working out the new size…`
+        : r === null
+          ? ""
+          : r.after < r.before * 0.98
+            ? `<b>${formatSize(r.before)} → ${formatSize(r.after)}</b> <span class="est-save">${Math.round((1 - r.after / r.before) * 100)}% smaller</span>`
+            : `<b>${formatSize(r.before)}</b>: already about as small as it gets at this level`;
   }
 
   private syncOptions(): void {
@@ -478,16 +743,21 @@ export class Hub {
     for (const o of f.options) {
       const row = this.el.querySelector<HTMLElement>(`[data-opt="${o.key}"]`);
       if (!row) continue;
-      if ("showIf" in o && o.showIf) row.hidden = this.opts[o.showIf[0]] !== o.showIf[1];
+      if ("showIf" in o && o.showIf)
+        row.hidden = this.opts[o.showIf[0]] !== o.showIf[1];
       if (o.kind === "choice") {
-        const cur = o.choices.find((c) => c[0] === this.opts[o.key]) ?? o.choices[0];
-        row.querySelectorAll<HTMLButtonElement>("[data-choose]").forEach((b) => {
-          const on = b.dataset.value === cur[0];
-          b.classList.toggle("on", on);
-          b.setAttribute("aria-checked", String(on));
-        });
+        const cur =
+          o.choices.find((c) => c[0] === this.opts[o.key]) ?? o.choices[0];
+        row
+          .querySelectorAll<HTMLButtonElement>("[data-choose]")
+          .forEach((b) => {
+            const on = b.dataset.value === cur[0];
+            b.classList.toggle("on", on);
+            b.setAttribute("aria-checked", String(on));
+          });
         const hint = row.querySelector(".opt-hint");
         if (hint) hint.textContent = cur[2] ?? "";
+        if (f.estimate?.key === o.key) this.showEstimates();
       }
     }
     this.renderAction();
@@ -515,7 +785,14 @@ export class Hub {
       return this.renderRecent();
     }
     if (d.act === "clear-recent") {
-      if (await confirmDialog("Clear recent files?", "papgi forgets the list (and any copies it kept). Your files themselves aren't touched.", "Clear", true)) {
+      if (
+        await confirmDialog(
+          "Clear recent files?",
+          "papgi forgets the list (and any copies it kept). Your files themselves aren't touched.",
+          "Clear",
+          true,
+        )
+      ) {
         await forgetAll();
         await this.renderRecent();
       }
@@ -533,12 +810,15 @@ export class Hub {
       URL.revokeObjectURL(it.thumb);
       this.order = this.order.filter((o) => o.item !== it.id);
       this.files.delete(it.id);
-      for (const [k, u] of this.thumbs) if (k.startsWith(`${it.id}:`)) (URL.revokeObjectURL(u), this.thumbs.delete(k));
+      for (const [k, u] of this.thumbs)
+        if (k.startsWith(`${it.id}:`))
+          (URL.revokeObjectURL(u), this.thumbs.delete(k));
       this.results = [];
       this.renderResult();
       return this.renderFiles();
     }
-    if (d.move !== undefined) return this.moveItem(Number(d.move), Number(d.move) + Number(d.dir));
+    if (d.move !== undefined)
+      return this.moveItem(Number(d.move), Number(d.move) + Number(d.dir));
     if (d.choose) {
       this.opts[d.choose] = d.value!;
       saveOpts(this.flow!.id, this.opts);
@@ -549,9 +829,16 @@ export class Hub {
       return this.syncOptions();
     }
     if (d.act === "run") return this.run();
+    if (d.act === "view") return this.view(0);
     if (d.scut || d.sjoin || d.sturn || d.sdel) return this.editParts(d);
     if (d.act === "reset-order") {
-      this.order = this.items.flatMap((it) => [...Array(it.pages).keys()].map((page) => ({ item: it.id, page, rotate: 0 })));
+      this.order = this.items.flatMap((it) =>
+        [...Array(it.pages).keys()].map((page) => ({
+          item: it.id,
+          page,
+          rotate: 0,
+        })),
+      );
       this.results = [];
       this.renderResult();
       return this.renderFiles();
@@ -570,7 +857,12 @@ export class Hub {
     if (d.act === "save-all") return this.saveAll();
     if (d.act === "share") return this.share();
     // (a copy: the engine takes over the bytes it is given, and the result stays downloadable)
-    if (d.act === "open-result") return void this.host.openInEditor({ name: this.results[0].name, bytes: this.results[0].bytes.slice(), handle: null });
+    if (d.act === "open-result")
+      return void this.host.openInEditor({
+        name: this.results[0].name,
+        bytes: this.results[0].bytes.slice(),
+        handle: null,
+      });
     if (d.act === "again") {
       this.reset();
       this.cancel = false;
@@ -580,6 +872,13 @@ export class Hub {
 
   private onInput(e: Event): void {
     const t = e.target as HTMLInputElement;
+    if (t.dataset.size !== undefined) {
+      setTileSize(Number(t.value));
+      this.el
+        .querySelectorAll<HTMLInputElement>("[data-size]")
+        .forEach((x) => x !== t && (x.value = t.value));
+      return;
+    }
     const key = t.dataset.input;
     if (!key || !this.flow) return;
     // ("change" after "input" carries the same value: don't throw away edits made in the preview)
@@ -616,9 +915,16 @@ export class Hub {
     const input = document.createElement("input");
     input.type = "file";
     input.multiple = f.multiple;
-    input.accept = f.takes === "pdf" ? "application/pdf,.pdf" : "image/*,.heic,.heif";
+    input.accept =
+      f.takes === "pdf" ? "application/pdf,.pdf" : "image/*,.heic,.heif";
     input.onchange = async () => {
-      const files = await Promise.all([...(input.files ?? [])].map(async (file) => ({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()), handle: null })));
+      const files = await Promise.all(
+        [...(input.files ?? [])].map(async (file) => ({
+          name: file.name,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+          handle: null,
+        })),
+      );
       await this.addFiles(files);
     };
     input.click();
@@ -644,16 +950,29 @@ export class Hub {
     const skipped: string[] = [];
     for (const file of files) {
       try {
-        const item = f.takes === "pdf" ? await this.pdfItem(file) : await this.imageItem(file);
+        const item =
+          f.takes === "pdf"
+            ? await this.pdfItem(file)
+            : await this.imageItem(file);
         if (item) {
           this.items.push(item);
           if (f.pageView || f.splitView) {
             const k = this.fileCount++;
             // (pictures and single-file tools need no letters to tell files apart)
-            const letter = f.takes === "pdf" && f.multiple ? String.fromCharCode(65 + (k % 26)) : "";
-            this.files.set(item.id, { id: item.id, name: f.takes === "image" ? item.name : "", color: FILE_COLORS[k % FILE_COLORS.length], letter });
-            for (let page = 0; page < item.pages; page++) this.order.push({ item: item.id, page, rotate: 0 });
-            if (item.kind === "image") this.thumbs.set(`${item.id}:0`, item.thumb);
+            const letter =
+              f.takes === "pdf" && f.multiple
+                ? String.fromCharCode(65 + (k % 26))
+                : "";
+            this.files.set(item.id, {
+              id: item.id,
+              name: f.takes === "image" ? item.name : "",
+              color: FILE_COLORS[k % FILE_COLORS.length],
+              letter,
+            });
+            for (let page = 0; page < item.pages; page++)
+              this.order.push({ item: item.id, page, rotate: 0 });
+            if (item.kind === "image")
+              this.thumbs.set(`${item.id}:0`, item.thumb);
             else void this.loadThumbs(item);
           }
           if (f.splitView) this.buildParts();
@@ -663,18 +982,32 @@ export class Hub {
       }
       this.renderFiles();
     }
-    if (skipped.length) toast(skipped.length === 1 ? skipped[0] : `${skipped.length} files couldn't be added. ${skipped[0]}`, "error");
+    if (skipped.length)
+      toast(
+        skipped.length === 1
+          ? skipped[0]
+          : `${skipped.length} files couldn't be added. ${skipped[0]}`,
+        "error",
+      );
   }
 
   private async pdfItem(file: OpenedFile): Promise<Item | null> {
     if (!isPdf(file.bytes)) {
-      throw new Error(looksLikeImage(file.name, file.bytes) ? "that's a picture; use Images to PDF" : "not a PDF");
+      throw new Error(
+        looksLikeImage(file.name, file.bytes)
+          ? "that's a picture; use Images to PDF"
+          : "not a PDF",
+      );
     }
     let password: string | undefined;
     let pages = 0;
     for (let wrong = false; ; wrong = true) {
       try {
-        pages = await this.host.engine.toolPageCount({ name: file.name, bytes: file.bytes, password });
+        pages = await this.host.engine.toolPageCount({
+          name: file.name,
+          bytes: file.bytes,
+          password,
+        });
         break;
       } catch (err) {
         if (!/password/i.test((err as Error).message)) throw err;
@@ -685,19 +1018,43 @@ export class Hub {
     }
     let thumb = "";
     try {
-      const [jpg] = await this.host.engine.toolPagesToImages({ name: file.name, bytes: file.bytes, password }, [0], { format: "jpeg", dpi: 24, quality: 70 });
-      thumb = URL.createObjectURL(new Blob([jpg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
+      const [jpg] = await this.host.engine.toolPagesToImages(
+        { name: file.name, bytes: file.bytes, password },
+        [0],
+        { format: "jpeg", dpi: 24, quality: 70 },
+      );
+      thumb = URL.createObjectURL(
+        new Blob([jpg as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }),
+      );
     } catch {
       /* no thumbnail */
     }
-    return { id: `i${++seq}`, name: file.name, bytes: file.bytes, kind: "pdf", pages, password, thumb };
+    return {
+      id: `i${++seq}`,
+      name: file.name,
+      bytes: file.bytes,
+      kind: "pdf",
+      pages,
+      password,
+      thumb,
+    };
   }
 
   private async imageItem(file: OpenedFile): Promise<Item> {
-    if (isPdf(file.bytes)) throw new Error("that's a PDF; use Merge PDFs to combine PDFs");
+    if (isPdf(file.bytes))
+      throw new Error("that's a PDF; use Merge PDFs to combine PDFs");
     const img = await normalizeImage(file.name, file.bytes);
-    const thumb = URL.createObjectURL(new Blob([img.bytes as Uint8Array<ArrayBuffer>], { type: img.type }));
-    return { id: `i${++seq}`, name: img.name, bytes: img.bytes, kind: "image", pages: 1, thumb };
+    const thumb = URL.createObjectURL(
+      new Blob([img.bytes as Uint8Array<ArrayBuffer>], { type: img.type }),
+    );
+    return {
+      id: `i${++seq}`,
+      name: img.name,
+      bytes: img.bytes,
+      kind: "image",
+      pages: 1,
+      thumb,
+    };
   }
 
   private moveItem(from: number, to: number): void {
@@ -723,9 +1080,13 @@ export class Hub {
       const row = (e.target as HTMLElement).closest<HTMLElement>(".file-row");
       if (!row) return;
       e.preventDefault();
-      this.el.querySelectorAll(".drop-before, .drop-after").forEach((x) => x.classList.remove("drop-before", "drop-after"));
+      this.el
+        .querySelectorAll(".drop-before, .drop-after")
+        .forEach((x) => x.classList.remove("drop-before", "drop-after"));
       const r = row.getBoundingClientRect();
-      row.classList.add(e.clientY < r.top + r.height / 2 ? "drop-before" : "drop-after");
+      row.classList.add(
+        e.clientY < r.top + r.height / 2 ? "drop-before" : "drop-after",
+      );
     });
     this.el.addEventListener("drop", (e) => {
       if (this.dragFrom < 0) return;
@@ -742,7 +1103,11 @@ export class Hub {
     });
     this.el.addEventListener("dragend", () => {
       this.dragFrom = -1;
-      this.el.querySelectorAll(".dragging, .drop-before, .drop-after").forEach((x) => x.classList.remove("dragging", "drop-before", "drop-after"));
+      this.el
+        .querySelectorAll(".dragging, .drop-before, .drop-after")
+        .forEach((x) =>
+          x.classList.remove("dragging", "drop-before", "drop-after"),
+        );
     });
   }
 
@@ -821,7 +1186,9 @@ export class Hub {
     const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
     if (!nav.canShare || !navigator.share || !this.results.length) return false;
     try {
-      return nav.canShare({ files: [new File([], "x.pdf", { type: "application/pdf" })] });
+      return nav.canShare({
+        files: [new File([], "x.pdf", { type: "application/pdf" })],
+      });
     } catch {
       return false;
     }
@@ -829,21 +1196,55 @@ export class Hub {
 
   private async saveOne(i: number): Promise<void> {
     const r = this.results[i];
-    if (r) await saveFile(r.bytes, r.name, r.type).catch((e) => toast(`Couldn't save: ${(e as Error).message}`, "error"));
+    if (r)
+      await saveFile(r.bytes, r.name, r.type).catch((e) =>
+        toast(`Couldn't save: ${(e as Error).message}`, "error"),
+      );
   }
 
   private async saveAll(): Promise<void> {
     if (this.results.length === 1) return this.saveOne(0);
     const name = `${this.items[0]?.name.replace(/\.[^.]+$/, "") ?? "papgi"} (${this.flow?.id === "split" ? "split" : "pages"}).zip`;
-    await saveFile(zip(this.results), name, "application/zip").catch((e) => toast(`Couldn't save: ${(e as Error).message}`, "error"));
+    await saveFile(zip(this.results), name, "application/zip").catch((e) =>
+      toast(`Couldn't save: ${(e as Error).message}`, "error"),
+    );
   }
 
   private async share(): Promise<void> {
-    const files = this.results.map((r) => new File([r.bytes as Uint8Array<ArrayBuffer>], r.name, { type: r.type }));
+    const files = this.results.map(
+      (r) =>
+        new File([r.bytes as Uint8Array<ArrayBuffer>], r.name, {
+          type: r.type,
+        }),
+    );
     try {
       await navigator.share({ files });
     } catch (e) {
-      if ((e as Error).name !== "AbortError") toast(`Couldn't share: ${(e as Error).message}`, "error");
+      if ((e as Error).name !== "AbortError")
+        toast(`Couldn't share: ${(e as Error).message}`, "error");
     }
   }
 }
+
+// ---------- tile size ----------
+
+const SIZE_KEY = "papgi.tileSize";
+function tileSize(): number {
+  try {
+    const v = Number(localStorage.getItem(SIZE_KEY));
+    if (v >= 90 && v <= 300) return v;
+  } catch {
+    /* (private mode) */
+  }
+  return 124;
+}
+function setTileSize(px: number, save = true): void {
+  document.documentElement.style.setProperty("--tile", `${px}px`);
+  if (save)
+    try {
+      localStorage.setItem(SIZE_KEY, String(px));
+    } catch {
+      /* (private mode) */
+    }
+}
+setTileSize(tileSize(), false);

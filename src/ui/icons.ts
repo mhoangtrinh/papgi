@@ -33,6 +33,7 @@ const P: Record<string, string> = {
   square: '<rect x="4" y="4" width="16" height="16" rx="1.5"/>',
   circle: '<circle cx="12" cy="12" r="8.5"/>',
   arrow: '<path d="M5 19 19 5M10 5h9v9"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   flatten: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
