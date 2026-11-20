@@ -47,6 +47,37 @@ describe("merge", () => {
   });
 });
 
+describe("merge pages in any order", () => {
+  it("interleaves, turns and drops pages, keeping fonts shared", () => {
+    const a = pdf("pages.pdf");
+    const b = pdf("form.pdf");
+    const order = [
+      { file: 0, page: 4 },
+      { file: 1, page: 0, rotate: 90 },
+      { file: 0, page: 0 },
+      { file: 0, page: 2, rotate: 270 },
+    ];
+    const out = open(engine.toolMergePages([a, b], order));
+    expect(out.info().pageCount).toBe(4);
+    const src = open(a.bytes);
+    expect(out.pageText(0)).toBe(src.pageText(4));
+    expect(out.pageText(2)).toBe(src.pageText(0));
+    expect(out.pageText(3)).toBe(src.pageText(2));
+    // turned pages: width and height swap
+    const [p0, p1, , p3] = out.info().pages;
+    expect(p1.w).toBeGreaterThan(p1.h);
+    expect(p3.w).toBeGreaterThan(p3.h);
+    expect(p0.h).toBeGreaterThan(p0.w);
+    // the form page stays fillable
+    expect(out.listWidgets(1).length).toBeGreaterThan(2);
+    // fonts aren't copied once per page
+    const once = engine.toolMergePages([a], [0, 1, 2, 3, 4].map((page) => ({ file: 0, page }))).length;
+    const twice = engine.toolMergePages([a], [0, 1, 2, 3, 4, 0, 1, 2, 3, 4].map((page) => ({ file: 0, page }))).length;
+    expect(twice).toBeLessThan(once * 1.6);
+    expect(() => engine.toolMergePages([a], [{ file: 0, page: 9 }])).toThrow(/no page 10/);
+  });
+});
+
 describe("split", () => {
   it("makes one file per group, named by its pages", () => {
     const n = engine.toolPageCount(pdf("pages.pdf"));

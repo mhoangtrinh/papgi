@@ -20,7 +20,7 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 | Tool | |
 |---|---|
 | Open PDF | Drop or browse for a PDF; it opens in the editor (below): edit text, highlight and draw, text boxes, fill forms, sign, recognize scans (OCR), pages, print |
-| Merge PDFs | Combine PDFs in any order (drag or arrows); form fields, annotations and signatures come along. Password-protected files ask for the password |
+| Merge PDFs | All pages of the added files as thumbnails (each file its own colour): drag pages into any order (long-press on a phone), turn or remove single pages, *Reset order* to start again. Form fields, annotations and signatures come along. Password-protected files ask for the password |
 | Split PDF | Single pages, every N pages, or custom ranges (“1-3, 4, 5-”); several files come as one ZIP |
 | Compress PDF | Light (clean-up only), Recommended (pictures to 150 dpi) or Strong (96 dpi): pictures sharper than the page needs are scaled down and saved as JPEG; text and drawings stay sharp. Never returns a bigger file |
 | Images to PDF | JPG, PNG, GIF, BMP, TIFF (and HEIC/WebP where the browser can read them) on A4, Letter or picture-sized pages; phone photos keep the right way up |
@@ -41,7 +41,7 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | Sign | Keep up to 5 signatures, drawn or from a photo/scan (paper removed automatically, crop, recolour, or drop/paste the image); saved on this device, pick one and click to place |
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
 | Print | Ctrl+P or File → Print: prints the document as it is now (edits, annotations, signatures, filled forms). Chrome/Edge use their PDF print dialog (sharp vector output); iPhone, Safari and Firefox print the rendered pages (about 200 dpi). |
-| Pages | Reorder by drag and drop, rotate, delete, insert other PDFs, add blank pages, save pages as a new PDF |
+| Pages | **Pages** button: all pages as a grid to drag into order, turn, remove, insert other PDFs, add blank pages (double-click a page to go to it). Also in the sidebar: reorder, rotate, delete, insert, save pages as a new PDF |
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
 | **Scans (OCR)** | Recognize text on scanned pages (Document → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 

@@ -9,7 +9,8 @@ import { askPassword, confirmDialog, toast } from "../ui/dialogs";
 import { zip } from "../core/zip";
 import { ago, forgetAll, forgetFile, formatSize, listRecent, readRecent, type RecentFile } from "../recent";
 import { TOOL_LIST, tool, type ToolDef, type ToolId } from "./registry";
-import { FLOWS, type FlowDef, type Item, type Option } from "./flows";
+import { FLOWS, type FlowDef, type Item, type Option, type PageSlot } from "./flows";
+import { FILE_COLORS, PageGrid, type GridFile } from "./pagegrid";
 import { isPdf, normalizeImage, looksLikeImage } from "./images";
 
 export interface HubHost {
@@ -67,6 +68,12 @@ export class Hub {
   private running = false;
   private cancel = false;
   private dragFrom = -1;
+  /** Page view (merge): the order of pages, their thumbnails, and each file's colour/letter. */
+  private order: PageSlot[] = [];
+  private thumbs = new Map<string, string>();
+  private files = new Map<string, GridFile>();
+  private grid: PageGrid | null = null;
+  private fileCount = 0;
 
   constructor(
     private host: HubHost,
@@ -147,7 +154,13 @@ export class Hub {
 
   private reset(): void {
     for (const it of this.items) URL.revokeObjectURL(it.thumb);
+    for (const u of this.thumbs.values()) URL.revokeObjectURL(u);
     this.items = [];
+    this.order = [];
+    this.thumbs.clear();
+    this.files.clear();
+    this.fileCount = 0;
+    this.grid = null;
     this.results = [];
     this.cancel = true;
   }
@@ -172,6 +185,22 @@ export class Hub {
 
   private render(): void {
     this.el.innerHTML = this.header() + (this.flow ? this.flowHtml(this.flow) : this.route === "open" ? this.openHtml() : this.homeHtml());
+    if (this.flow?.pageView) {
+      this.grid = new PageGrid({
+        order: () => this.order,
+        setOrder: (o) => {
+          this.order = o;
+          this.results = [];
+          this.renderResult();
+          this.renderPagesHead();
+          this.renderAction();
+        },
+        file: (id) => this.files.get(id),
+        thumb: (s) => this.thumbs.get(`${s.item}:${s.page}`) ?? "",
+        scroller: this.el,
+      });
+      this.el.querySelector(".grid-host")!.append(this.grid.el);
+    }
     if (this.flow) this.renderFiles();
     else void this.renderRecent();
   }
@@ -254,6 +283,15 @@ export class Hub {
           </div>
           <ul class="file-list"></ul>
         </section>
+        ${
+          f.pageView
+            ? `<section class="flow-pages" hidden>
+          <div class="sec-head"><h2>Pages <span class="muted page-count"></span></h2><button class="btn flat small" data-act="reset-order" title="All pages of all files, in file order">Reset order</button></div>
+          <p class="muted small pages-hint">Drag pages to reorder (on a phone: press and hold, then drag). Hover a page to turn or remove it.</p>
+          <div class="grid-host"></div>
+        </section>`
+            : ""
+        }
         <section class="flow-options">${f.options.map((o) => this.optionHtml(o)).join("")}</section>
         <div class="flow-actions">
           <p class="flow-error" role="alert"></p>
@@ -291,6 +329,7 @@ export class Hub {
         (it, i) => `
         <li class="file-row" data-item="${i}" draggable="${f.reorder}">
           ${f.reorder ? `<span class="grip" title="Drag to reorder">${icon("grip")}</span>` : ""}
+          ${f.pageView && this.files.get(it.id) ? `<span class="file-badge" style="--file:${this.files.get(it.id)!.color}">${this.files.get(it.id)!.letter}</span>` : ""}
           <span class="file-thumb">${it.thumb ? `<img src="${it.thumb}" alt="">` : icon(it.kind === "pdf" ? "file" : "image")}</span>
           <span class="file-text"><b>${esc(it.name)}</b><span class="muted small">${it.kind === "pdf" ? `${it.pages} ${it.pages === 1 ? "page" : "pages"} · ` : ""}${formatSize(it.bytes.length)}${it.password ? " · unlocked" : ""}</span></span>
           ${f.reorder ? `<button class="icon-btn sm" data-move="${i}" data-dir="-1" title="Move up" ${i === 0 ? "disabled" : ""}>${icon("up")}</button><button class="icon-btn sm" data-move="${i}" data-dir="1" title="Move down" ${i === this.items.length - 1 ? "disabled" : ""}>${icon("down")}</button>` : ""}
@@ -303,7 +342,41 @@ export class Hub {
     drop.hidden = !f.multiple && this.items.length > 0;
     const add = drop.querySelector("b")!;
     add.textContent = this.items.length ? (f.takes === "pdf" ? "Add more PDFs" : "Add more pictures") : `Choose ${f.takes === "pdf" ? (f.multiple ? "PDFs" : "a PDF") : "pictures"}`;
+    if (f.pageView) {
+      this.renderPagesHead();
+      this.grid?.render();
+    }
     this.renderAction();
+  }
+
+  private renderPagesHead(): void {
+    const sec = this.el.querySelector<HTMLElement>(".flow-pages");
+    if (!sec) return;
+    sec.hidden = !this.items.length;
+    const total = this.items.reduce((n, it) => n + it.pages, 0);
+    const n = this.order.length;
+    sec.querySelector(".page-count")!.textContent = n === total ? `(${n})` : `(${n} of ${total})`;
+  }
+
+  /** Page thumbnails for the page view, a few at a time. */
+  private async loadThumbs(it: Item): Promise<void> {
+    for (let k = 0; k < it.pages; k += 6) {
+      if (!this.files.has(it.id)) return;
+      const batch = [...Array(Math.min(6, it.pages - k)).keys()].map((j) => k + j);
+      let imgs: Uint8Array[];
+      try {
+        imgs = await this.host.engine.toolPagesToImages({ name: it.name, bytes: it.bytes, password: it.password }, batch, { format: "jpeg", dpi: 36, quality: 70 });
+      } catch {
+        return;
+      }
+      if (!this.files.has(it.id)) return;
+      imgs.forEach((b, j) => {
+        const key = `${it.id}:${batch[j]}`;
+        const url = URL.createObjectURL(new Blob([b as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
+        this.thumbs.set(key, url);
+        this.grid?.setThumb(key, url);
+      });
+    }
   }
 
   private renderAction(): void {
@@ -311,7 +384,7 @@ export class Hub {
     if (!f) return;
     const run = this.el.querySelector<HTMLButtonElement>("[data-act=run]")!;
     const err = this.el.querySelector<HTMLElement>(".flow-error")!;
-    const problem = this.items.length >= f.min ? (f.check?.(this.items, this.opts) ?? null) : null;
+    const problem = this.items.length >= f.min ? (f.check?.(this.items, this.opts, f.pageView ? this.order : undefined) ?? null) : null;
     run.innerHTML = `${icon(tool(f.id)!.icon)}${f.action(this.items)}`;
     run.disabled = this.running || this.items.length < f.min || !!problem;
     err.textContent = problem ?? "";
@@ -377,6 +450,9 @@ export class Hub {
     if (d.remove !== undefined) {
       const [it] = this.items.splice(Number(d.remove), 1);
       URL.revokeObjectURL(it.thumb);
+      this.order = this.order.filter((o) => o.item !== it.id);
+      this.files.delete(it.id);
+      for (const [k, u] of this.thumbs) if (k.startsWith(`${it.id}:`)) (URL.revokeObjectURL(u), this.thumbs.delete(k));
       this.results = [];
       this.renderResult();
       return this.renderFiles();
@@ -388,6 +464,12 @@ export class Hub {
       return this.syncOptions();
     }
     if (d.act === "run") return this.run();
+    if (d.act === "reset-order") {
+      this.order = this.items.flatMap((it) => [...Array(it.pages).keys()].map((page) => ({ item: it.id, page, rotate: 0 })));
+      this.results = [];
+      this.renderResult();
+      return this.renderFiles();
+    }
     if (d.act === "stop") {
       this.cancel = true;
       return;
@@ -460,7 +542,15 @@ export class Hub {
     for (const file of files) {
       try {
         const item = f.takes === "pdf" ? await this.pdfItem(file) : await this.imageItem(file);
-        if (item) this.items.push(item);
+        if (item) {
+          this.items.push(item);
+          if (f.pageView) {
+            const k = this.fileCount++;
+            this.files.set(item.id, { id: item.id, name: item.name, color: FILE_COLORS[k % FILE_COLORS.length], letter: String.fromCharCode(65 + (k % 26)) });
+            for (let page = 0; page < item.pages; page++) this.order.push({ item: item.id, page, rotate: 0 });
+            void this.loadThumbs(item);
+          }
+        }
       } catch (err) {
         skipped.push(`${file.name}: ${(err as Error).message}`);
       }
@@ -575,6 +665,7 @@ export class Hub {
       const res = await f.run({
         engine: this.host.engine,
         items: this.items,
+        order: this.order,
         opts: this.opts,
         progress: (done, total, text) => {
           bar.style.width = `${Math.round((done / Math.max(1, total)) * 100)}%`;

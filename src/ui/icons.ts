@@ -42,6 +42,7 @@ const P: Record<string, string> = {
   textEdit: '<path d="M3 7V5h11v2"/><path d="M8.5 5v14"/><path d="M6 19h5"/><path d="M18 8v12"/><path d="M16 8h4M16 20h4"/>',
   check: '<path d="M5 12.5 10 17 19 7"/>',
   warn: '<path d="M12 4 2.5 20h19z"/><path d="M12 10v4M12 17h.01"/>',
+  pages: '<rect x="3" y="3" width="7.5" height="9" rx="1.2"/><rect x="13.5" y="3" width="7.5" height="9" rx="1.2"/><rect x="3" y="14.5" width="7.5" height="6.5" rx="1.2"/><rect x="13.5" y="14.5" width="7.5" height="6.5" rx="1.2"/>',
   tools: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   merge: '<path d="M6 3h7l4 4v6"/><path d="M13 3v4h4"/><path d="M4 9v10a2 2 0 0 0 2 2h6"/><path d="m16 17 3 3 3-3"/><path d="M19 13v7"/>',
   split: '<path d="M6 3h8l4 4v4"/><path d="M14 3v4h4"/><path d="M6 3v8"/><path d="M3 14h18" stroke-dasharray="2 2.5"/><path d="M6 17v4h12v-4"/>',

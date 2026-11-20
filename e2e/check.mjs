@@ -541,6 +541,55 @@ try {
   check("undo brings it back to page 1", (await engine("listAnnots", 0)).some((x) => x.kind === "Ink") && !(await engine("listAnnots", 1)).some((x) => x.kind === "Ink"));
   await page.screenshot({ path: shots + "desktop-pages-light.png" });
 
+  // --- organize pages (editor): the Pages button ---
+  {
+    const pc = await page.evaluate(() => window.papgi.info.pageCount);
+    const label = async (i) => ((await engine("pageText", i)).match(/page \d+ of \d+/) ?? ["?"])[0];
+    const labelsNow = async () => { const out = []; for (let i = 0; i < (await page.evaluate(() => window.papgi.info.pageCount)); i++) out.push(await label(i)); return out; };
+    const start = await labelsNow();
+    await page.click("#btn-organize");
+    await page.waitForFunction((n) => document.querySelectorAll(".organize .ptile img").length === n, pc, { timeout: 20000 });
+    check("Pages button: all pages as a grid", (await page.locator(".organize .ptile").count()) === pc && (await page.locator("#btn-organize.on").count()) === 1);
+    await page.screenshot({ path: shots + "desktop-organize-light.png" });
+    // drag the last page in front of the first
+    const ts = page.locator(".organize .ptile");
+    const lastB = await ts.nth(pc - 1).boundingBox();
+    const firstB = await ts.nth(0).boundingBox();
+    await page.mouse.move(lastB.x + lastB.width / 2, lastB.y + lastB.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(lastB.x + lastB.width / 2 - 20, lastB.y + lastB.height / 2, { steps: 4 });
+    await page.mouse.move(firstB.x + 12, firstB.y + firstB.height / 2, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(700);
+    const moved = await labelsNow();
+    check("Pages: dragging reorders the document", moved[0] === start[pc - 1] && moved[1] === start[0], moved.join(" | "));
+    // turn page 2, remove page 3 (keyboard)
+    await page.hover(".organize .ptile >> nth=1");
+    await page.click(".organize .ptile >> nth=1 >> [data-turn]");
+    await page.waitForTimeout(500);
+    await page.focus(".organize .ptile >> nth=2");
+    await page.keyboard.press("Delete");
+    await page.waitForTimeout(700);
+    const info2 = await page.evaluate(() => window.papgi.info);
+    check("Pages: turn and remove pages", info2.pages[1].rotation === 90 && info2.pageCount === pc - 1 && (await page.locator(".organize .ptile").count()) === pc - 1, `rot ${info2.pages[1].rotation}, ${info2.pageCount} pages`);
+    // undo everything with Ctrl+Z: the grid follows
+    for (let k = 0; k < 3; k++) {
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(500);
+    }
+    await page.waitForFunction((n) => document.querySelectorAll(".organize .ptile img").length === n, pc, { timeout: 20000 });
+    check("Pages: Ctrl+Z undoes, the grid follows", (await labelsNow()).join() === start.join() && (await page.evaluate(() => window.papgi.info.pages.every((p) => p.rotation === 0))));
+    // double-click a page: back to the editor at that page
+    await page.dblclick(".organize .ptile >> nth=2");
+    await page.waitForTimeout(600);
+    const inView = await page.evaluate(() => {
+      const r = document.querySelectorAll(".viewer .page")[2].getBoundingClientRect();
+      const v = document.querySelector(".viewer").getBoundingClientRect();
+      return r.top < v.bottom - 50 && r.bottom > v.top + 50;
+    });
+    check("Pages: double-click opens that page in the editor", !(await page.isVisible(".organize")) && inView);
+  }
+
   // --- printing ---
   const pcount = await page.evaluate(() => window.papgi.info.pageCount);
   // (headless Chromium can't open a print dialog and crashes if asked to: catch the final call)
@@ -763,17 +812,46 @@ try {
     await page.waitForSelector(".hub-home");
     await page.click('[data-tool="merge"]');
     await page.waitForSelector('[data-flow="merge"]');
-    check("merge: button waits for 2 files", await page.locator("[data-act=run]").isDisabled());
+    check("merge: button waits for files", await page.locator("[data-act=run]").isDisabled());
     await choose([path.join(samplesDir, "form.pdf"), path.join(samplesDir, "pages.pdf")]);
     await page.waitForFunction(() => document.querySelectorAll(".file-row").length === 2);
-    await page.click('[data-move="0"][data-dir="1"]');
-    const order = await page.$$eval(".file-row .file-text b", (bs) => bs.map((b) => b.textContent));
-    check("merge: files can be reordered", order.join() === "pages.pdf,form.pdf", order.join());
+    const formPages = pdfPages(fs.readFileSync(path.join(samplesDir, "form.pdf")));
+    await page.waitForFunction((n) => document.querySelectorAll(".flow .ptile").length === n && document.querySelectorAll(".flow .ptile img").length === n, formPages + 5, { timeout: 20000 });
+    check("merge: shows every page of both files", (await page.locator(".flow .ptile").count()) === formPages + 5);
+    const labels = () => page.$$eval(".flow .ptile .psrc", (els) => els.map((e) => e.textContent));
+    // drag the last page (B·5) in front of the first one, with the mouse
+    const tiles = page.locator(".flow .ptile");
+    const last = await tiles.nth(formPages + 4).boundingBox();
+    const first = await tiles.nth(0).boundingBox();
+    await page.mouse.move(last.x + last.width / 2, last.y + last.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(last.x + last.width / 2 - 20, last.y + last.height / 2, { steps: 4 });
+    await page.mouse.move(first.x + 12, first.y + first.height / 2, { steps: 12 });
+    await page.screenshot({ path: shots + "desktop-tool-merge-drag-light.png" });
+    await page.mouse.up();
+    const afterDrag = await labels();
+    check("merge: drag a page to the front", afterDrag[0] === "B·5" && afterDrag[1] === "A·1", afterDrag.join(" "));
+    // turn the new first page, remove page A·1 (now 2nd) via keyboard
+    await page.hover(".flow .ptile >> nth=0");
+    await page.click('.flow .ptile >> nth=0 >> [data-turn]');
+    await page.focus('.flow .ptile >> nth=1');
+    await page.keyboard.press("Delete");
+    // move the (new) 2nd page one step left with Ctrl+Left
+    await page.focus('.flow .ptile >> nth=1');
+    await page.keyboard.press("Control+ArrowLeft");
+    const final = await labels();
+    check("merge: turn, remove and keyboard-move pages", final.length === formPages + 4 && final[0] === (formPages > 1 ? "A·2" : "B·1") && final[1] === "B·5", final.join(" "));
+    await page.screenshot({ path: shots + "desktop-tool-merge-light.png" });
     await page.click("[data-act=run]");
     await waitDone();
     const merged = await download(() => page.click("[data-act=save-all]"));
-    check("merge: one PDF with all pages, in order", pdfPages(merged.bytes) === 5 + pdfPages(fs.readFileSync(path.join(samplesDir, "form.pdf"))) && mupdf.Document.openDocument(merged.bytes, "application/pdf").loadPage(0).toStructuredText().asText().includes("page 1 of 5"));
-    await page.screenshot({ path: shots + "desktop-tool-merge-light.png" });
+    const mdoc = mupdf.Document.openDocument(merged.bytes, "application/pdf");
+    const text = (i) => mdoc.loadPage(i).toStructuredText().asText();
+    const b0 = mdoc.loadPage(1).getBounds();
+    check("merge: the PDF follows the page view", mdoc.countPages() === formPages + 4 && text(1).includes("page 5 of 5") && b0[2] - b0[0] > b0[3] - b0[1], `${mdoc.countPages()} pages; p2: ${text(1).slice(0, 30)}`);
+    // the order resets to file order
+    await page.click("[data-act=reset-order]");
+    check("merge: reset order", (await labels()).join(" ") === [...Array(formPages)].map((_, i) => `A·${i + 1}`).concat([1, 2, 3, 4, 5].map((i) => `B·${i}`)).join(" "));
 
     // split, opened straight from its address
     await page.goto(URL_ + "#split");

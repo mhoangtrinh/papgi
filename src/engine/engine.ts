@@ -8,8 +8,8 @@ import type { Run } from "../core/textlayout";
 import { extractBlocks, fontsNeeded, replaceBlock, type EditBlock, type EditResult, type EditOptions } from "./textedit";
 import { addOcrWords, isOcrPage, OCR_FONT_FILE, type OcrWord } from "./ocr";
 import {
-  compressPdf, graftPages, imagesToPdf, mergePdfs, pageToImage, pagesToImages, pdfPageCount, splitPdf,
-  type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PdfInput, type RenderOptions,
+  compressPdf, graftPages, imagesToPdf, mergePages, mergePdfs, pageToImage, pagesToImages, pdfPageCount, splitPdf,
+  type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions,
 } from "./tools";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
@@ -933,6 +933,10 @@ export class PdfEngine {
 
   toolMerge(files: (PdfInput & { pages?: number[] })[]): Uint8Array {
     return mergePdfs(this.mupdf, files);
+  }
+
+  toolMergePages(files: PdfInput[], order: PageRef[]): Uint8Array {
+    return mergePages(this.mupdf, files, order);
   }
 
   toolSplit(f: PdfInput, groups: number[][], baseName: string): OutFile[] {

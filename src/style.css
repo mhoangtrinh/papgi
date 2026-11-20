@@ -2664,3 +2664,482 @@ input.field:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- page grid (Merge; editor's page view) ---------- */
+
+.flow-pages {
+  margin-top: 26px;
+}
+
+.flow-pages[hidden] {
+  display: none;
+}
+
+.flow-pages .sec-head h2 .muted {
+  font-weight: 400;
+}
+
+.pages-hint {
+  margin: -4px 0 12px;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 14px 12px;
+}
+
+.ptile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  outline: none;
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: background 0.12s, transform 0.12s, opacity 0.12s;
+}
+
+.ptile:hover,
+.ptile:focus-visible {
+  background: var(--panel);
+  border-color: var(--border);
+}
+
+.ptile:focus-visible {
+  border-color: var(--accent);
+}
+
+.pthumb {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.pthumb img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--file, var(--accent));
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
+  transition: transform 0.2s;
+}
+
+/* turned sideways: fit the turned picture in the box */
+.pthumb.turned img {
+  max-width: 75%;
+  max-height: 133%;
+}
+
+.pload {
+  width: 60%;
+  height: 80%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--panel-2), var(--hover), var(--panel-2));
+  background-size: 200% 100%;
+  animation: pload 1.2s linear infinite;
+}
+
+@keyframes pload {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.pmeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.pnum {
+  font-weight: 600;
+}
+
+.psrc {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--file) 15%, transparent);
+  color: var(--file);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ptools {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.ptile:hover .ptools,
+.ptile:focus-within .ptools {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .ptools {
+    opacity: 0.92;
+  }
+}
+
+.ptile.pressing {
+  transform: scale(0.96);
+}
+
+.ptile.lifted {
+  opacity: 0.3;
+}
+
+.ptile.ins-before::before,
+.ptile.ins-after::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.ptile.ins-before::before {
+  left: -8px;
+}
+
+.ptile.ins-after::after {
+  right: -8px;
+}
+
+.pghost {
+  position: fixed;
+  z-index: 90;
+  margin: 0;
+  background: var(--panel);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  cursor: grabbing;
+}
+
+.pghost .ptools {
+  display: none;
+}
+
+body.dragging-page,
+body.dragging-page * {
+  cursor: grabbing !important;
+}
+
+.file-badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--file);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .page-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 6px;
+  }
+  .ptile {
+    padding: 4px;
+  }
+  .ptools {
+    top: 6px;
+    right: 6px;
+  }
+}
+
+/* ---------- page view (merge, organize pages) ---------- */
+
+.flow-pages {
+  margin-top: 24px;
+}
+
+.flow-pages[hidden] {
+  display: none;
+}
+
+.pages-hint {
+  margin: -4px 0 12px;
+}
+
+.file-badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--file);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 14px;
+}
+
+.ptile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 6px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  outline: none;
+  cursor: grab;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: background 0.12s, transform 0.12s;
+}
+
+.ptile:hover,
+.ptile:focus-visible {
+  background: var(--hover);
+}
+
+.ptile:focus-visible {
+  border-color: var(--accent);
+}
+
+.ptile.pressing {
+  transform: scale(0.96);
+}
+
+.ptile.lifted {
+  opacity: 0.25;
+}
+
+.pthumb {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+}
+
+.pthumb img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--border), 0 2px 6px rgba(16, 24, 40, 0.12), inset 0 3px 0 var(--file);
+  transition: transform 0.15s;
+  pointer-events: none;
+}
+
+/* turned pages: swap the limits so the turned picture still fits */
+.pthumb.turned img {
+  max-width: 75%;
+  max-height: 133%;
+}
+
+.pload {
+  width: 70%;
+  aspect-ratio: 3 / 4;
+  border-radius: 3px;
+  background: var(--panel-2);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.pmeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.pnum {
+  font-weight: 600;
+}
+
+.psrc {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--file) 16%, transparent);
+  color: var(--file);
+  font-weight: 600;
+}
+
+.ptools {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.ptile:hover .ptools,
+.ptile:focus-within .ptools {
+  opacity: 1;
+}
+
+.ptools .icon-btn {
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+@media (hover: none) {
+  .ptools {
+    opacity: 1;
+  }
+}
+
+/* where the dragged page will go */
+.ptile.ins-before::before,
+.ptile.ins-after::after {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.ptile.ins-before::before {
+  left: -9px;
+}
+
+.ptile.ins-after::after {
+  right: -9px;
+}
+
+.pghost {
+  position: fixed;
+  z-index: 100;
+  margin: 0;
+  background: var(--panel);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  opacity: 0.95;
+}
+
+body.dragging-page,
+body.dragging-page * {
+  cursor: grabbing !important;
+}
+
+/* Organize pages (editor) */
+.organize {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  overflow-y: auto;
+  padding: 0 20px calc(40px + env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+
+.organize[hidden] {
+  display: none;
+}
+
+.org-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 -20px;
+  padding: 12px 20px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--border);
+}
+
+.org-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 16px;
+}
+
+.org-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.org-hint {
+  margin: 12px 0 14px;
+}
+
+.org-grid .page-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+body.organizing .toolstrip .tools,
+body.organizing .toolstrip .options {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.menu-label.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.menu-label.on .ml-icon {
+  color: var(--accent);
+}
+
+@media (max-width: 760px) {
+  .organize {
+    padding: 0 12px calc(32px + env(safe-area-inset-bottom));
+  }
+  .org-bar {
+    margin: 0 -12px;
+    padding: 10px 12px;
+  }
+  .org-actions .btn span {
+    display: none;
+  }
+  .org-actions .btn.primary span {
+    display: inline;
+  }
+  .org-grid .page-grid {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 8px;
+  }
+}

@@ -16,9 +16,18 @@ export interface Item {
   thumb: string; // URL for the list
 }
 
+/** A page in the page view: which file, which page, extra turn. */
+export interface PageSlot {
+  item: string;
+  page: number;
+  rotate: number;
+}
+
 export interface RunContext {
   engine: Engine;
   items: Item[];
+  /** Page order (tools with a page view). */
+  order: PageSlot[];
   opts: Record<string, string>;
   progress(done: number, total: number, text?: string): void;
   cancelled(): boolean;
@@ -44,12 +53,14 @@ export interface FlowDef {
   takes: "pdf" | "image";
   multiple: boolean;
   min: number;
-  /** Files can be put in order (merge, images). */
+  /** Files can be put in order (images). */
   reorder: boolean;
+  /** Shows every page; pages can be reordered, turned and removed (merge). */
+  pageView?: boolean;
   options: Option[];
   action(items: Item[]): string;
   /** Problem with the current options, shown instead of running. */
-  check?(items: Item[], opts: Record<string, string>): string | null;
+  check?(items: Item[], opts: Record<string, string>, order?: PageSlot[]): string | null;
   run(ctx: RunContext): Promise<RunResult>;
 }
 
@@ -61,17 +72,27 @@ export const FLOWS: Record<string, FlowDef> = {
   merge: {
     id: "merge",
     title: "Merge PDFs",
-    intro: "Combine PDFs into one file, in the order shown. Drag to reorder. Form fields, annotations and signatures come along.",
+    intro: "Combine PDFs into one file. All pages are shown below: drag them into any order (long-press on a phone), turn or remove single pages. Form fields, annotations and signatures come along.",
     takes: "pdf",
     multiple: true,
-    min: 2,
-    reorder: true,
+    min: 1,
+    reorder: false,
+    pageView: true,
     options: [],
-    action: (items) => (items.length >= 2 ? `Merge ${items.length} files` : "Add at least 2 PDFs"),
-    async run({ engine, items }) {
-      const bytes = await engine.toolMerge(items.map(src));
-      const pages = items.reduce((n, it) => n + it.pages, 0);
-      return { files: [{ name: `${stem(items[0].name)} (merged).pdf`, bytes, type: "application/pdf" }], note: `${plural(items.length, "file")}, ${plural(pages, "page")}` };
+    action: (items) =>
+      items.length === 0 ? "Add PDFs to merge" : items.length === 1 ? "Save pages in this order" : `Merge ${items.length} files`,
+    check: (_items, _o, order) => (order && order.length === 0 ? "All pages were removed. Add a file or start over." : null),
+    async run({ engine, items, order }) {
+      const index = new Map(items.map((it, i) => [it.id, i]));
+      const bytes = await engine.toolMergePages(
+        items.map(src),
+        order.map((o) => ({ file: index.get(o.item)!, page: o.page, rotate: o.rotate })),
+      );
+      const used = new Set(order.map((o) => o.item)).size;
+      return {
+        files: [{ name: `${stem(items[0].name)} (merged).pdf`, bytes, type: "application/pdf" }],
+        note: `${plural(order.length, "page")} from ${plural(used, "file")}`,
+      };
     },
   },
 

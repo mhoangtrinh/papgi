@@ -7,6 +7,7 @@ import { icon } from "./ui/icons";
 import { toast, askPassword, confirmDialog, showShortcuts, modal } from "./ui/dialogs";
 import { signatureDialog } from "./ui/signature-dialog";
 import { ocrDialog, runOcr } from "./ui/ocr";
+import { Organize } from "./ui/organize";
 import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
@@ -34,6 +35,7 @@ export class App {
   private viewer!: Viewer;
   private sidebar!: Sidebar;
   private hub!: Hub;
+  private organize!: Organize;
   /** The open file is one of the samples (not added to recent files). */
   private sampleOpen = false;
   private openingSample = false;
@@ -91,6 +93,23 @@ export class App {
     this.setTool(this.settings.tool);
     this.renderOptions();
     this.updateUi();
+    this.organize = new Organize(
+      {
+        engine,
+        info: () => this.info,
+        reorder: (order) => this.pageOp(this.engine.reorderPages(order)),
+        rotate: (p, d) => this.pageOp(this.engine.rotatePages(p, d)),
+        remove: (p) => this.removePages(p),
+        insertPdf: (at) => this.insertPdf(at),
+        insertBlank: (at) => this.pageOp(this.engine.insertBlankPage(at)),
+        split: () => void this.gotoTool("split"),
+        closed: (page) => {
+          this.$("#btn-organize").classList.remove("on");
+          if (page !== undefined) this.viewer.scrollToPage(page);
+        },
+      },
+      main,
+    );
     this.hub = new Hub(
       {
         engine,
@@ -140,6 +159,7 @@ export class App {
         <div class="menu-wrap">
           <button class="menu-label" id="btn-doc" aria-haspopup="menu" title="Recognize text, sign, pages, compress…">${icon("tools", "ml-icon")}<span>Document</span></button>
           <div class="menu left" id="doc-menu" role="menu" hidden>
+            <button data-menu="organize" data-needs-doc>${icon("pages")}Organize pages</button>
             <button data-menu="ocr" data-needs-doc>${icon("scan")}Recognize text (OCR)…</button>
             <button data-menu="signature">${icon("sign")}Add a signature…</button>
             <button data-menu="insert" data-needs-doc>${icon("insert")}Insert PDF at end…</button>
@@ -148,6 +168,7 @@ export class App {
             ${TOOL_LIST.filter((t) => FLOWS[t.id]?.takes === "pdf").map((t) => `<button data-goto="${t.id}" data-needs-doc>${icon(t.icon)}${t.id === "merge" ? "Merge with other PDFs…" : `${t.name}…`}</button>`).join("")}
           </div>
         </div>
+        <button class="menu-label" id="btn-organize" title="See all pages: drag to reorder, turn, remove, insert">${icon("pages", "ml-icon")}<span>Pages</span></button>
       </div>
       <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name"></span></div>
       <div class="tb-group">
@@ -223,6 +244,7 @@ export class App {
       this.updateUi();
     });
     on("#btn-file", () => this.toggleMenu(undefined, "#file-menu"));
+    on("#btn-organize", () => this.toggleOrganize());
     on("#btn-doc", () => this.toggleMenu(undefined, "#doc-menu"));
     for (const id of ["#file-menu", "#doc-menu"])
       this.$(id).addEventListener("click", (e) => {
@@ -375,6 +397,11 @@ export class App {
       return;
     }
     if (mod || e.altKey) return;
+    // (the page grid has its own keys: arrows, R, Delete)
+    if (this.organize.isOpen()) {
+      if (e.key === "Escape") this.organize.close();
+      return;
+    }
     if (e.key === "Escape") {
       this.closeMenus();
       this.viewer.clearSelection();
@@ -597,6 +624,18 @@ export class App {
     m.previousElementSibling?.classList.toggle("open", show);
   }
 
+  /** The page grid over the editor (Pages button). */
+  private toggleOrganize(force?: boolean): void {
+    if (!this.info) return;
+    const open = force ?? !this.organize.isOpen();
+    if (open) {
+      this.viewer.closeEditor(true);
+      void this.viewer.closeParagraph(true);
+      this.organize.open();
+      this.$("#btn-organize").classList.add("on");
+    } else this.organize.close();
+  }
+
   private closeMenus(): void {
     for (const id of ["#tools-menu", "#file-menu", "#doc-menu"]) {
       this.$(id).hidden = true;
@@ -674,6 +713,7 @@ export class App {
       case "saveas": return void this.saveCopy();
       case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
       case "flatten": return void this.flatten();
+      case "organize": return this.toggleOrganize(true);
       case "ocr": return void this.recognize();
       case "print": return void this.print();
       case "signature": return void this.addSignature();
@@ -740,6 +780,7 @@ export class App {
   }
 
   private setDoc(info: DocInfo | null): void {
+    this.organize?.close();
     this.info = info;
     this.dirty = false;
     this.closeSearch();
@@ -816,6 +857,7 @@ export class App {
     this.viewer.refresh(info);
     if (structural) this.sidebar.setDocument(info);
     else this.sidebar.refresh("all");
+    this.organize.docChanged(info);
     this.updateUi(await this.engine.state());
     if (msg.trim().endsWith(":")) return;
     toast(msg);
@@ -828,7 +870,8 @@ export class App {
       this.info = info;
       this.viewer.refresh(info);
       this.sidebar.setDocument(info, select.filter((i) => i < info.pageCount));
-      if (goTo !== undefined) this.viewer.scrollToPage(Math.min(goTo, info.pageCount - 1));
+      this.organize.docChanged(info);
+      if (goTo !== undefined && !this.organize.isOpen()) this.viewer.scrollToPage(Math.min(goTo, info.pageCount - 1));
       this.updateUi(await this.engine.state());
     } catch (e) {
       toast((e as Error).message, "error");
@@ -992,7 +1035,7 @@ export class App {
       this.$<HTMLButtonElement>("#btn-redo").disabled = true;
     }
     this.$("#btn-sidebar").classList.toggle("on", this.settings.sidebar);
-    document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach((b) => (b.disabled = !has));
+    document.querySelectorAll<HTMLButtonElement>(".toolstrip [data-tool]").forEach((b) => (b.disabled = !has));
     const name = this.file?.name ?? "";
     this.$("#docname .name").textContent = has ? name : "";
     this.$("#docname").classList.toggle("dirty", has && this.dirty);

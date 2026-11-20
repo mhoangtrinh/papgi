@@ -50,29 +50,31 @@ function save(doc: MuPDF.PDFDocument, opts = "garbage=compact,compress"): Uint8A
  * Copy pages of `src` into `doc` before page `at`, with their annotations and (fillable) form
  * fields. graftPage alone leaves annotations behind.
  */
-export function graftPages(doc: MuPDF.PDFDocument, src: MuPDF.PDFDocument, pages: number[], at: number): void {
-  const map = doc.newGraftMap();
-  pages.forEach((p, i) => {
-    // annotations point back to their page (/P), which would drag the old page tree along
-    const srcAnnots = src.findPage(p).get("Annots");
-    if (srcAnnots.isArray()) srcAnnots.forEach((a) => a.delete("P"));
-    map.graftPage(at + i, src, p);
-    if (srcAnnots.isArray()) {
-      const page = doc.findPage(at + i);
-      const arr = doc.newArray();
-      srcAnnots.forEach((a) => {
-        const g = map.graftObject(a);
-        g.put("P", page);
-        arr.push(g);
-      });
-      page.put("Annots", arr);
-    }
-  });
-  mergeForm(doc, src, map, at, pages.length);
+export function graftPages(doc: MuPDF.PDFDocument, src: MuPDF.PDFDocument, pages: number[], at: number, map = doc.newGraftMap()): void {
+  pages.forEach((p, i) => graftOne(doc, src, p, at + i, map));
+  mergeForm(doc, src, map, pages.map((_, i) => at + i));
+}
+
+/** One page of `src` as page `at` of `doc` (annotations too). One graft map per source keeps shared fonts/images shared. */
+function graftOne(doc: MuPDF.PDFDocument, src: MuPDF.PDFDocument, p: number, at: number, map: MuPDF.PDFGraftMap): void {
+  // annotations point back to their page (/P), which would drag the old page tree along
+  const srcAnnots = src.findPage(p).get("Annots");
+  if (srcAnnots.isArray()) srcAnnots.forEach((a) => a.delete("P"));
+  map.graftPage(at, src, p);
+  if (srcAnnots.isArray()) {
+    const page = doc.findPage(at);
+    const arr = doc.newArray();
+    srcAnnots.forEach((a) => {
+      const g = map.graftObject(a);
+      g.put("P", page);
+      arr.push(g);
+    });
+    page.put("Annots", arr);
+  }
 }
 
 /** Grafted pages keep their widget annotations; register their fields so they stay fillable. */
-function mergeForm(doc: MuPDF.PDFDocument, src: MuPDF.PDFDocument, map: MuPDF.PDFGraftMap, at: number, n: number): void {
+function mergeForm(doc: MuPDF.PDFDocument, src: MuPDF.PDFDocument, map: MuPDF.PDFGraftMap, pages: number[]): void {
   const srcForm = src.getTrailer().get("Root").get("AcroForm");
   if (!srcForm.isDictionary()) return;
   const root = doc.getTrailer().get("Root");
@@ -94,7 +96,7 @@ function mergeForm(doc: MuPDF.PDFDocument, src: MuPDF.PDFDocument, map: MuPDF.PD
   fields.forEach((f) => {
     if (f.isIndirect()) have.add(f.asIndirect());
   });
-  for (let i = at; i < at + n; i++) {
+  for (const i of pages) {
     const annots = doc.findPage(i).get("Annots");
     if (!annots.isArray()) continue;
     annots.forEach((a) => {
@@ -137,6 +139,47 @@ export function mergePdfs(mupdf: M, files: (PdfInput & { pages?: number[] })[]):
     }
     return save(out);
   } finally {
+    out.destroy();
+  }
+}
+
+export interface PageRef {
+  /** Index into the files. */
+  file: number;
+  /** 0-based page of that file. */
+  page: number;
+  /** Extra turn in degrees (0, 90, 180, 270). */
+  rotate?: number;
+}
+
+/** Pages of several files, in any order (each may be turned), as one PDF. */
+export function mergePages(mupdf: M, files: PdfInput[], order: PageRef[]): Uint8Array {
+  if (!order.length) throw new Error("No pages to merge");
+  const out = new mupdf.PDFDocument();
+  const srcs: (MuPDF.PDFDocument | null)[] = files.map(() => null);
+  const maps: (MuPDF.PDFGraftMap | null)[] = files.map(() => null);
+  const placed: number[][] = files.map(() => []);
+  try {
+    order.forEach((ref, at) => {
+      const f = files[ref.file];
+      if (!f) throw new Error("Unknown file");
+      const src = (srcs[ref.file] ??= openPdf(mupdf, f));
+      if (ref.page < 0 || ref.page >= src.countPages()) throw new Error(`“${f.name}” has no page ${ref.page + 1}`);
+      const map = (maps[ref.file] ??= out.newGraftMap());
+      graftOne(out, src, ref.page, at, map);
+      placed[ref.file].push(at);
+      const turn = (((ref.rotate ?? 0) % 360) + 360) % 360;
+      if (turn) {
+        const pg = out.findPage(at);
+        const r = pg.getInheritable("Rotate");
+        const cur = r.isNumber() ? r.asNumber() : 0;
+        pg.put("Rotate", (((cur + turn) % 360) + 360) % 360);
+      }
+    });
+    srcs.forEach((src, i) => src && mergeForm(out, src, maps[i]!, placed[i]));
+    return save(out);
+  } finally {
+    srcs.forEach((s) => s?.destroy());
     out.destroy();
   }
 }
