@@ -187,7 +187,7 @@ export class Hub {
       <main class="hub-main hub-home">
         <section class="hub-hero">
           <h1>What would you like to do?</h1>
-          <p class="muted">Everything happens on this device. Your files are never uploaded.</p>
+          <p class="muted hero-tip">${icon("open")}<span><b>Tip:</b> drop files anywhere on this page. One PDF opens to edit, several get merged, pictures become a PDF.</span></p>
         </section>
         <section class="tool-grid" aria-label="Tools">${TOOL_LIST.map(card).join("")}</section>
         <section class="recent" hidden>
@@ -197,6 +197,7 @@ export class Hub {
         <p class="samples"><span class="muted small">Try a sample:</span>
           ${SAMPLES.map((s) => `<button class="chip" data-sample="${s.file}">${s.label}</button>`).join("")}
         </p>
+        <p class="hub-foot muted small">Works offline · your files stay on this device, nothing is uploaded</p>
       </main>`;
   }
 
