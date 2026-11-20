@@ -19,14 +19,12 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 
 | Tool | |
 |---|---|
-| Edit PDF | The editor (below) |
-| Fill & sign | Opens a PDF in the editor with the signature tool ready |
+| Open PDF | Drop or browse for a PDF; it opens in the editor (below): edit text, highlight and draw, text boxes, fill forms, sign, recognize scans (OCR), pages, print |
 | Merge PDFs | Combine PDFs in any order (drag or arrows); form fields, annotations and signatures come along. Password-protected files ask for the password |
 | Split PDF | Single pages, every N pages, or custom ranges (“1-3, 4, 5-”); several files come as one ZIP |
 | Compress PDF | Light (clean-up only), Recommended (pictures to 150 dpi) or Strong (96 dpi): pictures sharper than the page needs are scaled down and saved as JPEG; text and drawings stay sharp. Never returns a bigger file |
 | Images to PDF | JPG, PNG, GIF, BMP, TIFF (and HEIC/WebP where the browser can read them) on A4, Letter or picture-sized pages; phone photos keep the right way up |
 | PDF to images | PNG or JPG at 72/150/300 dpi, all or chosen pages; ZIP, or Share (e.g. to Photos) on a phone |
-| Recognize text | Opens a scan in the editor and runs OCR (below) |
 
 From the editor, the tools menu sends the open PDF straight to Merge, Split, Compress or PDF to images. Results can be downloaded, shared, or opened in the editor.
 

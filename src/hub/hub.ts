@@ -16,7 +16,7 @@ export interface HubHost {
   engine: Engine;
   ready: Promise<void>;
   /** Open a file in the editor and switch to it; `then` prepares a tool or action. */
-  openInEditor(f: OpenedFile, then?: "sign" | "ocr"): Promise<void>;
+  openInEditor(f: OpenedFile): Promise<void>;
   /** Name of the document open in the editor, if any. */
   editorDoc(): string | null;
   showEditor(): void;
@@ -79,6 +79,14 @@ export class Hub {
     parent.append(this.el);
     this.el.addEventListener("click", (e) => void this.onClick(e));
     this.el.addEventListener("input", (e) => this.onInput(e));
+    // (drop areas and recent files act as buttons from the keyboard too)
+    this.el.addEventListener("keydown", (e) => {
+      const t = e.target as HTMLElement;
+      if ((e.key === "Enter" || e.key === " ") && t.getAttribute("role") === "button") {
+        e.preventDefault();
+        t.click();
+      }
+    });
     this.el.addEventListener("change", (e) => this.onInput(e));
   }
 
@@ -94,11 +102,11 @@ export class Hub {
     if (!changed) return;
     if (route !== this.route) this.reset();
     this.route = route;
-    this.flow = route === "home" ? null : (FLOWS[route] ?? null);
+    this.flow = route === "home" || route === "open" ? null : (FLOWS[route] ?? null);
     if (this.flow) this.opts = { ...Object.fromEntries(this.flow.options.map((o) => [o.key, o.value])), ...loadOpts(route) };
     this.render();
     this.el.scrollTop = 0;
-    document.title = this.flow ? `${this.flow.title} · papgi` : "papgi";
+    document.title = this.flow ? `${this.flow.title} · papgi` : route === "open" ? "Open PDF · papgi" : "papgi";
   }
 
   /** Switch now (the address changes too, for back/forward and bookmarks). */
@@ -117,6 +125,11 @@ export class Hub {
   async drop(files: OpenedFile[]): Promise<void> {
     if (!files.length) return;
     if (this.flow) return this.addFiles(files);
+    if (this.route === "open") {
+      const pdf = files.find((f) => isPdf(f.bytes));
+      if (pdf) return void this.host.openInEditor(pdf);
+      return toast(looksLikeImage(files[0].name, files[0].bytes) ? "That's a picture: use Images to PDF to make a PDF from it" : "That isn't a PDF", "error");
+    }
     // start screen: pick the tool that fits
     const pdfs = files.filter((f) => isPdf(f.bytes));
     const images = files.filter((f) => !isPdf(f.bytes) && looksLikeImage(f.name, f.bytes));
@@ -143,11 +156,12 @@ export class Hub {
 
   private header(): string {
     const doc = this.host.editorDoc();
-    const title = this.flow ? `<div class="hub-title">${icon(tool(this.flow.id)!.icon)}<span>${this.flow.title}</span></div>` : "";
+    const t = this.flow ? tool(this.flow.id) : this.route === "open" ? tool("open") : undefined;
+    const title = t ? `<div class="hub-title">${icon(t.icon)}<span>${t.name}</span></div>` : "";
     return `
       <header class="hub-top">
         <button class="hub-brand" data-go="home" title="All tools"><span class="logo">${icon("file")}</span><span>papgi</span></button>
-        ${this.flow ? `<button class="btn flat hub-back" data-go="home">${icon("back")}<span>All tools</span></button>` : ""}
+        ${t ? `<button class="btn flat hub-back" data-go="home">${icon("back")}<span>All tools</span></button>` : ""}
         ${title}
         <div class="hub-actions">
           ${doc ? `<button class="btn flat to-editor" data-go="edit" title="Back to ${esc(doc)}">${icon("textEdit")}<span class="lbl">Editor: </span><span class="docn">${esc(doc)}</span></button>` : ""}
@@ -157,16 +171,17 @@ export class Hub {
   }
 
   private render(): void {
-    this.el.innerHTML = this.header() + (this.flow ? this.flowHtml(this.flow) : this.homeHtml());
+    this.el.innerHTML = this.header() + (this.flow ? this.flowHtml(this.flow) : this.route === "open" ? this.openHtml() : this.homeHtml());
     if (this.flow) this.renderFiles();
     else void this.renderRecent();
   }
 
   private homeHtml(): string {
     const card = (t: ToolDef) => `
-      <button class="tool-card" data-tool="${t.id}">
+      <button class="tool-card${t.kind === "open" ? " main" : ""}" data-tool="${t.id}">
         <span class="tool-icon">${icon(t.icon)}</span>
-        <span class="tool-text"><b>${t.name}</b><span class="muted">${t.desc}</span></span>
+        <span class="tool-text"><b>${t.name}</b><span class="muted">${t.desc}</span>
+          ${t.features ? `<span class="feature-list">${t.features.map((f) => `<span>${f}</span>`).join("")}</span>` : ""}</span>
       </button>`;
     return `
       <main class="hub-main hub-home">
@@ -185,12 +200,31 @@ export class Hub {
       </main>`;
   }
 
+  /** "Open PDF": drop or browse, then the editor (with recent files to reopen). */
+  private openHtml(): string {
+    const t = tool("open")!;
+    return `
+      <main class="hub-main open-page">
+        <div class="drop-area big" data-act="open-pdf" role="button" tabindex="0">
+          ${icon("file")}
+          <span class="drop-title"><b>Drop a PDF here</b></span>
+          <span class="muted">or</span>
+          <span class="btn primary big">${icon("open")}Browse for a PDF</span>
+          <span class="muted small">It opens in the editor: ${t.features!.join(" · ")}</span>
+        </div>
+        <section class="recent" hidden>
+          <div class="sec-head"><h2>${icon("clock")}Recent files</h2><button class="btn flat small" data-act="clear-recent">Clear</button></div>
+          <div class="recent-list"></div>
+        </section>
+      </main>`;
+  }
+
   private recent: RecentFile[] = [];
 
   private async renderRecent(): Promise<void> {
     this.recent = await listRecent();
     const sec = this.el.querySelector<HTMLElement>(".recent");
-    if (!sec || this.flow) return;
+    if (!sec) return;
     sec.hidden = !this.recent.length;
     sec.querySelector(".recent-list")!.innerHTML = this.recent
       .map(
@@ -213,7 +247,7 @@ export class Hub {
           <div><h1>${f.title}</h1><p class="muted">${f.intro}</p></div>
         </div>
         <section class="flow-files">
-          <div class="drop-area" data-act="add">
+          <div class="drop-area" data-act="add" role="button" tabindex="0">
             ${icon(f.takes === "pdf" ? "file" : "images")}
             <span><b>Choose ${what}</b><span class="muted"> or drop ${f.multiple ? "them" : "it"} here</span></span>
           </div>
@@ -334,6 +368,11 @@ export class Hub {
     }
     if (d.recent) return this.openRecent(d.recent);
     if (d.act === "add") return this.pickFiles();
+    if (d.act === "open-pdf") {
+      const f = await this.host.pickPdf();
+      if (f) await this.host.openInEditor(f);
+      return;
+    }
     if (d.remove !== undefined) {
       const [it] = this.items.splice(Number(d.remove), 1);
       URL.revokeObjectURL(it.thumb);
@@ -376,11 +415,8 @@ export class Hub {
     this.renderAction();
   }
 
-  private async startTool(id: ToolId): Promise<void> {
-    const def = tool(id)!;
-    if (def.kind === "flow") return void (location.hash = `#${id}`);
-    const f = await this.host.pickPdf();
-    if (f) await this.host.openInEditor(f, id === "sign" ? "sign" : id === "ocr" ? "ocr" : undefined);
+  private startTool(id: ToolId): void {
+    location.hash = `#${id}`;
   }
 
   private async openRecent(id: string): Promise<void> {

@@ -95,7 +95,7 @@ export class App {
       {
         engine,
         ready,
-        openInEditor: (f, then) => this.openInEditor(f, then),
+        openInEditor: (f) => this.openInEditor(f),
         editorDoc: () => (this.info && this.file ? this.file.name : null),
         showEditor: () => (location.hash = "#edit"),
         pickPdf: async () => (await pickPdfs(false))[0] ?? null,
@@ -121,7 +121,7 @@ export class App {
           <div class="menu tools-menu" id="tools-menu" role="menu" hidden>
             <button data-goto="home">${icon("home")}All tools</button>
             <hr>
-            ${TOOL_LIST.filter((t) => t.id !== "edit").map((t) => `<button data-goto="${t.id}">${icon(t.icon)}${t.name}${FLOWS[t.id]?.takes === "pdf" ? `<span class="muted small">this PDF</span>` : ""}</button>`).join("")}
+            ${TOOL_LIST.map((t) => `<button data-goto="${t.id}">${icon(t.icon)}${t.id === "open" ? "Open another PDF" : t.name}${FLOWS[t.id]?.takes === "pdf" ? `<span class="muted small">this PDF</span>` : ""}</button>`).join("")}
           </div>
         </div>
         <button class="icon-btn" id="btn-sidebar" title="Pages panel">${icon("sidebar")}</button>
@@ -607,24 +607,21 @@ export class App {
     }
     this.viewer.closeEditor(true);
     void this.viewer.closeParagraph(true);
-    this.hub.show(FLOWS[h] ? (h as ToolId) : "home");
+    this.hub.show(FLOWS[h] || h === "open" ? (h as ToolId) : "home");
   }
 
-  /** Open a file in the editor and show it; `then` gets a tool or action ready. */
-  async openInEditor(f: OpenedFile, then?: "sign" | "ocr"): Promise<void> {
+  /** Open a file in the editor and show it. */
+  async openInEditor(f: OpenedFile): Promise<void> {
     await this.open(f);
     if (!this.info || this.file?.name !== f.name) return;
     if (location.hash !== "#edit") location.hash = "#edit";
     else this.route();
-    if (then === "sign") this.setTool("sign");
-    if (then === "ocr") void this.recognize();
   }
 
   /** From the editor's tools menu: the start screen, an action here, or a tool with this PDF. */
   private async gotoTool(id: ToolId | "home"): Promise<void> {
     if (id === "home") return void (location.hash = "");
-    if (id === "sign") return this.setTool("sign");
-    if (id === "ocr") return void this.recognize();
+    if (id === "open") return void (location.hash = "#open");
     if (!FLOWS[id]) return;
     let file: OpenedFile | null = null;
     if (this.info && this.file && FLOWS[id].takes === "pdf") {

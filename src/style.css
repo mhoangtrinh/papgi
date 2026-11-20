@@ -2007,6 +2007,84 @@ input.field:focus {
   transform: none;
 }
 
+/* Open PDF: the first, wide card listing what the editor does */
+.tool-card.main {
+  grid-column: 1 / -1;
+  padding: 20px;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: linear-gradient(135deg, var(--accent-soft), var(--panel) 60%);
+}
+
+.tool-card.main .tool-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 15px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.tool-card.main .tool-icon .ic {
+  width: 30px;
+  height: 30px;
+}
+
+.tool-card.main b {
+  font-size: 17px;
+}
+
+.feature-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.feature-list span {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.open-page .drop-area.big {
+  gap: 12px;
+  min-height: 300px;
+  padding: 40px 20px;
+}
+
+.open-page .drop-area.big > .ic {
+  width: 52px;
+  height: 52px;
+}
+
+.open-page .drop-title b {
+  color: var(--text);
+  font-size: 19px;
+}
+
+.open-page .drop-area .btn {
+  pointer-events: none;
+}
+
+.open-page .drop-area .btn .ic {
+  width: 18px;
+  height: 18px;
+  color: inherit;
+}
+
+.open-page .drop-area .small {
+  max-width: 520px;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.drop-area:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .tool-icon {
   display: grid;
   place-items: center;
@@ -2461,6 +2539,18 @@ input.field:focus {
     align-items: flex-start;
     gap: 10px;
     padding: 14px;
+  }
+  .tool-card.main {
+    flex-direction: row;
+    align-items: center;
+    padding: 16px;
+  }
+  .tool-card.main .tool-icon {
+    width: 48px;
+    height: 48px;
+  }
+  .open-page .drop-area.big {
+    min-height: 240px;
   }
   .tool-text .muted {
     font-size: 12px;

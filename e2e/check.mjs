@@ -46,7 +46,31 @@ try {
   await page.goto(URL_);
   await page.waitForSelector(".hub-home");
   await page.screenshot({ path: shots + "desktop-home-light.png" });
-  check("start screen shows the tools", (await page.locator(".tool-card").count()) === 8 && (await page.isVisible("#hub")));
+  check("start screen shows the tools", (await page.locator(".tool-card").count()) === 6 && (await page.isVisible("#hub")));
+  check("Open PDF comes first and lists what the editor does", (await page.locator(".tool-card").first().getAttribute("data-tool")) === "open" && /Sign/.test(await page.textContent(".tool-card.main")) && /OCR/.test(await page.textContent(".tool-card.main")));
+  // Open PDF: its own page to drop or browse
+  await page.click('[data-tool="open"]');
+  await page.waitForSelector(".open-page .drop-area");
+  check("Open PDF shows a drop / browse page", (await page.evaluate(() => location.hash)) === "#open" && /Browse for a PDF/.test(await page.textContent(".open-page")));
+  await page.screenshot({ path: shots + "desktop-open-light.png" });
+  {
+    const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.click(".open-page .drop-area")]);
+    await fc.setFiles([new URL("../public/samples/pages.pdf", import.meta.url).pathname]);
+    await page.waitForSelector(".page.rendered", { timeout: 20000 });
+    check("Open PDF: a browsed file opens in the editor", (await page.evaluate(() => location.hash)) === "#edit" && (await page.locator(".page").count()) === 5);
+    // dropping on the Open PDF page opens it too
+    await page.goto(URL_ + "#open");
+    await page.waitForSelector(".open-page");
+    await page.evaluate(async () => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([await (await fetch("./samples/form.pdf")).arrayBuffer()], "Antrag.pdf", { type: "application/pdf" }));
+      for (const type of ["dragenter", "dragover", "drop"]) window.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    const opened = await page.waitForFunction(() => document.querySelector("#docname .name")?.textContent === "Antrag.pdf" && location.hash === "#edit" && !document.querySelector("#hub:not([hidden])"), null, { timeout: 15000 }).then(() => true, () => false);
+    check("Open PDF: a dropped file opens in the editor", opened);
+    await page.goto(URL_);
+    await page.waitForSelector(".hub-home");
+  }
 
   const engine = (fn, ...args) => page.evaluate(([f, a]) => window.papgi.engine[f](...a), [fn, args]);
   const waitRendered = async () => {
