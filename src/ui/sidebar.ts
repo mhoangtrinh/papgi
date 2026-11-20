@@ -15,6 +15,8 @@ export interface SidebarHost {
   reorder(order: number[], moved: number[]): void;
   /** The main view is drawing pages in view: thumbnails wait (one engine does both). */
   viewerBusy(): boolean;
+  /** The panel was resized by hand (px; 0 = back to the default). */
+  resized(width: number): void;
 }
 
 interface Thumb {
@@ -22,10 +24,14 @@ interface Thumb {
   canvas: HTMLCanvasElement;
   version: number;
   renderedVersion: number;
+  /** Width (CSS px) the picture was drawn for. */
+  renderedWidth: number;
   near: boolean;
 }
 
-const THUMB_W = 132;
+/** Panel width limits; from GRID_AT on, pages are laid out left to right. */
+export const SIDE_MIN = 120;
+export const GRID_AT = 300;
 
 export class Sidebar {
   readonly el: HTMLElement;
@@ -52,9 +58,13 @@ export class Sidebar {
         <button class="icon-btn" data-act="blank" title="Insert blank page after">${icon("blank")}</button>
       </div>
       <div class="side-hint muted"></div>
-      <div class="thumbs" tabindex="0" aria-label="Pages"></div>`;
+      <div class="thumbs" tabindex="0" aria-label="Pages"></div>
+      <div class="side-resize" role="separator" aria-orientation="vertical" aria-label="Resize the pages panel" tabindex="0" title="Drag to resize (wider shows pages side by side). Double-click: back to normal"></div>`;
     this.list = this.el.querySelector(".thumbs")!;
     mount.append(this.el);
+    this.bindResize(this.el.querySelector(".side-resize")!);
+    // (a smaller window squeezes the panel; the chosen width comes back when there's room)
+    addEventListener("resize", () => this.wanted && this.setWidth(this.wanted, false));
 
     this.el.querySelector(".side-actions")!.addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
@@ -85,9 +95,11 @@ export class Sidebar {
         e.preventDefault();
         e.stopPropagation();
         host.remove(this.targetPages());
-      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp" || (this.isGrid() && (e.key === "ArrowLeft" || e.key === "ArrowRight"))) {
         e.preventDefault();
-        const i = Math.max(0, Math.min(this.info.pageCount - 1, this.current + (e.key === "ArrowDown" ? 1 : -1)));
+        const step = e.key === "ArrowLeft" || e.key === "ArrowRight" ? 1 : this.columns();
+        const dir = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : -1;
+        const i = Math.max(0, Math.min(this.info.pageCount - 1, this.current + dir * step));
         this.sel = clickPage(this.sel, i, { shift: e.shiftKey });
         this.paintSelection();
         host.goTo(i);
@@ -116,7 +128,7 @@ export class Sidebar {
     this.list.addEventListener("dragover", (e) => {
       if (!this.dragging) return;
       e.preventDefault();
-      this.setDropIndicator(this.dropIndex(e.clientY));
+      this.setDropIndicator(this.dropIndex(e.clientX, e.clientY));
     });
     this.list.addEventListener("dragleave", (e) => {
       if (!this.list.contains(e.relatedTarget as Node)) this.setDropIndicator(-1);
@@ -124,7 +136,7 @@ export class Sidebar {
     this.list.addEventListener("drop", (e) => {
       if (!this.dragging || !this.info) return;
       e.preventDefault();
-      const at = this.dropIndex(e.clientY);
+      const at = this.dropIndex(e.clientX, e.clientY);
       const moving = this.dragging;
       this.endDrag();
       const order = moveOrder(this.info.pageCount, moving, at);
@@ -150,12 +162,89 @@ export class Sidebar {
     this.list.classList.remove("dragging");
   }
 
-  private dropIndex(clientY: number): number {
+  /** Where dropped pages go: in reading order (rows left to right when the panel is wide). */
+  private dropIndex(clientX: number, clientY: number): number {
+    const grid = this.isGrid();
     for (let i = 0; i < this.thumbs.length; i++) {
       const r = this.thumbs[i].el.getBoundingClientRect();
-      if (clientY < r.top + r.height / 2) return i;
+      if (!grid) {
+        if (clientY < r.top + r.height / 2) return i;
+      } else if (clientY < r.top || (clientY <= r.bottom && clientX < r.left + r.width / 2)) return i;
     }
     return this.thumbs.length;
+  }
+
+  isGrid(): boolean {
+    return this.el.classList.contains("grid");
+  }
+
+  /** Pages per row (1 in the list). */
+  private columns(): number {
+    if (!this.isGrid() || !this.thumbs.length) return 1;
+    const top = this.thumbs[0].el.offsetTop;
+    let n = 0;
+    while (n < this.thumbs.length && this.thumbs[n].el.offsetTop === top) n++;
+    return Math.max(1, n);
+  }
+
+  // ---------- width ----------
+
+  /** Panel width in px (0: the default from the stylesheet). */
+  private wanted = 0;
+  setWidth(px: number, remember = true): void {
+    if (remember) this.wanted = px > 0 ? px : 0;
+    const max = this.maxWidth();
+    const w = px > 0 ? Math.round(Math.max(SIDE_MIN, Math.min(max, px))) : 0;
+    this.el.style.width = w ? `${w}px` : "";
+    this.el.classList.toggle("grid", w >= GRID_AT);
+    this.el.classList.toggle("wide", w > 0);
+    // pictures drawn for a smaller size get drawn again, sharper
+    for (const t of this.thumbs) if (t.renderedWidth && t.el.clientWidth > t.renderedWidth * 1.25) t.version++;
+    this.schedule();
+  }
+
+  private maxWidth(): number {
+    const main = this.el.parentElement?.clientWidth || innerWidth;
+    // keep room for the page itself (on phones the panel covers it, so nearly all of it)
+    return innerWidth <= 760 ? main - 40 : Math.max(SIDE_MIN, main - 320);
+  }
+
+  private bindResize(handle: HTMLElement): void {
+    let startX = 0;
+    let startW = 0;
+    let id = -1;
+    const end = () => {
+      if (id < 0) return;
+      id = -1;
+      document.body.classList.remove("side-resizing");
+      this.host.resized(this.el.classList.contains("wide") ? this.el.offsetWidth : 0);
+    };
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      id = e.pointerId;
+      handle.setPointerCapture(id);
+      startX = e.clientX;
+      startW = this.el.offsetWidth;
+      document.body.classList.add("side-resizing");
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (e.pointerId !== id) return;
+      this.setWidth(startW + e.clientX - startX);
+    });
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    handle.addEventListener("lostpointercapture", end);
+    handle.addEventListener("dblclick", () => {
+      this.setWidth(0);
+      this.host.resized(0);
+    });
+    handle.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      this.setWidth(this.el.offsetWidth + (e.key === "ArrowRight" ? 40 : -40));
+      this.host.resized(this.el.offsetWidth);
+    });
   }
 
   private setDropIndicator(at: number): void {
@@ -202,7 +291,7 @@ export class Sidebar {
       label.textContent = String(i + 1);
       el.append(box, label);
       this.list.append(el);
-      this.thumbs.push({ el, canvas, version: 1, renderedVersion: 0, near: false });
+      this.thumbs.push({ el, canvas, version: 1, renderedVersion: 0, renderedWidth: 0, near: false });
       this.observer.observe(el);
     });
     this.updateHint();
@@ -224,7 +313,7 @@ export class Sidebar {
     if (t && !this.el.hidden) {
       const lr = this.list.getBoundingClientRect();
       const r = t.el.getBoundingClientRect();
-      if (r.top < lr.top || r.bottom > lr.bottom) t.el.scrollIntoView({ block: "nearest" });
+      if (r.top < lr.top || r.bottom > lr.bottom) t.el.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   }
 
@@ -252,7 +341,9 @@ export class Sidebar {
     if (i < 0) return;
     const t = this.thumbs[i];
     const p = this.info.pages[i];
-    const scale = ((THUMB_W * (window.devicePixelRatio || 1)) / Math.max(p.w, p.h * 0.75)) * 1;
+    // drawn for the box's width (list: the panel's width; wide panel: one cell)
+    const boxW = Math.max(100, t.el.querySelector<HTMLElement>(".thumb-box")?.clientWidth || 132);
+    const scale = (Math.min(480, boxW) * (window.devicePixelRatio || 1)) / Math.max(p.w, p.h * 0.75);
     const version = t.version;
     this.rendering = true;
     this.host.engine
@@ -263,6 +354,7 @@ export class Sidebar {
           t.canvas.height = bmp.height;
           t.canvas.getContext("2d")!.drawImage(bmp, 0, 0);
           t.renderedVersion = version;
+          t.renderedWidth = boxW;
         }
         bmp.close();
       })

@@ -1002,6 +1002,51 @@ try {
     await page.emulateMedia({ colorScheme: "light" });
   }
 
+  // ---- pages panel: drag wider -> pages side by side; reorder there; double-click resets ----
+  {
+    await page.goto(URL_);
+    await page.waitForSelector(".hub-home");
+    await page.evaluate(async () => {
+      location.hash = "#edit";
+      const r = await fetch("./samples/pages.pdf");
+      await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    });
+    await waitRendered();
+    await page.waitForSelector(".thumb");
+    const w0 = await page.evaluate(() => document.querySelector(".sidebar").offsetWidth);
+    const hd = await page.locator(".side-resize").boundingBox();
+    await page.mouse.move(hd.x + hd.width / 2, hd.y + 300);
+    await page.mouse.down();
+    await page.mouse.move(hd.x + 120, hd.y + 300, { steps: 6 });
+    const listW = await page.evaluate(() => [document.querySelector(".sidebar").classList.contains("grid"), document.querySelector(".thumb").offsetWidth]);
+    await page.mouse.move(hd.x + 360, hd.y + 300, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    const st = await page.evaluate(() => {
+      const t = [...document.querySelectorAll(".thumb")];
+      return { w: document.querySelector(".sidebar").offsetWidth, grid: document.querySelector(".sidebar").classList.contains("grid"), cols: t.filter((x) => x.offsetTop === t[0].offsetTop).length, saved: JSON.parse(localStorage.getItem("papgi.settings.v1")).sidebarWidth };
+    });
+    check("pages panel: a bit wider keeps the list with bigger pages", !listW[0] && listW[1] > 200, JSON.stringify(listW));
+    check("pages panel: wide shows pages left to right, width remembered", st.grid && st.cols >= 2 && st.w > w0 + 300 && st.saved === st.w, JSON.stringify(st));
+    await page.screenshot({ path: shots + "desktop-pages-panel-wide-light.png" });
+    // drag page 5 in front of page 1 in the grid
+    const t1 = await page.locator(".thumb").nth(0).boundingBox();
+    await page.locator(".thumb").nth(4).dragTo(page.locator(".thumb").nth(0), { targetPosition: { x: 8, y: t1.height / 2 } });
+    await page.waitForTimeout(600);
+    check("pages panel (wide): drag reorders left to right", (await engine("pageText", 0)).includes("page 5 of 5"));
+    // arrows move by rows
+    await page.locator(".thumb").nth(0).click();
+    await page.waitForTimeout(500);
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(500);
+    const cur = () => page.evaluate(() => [...document.querySelectorAll(".thumb")].findIndex((x) => x.classList.contains("current")));
+    check("pages panel (wide): arrow right goes to the next page", (await cur()) === 1, String(await cur()));
+    await page.locator(".side-resize").dblclick();
+    await page.waitForTimeout(300);
+    const back = await page.evaluate(() => [document.querySelector(".sidebar").offsetWidth, document.querySelector(".sidebar").classList.contains("grid"), JSON.parse(localStorage.getItem("papgi.settings.v1")).sidebarWidth]);
+    check("pages panel: double-click the edge resets it", back[0] === w0 && !back[1] && back[2] === 0, JSON.stringify(back));
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 

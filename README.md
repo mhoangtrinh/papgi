@@ -65,7 +65,7 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 | Double-click a text box | Edit it (Ctrl+Enter to finish, Esc to cancel) |
 | Drag an annotation | Move it, also onto another page |
 
-In the sidebar: click a page to jump, Ctrl/Shift-click to select several, drag to reorder.
+In the sidebar: click a page to jump, Ctrl/Shift-click to select several, drag to reorder. Drag its right edge to resize it: wider gives bigger pages, and from about 300 px the pages sit side by side, left to right (arrow keys then move by page and by row). The width is remembered; double-click the edge to go back to normal.
 
 ## Development
 

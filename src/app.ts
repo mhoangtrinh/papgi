@@ -67,6 +67,10 @@ export class App {
         insertPdf: (at) => this.insertPdf(at),
         insertBlank: (at) => this.pageOp(this.engine.insertBlankPage(at), [at], at),
         reorder: (order, moved) => this.pageOp(this.engine.reorderPages(order), movedSelection(order, moved)),
+        resized: (w) => {
+          this.settings.sidebarWidth = w;
+          saveSettings(this.settings);
+        },
       },
       main,
     );
@@ -89,6 +93,7 @@ export class App {
     // On phones the pages panel covers the page, so start with it closed there.
     if (window.matchMedia("(max-width: 760px)").matches) this.settings.sidebar = false;
     this.sidebar.show(this.settings.sidebar);
+    this.sidebar.setWidth(this.settings.sidebarWidth);
     this.bind();
     this.setTool(this.settings.tool);
     this.renderOptions();

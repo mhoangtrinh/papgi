@@ -596,6 +596,8 @@ kbd {
 }
 
 .sidebar {
+  position: relative;
+  z-index: 2;
   width: var(--side);
   flex: none;
   display: flex;
@@ -3233,4 +3235,88 @@ body.organizing .toolstrip .options {
 
 .pv-cap {
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- pages panel: resize, side-by-side pages when wide ---------- */
+
+.side-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -5px;
+  z-index: 3;
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.side-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.side-resize:hover::after,
+.side-resize:focus-visible::after,
+body.side-resizing .side-resize::after {
+  background: var(--accent);
+}
+
+body.side-resizing {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body.side-resizing .viewer {
+  pointer-events: none;
+}
+
+.sidebar.grid .thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  align-content: start;
+  align-items: end;
+  gap: 12px 8px;
+}
+
+.sidebar.grid .thumb.drop-before::before,
+.sidebar.grid .thumb.drop-after::after {
+  top: 6px;
+  bottom: 22px;
+  left: auto;
+  right: auto;
+  width: 3px;
+  height: auto;
+}
+
+.sidebar.grid .thumb.drop-before::before {
+  left: -6px;
+}
+
+.sidebar.grid .thumb.drop-after::after {
+  right: -6px;
+}
+
+@media (max-width: 760px) {
+  .side-resize {
+    right: -11px;
+    width: 22px;
+  }
+  .side-resize::after {
+    left: 9px;
+    top: 50%;
+    bottom: auto;
+    height: 44px;
+    margin-top: -22px;
+    width: 4px;
+    border-radius: 2px;
+    background: var(--border);
+  }
 }
