@@ -50,6 +50,7 @@ const P: Record<string, string> = {
   compress: '<path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="m14 10 7-7"/><path d="M3 21l7-7"/>',
   images: '<rect x="7" y="3" width="14" height="12" rx="2"/><path d="M3 7v12a2 2 0 0 0 2 2h12"/><circle cx="12" cy="8" r="1.6"/><path d="m21 13-4-4-6 6"/>',
   toPdf: '<rect x="3" y="5" width="9" height="8" rx="1.5"/><path d="m3 11 3-3 3 3"/><path d="M14 3h4l3 3v13a2 2 0 0 1-2 2h-5"/><path d="M15 15h3M15 18h3"/>',
+  toWord: '<path d="M4 3h6l3 3v5"/><path d="M4 3v14h5"/><rect x="11" y="12" width="10" height="9" rx="1.5"/><path d="m13 14.5 1.2 4.5 1.8-3.2 1.8 3.2 1.2-4.5"/>',
   fromPdf: '<path d="M4 3h6l3 3v6"/><path d="M4 3v14h4"/><rect x="11" y="12" width="10" height="9" rx="1.5"/><path d="m11 19 3-3 3 3 2-2 2 2"/>',
   download: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
   share: '<path d="M12 15V3"/><path d="m8 7 4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>',

@@ -11,6 +11,7 @@ import {
   compressPdf, graftPages, imagesToPdf, mergePages, mergePdfs, pageToImage, pagesToImages, pdfPageCount, splitPdf,
   type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions, type SplitPage,
 } from "./tools";
+import { pdfToWord, type WordOptions, type WordResult } from "./toword";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
@@ -953,6 +954,10 @@ export class PdfEngine {
 
   toolPagesToImages(f: PdfInput, pages: number[], opts: RenderOptions, turns?: number[]): Uint8Array[] {
     return pagesToImages(this.mupdf, f, pages, opts, turns);
+  }
+
+  toolPdfToWord(f: PdfInput, pages: number[], opts: WordOptions, turns?: number[]): WordResult {
+    return pdfToWord(this.mupdf, f, pages, opts, turns);
   }
 
   toolCompress(f: PdfInput, opts: CompressOptions): CompressResult {

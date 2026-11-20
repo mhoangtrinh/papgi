@@ -33,6 +33,7 @@ export default defineConfig({
           { name: "Compress PDF", url: "./#compress" },
           { name: "Images to PDF", url: "./#images-to-pdf" },
           { name: "PDF to images", url: "./#pdf-to-images" },
+          { name: "PDF to Word", url: "./#pdf-to-word" },
         ],
         launch_handler: { client_mode: "focus-existing" },
       } as Record<string, unknown>,

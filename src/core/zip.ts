@@ -36,9 +36,10 @@ export function uniqueNames(names: string[]): string[] {
   });
 }
 
-export function zip(entries: ZipEntry[], date = new Date()): Uint8Array {
+/** `paths`: keep folders in names ("word/document.xml"; for packages like .docx). */
+export function zip(entries: ZipEntry[], date = new Date(), paths = false): Uint8Array {
   const enc = new TextEncoder();
-  const names = uniqueNames(entries.map((e) => e.name.replace(/[\\/:*?"<>|]/g, "_")));
+  const names = paths ? entries.map((e) => e.name) : uniqueNames(entries.map((e) => e.name.replace(/[\\/:*?"<>|]/g, "_")));
   const time = ((date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1)) & 0xffff;
   const day = (((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()) & 0xffff;
   const parts: Uint8Array[] = [];

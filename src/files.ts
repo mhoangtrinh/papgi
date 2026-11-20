@@ -83,6 +83,7 @@ const SAVE_TYPES: Record<string, { description: string; accept: Record<string, s
   "application/zip": { description: "ZIP archive", accept: { "application/zip": [".zip"] } },
   "image/png": { description: "PNG picture", accept: { "image/png": [".png"] } },
   "image/jpeg": { description: "JPG picture", accept: { "image/jpeg": [".jpg", ".jpeg"] } },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { description: "Word document", accept: { "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"] } },
 };
 
 /** Save a result file: a "Save as" dialog where the browser has one, otherwise a download. */

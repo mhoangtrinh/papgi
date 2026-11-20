@@ -46,7 +46,7 @@ try {
   await page.goto(URL_);
   await page.waitForSelector(".hub-home");
   await page.screenshot({ path: shots + "desktop-home-light.png" });
-  check("start screen shows the tools", (await page.locator(".tool-card").count()) === 6 && (await page.isVisible("#hub")));
+  check("start screen shows the tools", (await page.locator(".tool-card").count()) === 7 && (await page.isVisible("#hub")));
   check("Open PDF comes first and lists what the editor does", (await page.locator(".tool-card").first().getAttribute("data-tool")) === "open" && /Sign/.test(await page.textContent(".tool-card.main")) && /OCR/.test(await page.textContent(".tool-card.main")));
   // Open PDF: its own page to drop or browse
   await page.click('[data-tool="open"]');
@@ -941,6 +941,31 @@ try {
     check("PDF to images: turned page comes out turned", third.width > third.height, `${third.width}x${third.height}`);
     const one = await download(() => page.click('[data-out="0"]'));
     check("PDF to images: single picture download", one.bytes[0] === 0xff && one.bytes[1] === 0xd8);
+
+    // PDF to Word: editable, then as pictures
+    await page.goto(URL_ + "#pdf-to-word");
+    await page.waitForSelector('[data-flow="pdf-to-word"]');
+    await page.evaluate(() => (window.showSaveFilePicker = undefined));
+    await choose([path.join(samplesDir, "paper.pdf")]);
+    await page.waitForFunction(() => document.querySelectorAll(".flow .ptile img").length === 1, null, { timeout: 20000 });
+    check("PDF to Word: button names the pages", /Make Word file \(1 page\)/.test(await page.textContent("[data-act=run]")), await page.textContent("[data-act=run]"));
+    await page.screenshot({ path: shots + "desktop-tool-word-light.png" });
+    await page.click("[data-act=run]");
+    await waitDone();
+    const word = await download(() => page.click("[data-act=save-all]"));
+    const wordXml = (bytes) => {
+      const f = path.join(tmp, "w.docx");
+      fs.writeFileSync(f, bytes);
+      return execSync(`python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(z.read('word/document.xml').decode()); print('MEDIA', len([n for n in z.namelist() if n.startswith('word/media/')]))" ${f}`).toString();
+    };
+    const wx = wordXml(word.bytes);
+    check("PDF to Word: an editable .docx", word.name === "paper.docx" && wx.includes("Curvature Correction") && wx.includes('w:num="2"') && wx.includes("Heading"), `${word.name} ${word.bytes.length} B`);
+    await page.click('[data-choose="mode"][data-value="pictures"]');
+    await page.click("[data-act=run]");
+    await waitDone();
+    const wordPics = await download(() => page.click("[data-act=save-all]"));
+    const wp = wordXml(wordPics.bytes);
+    check("PDF to Word: as pictures", !wp.includes("Curvature Correction") && /MEDIA 1/.test(wp) && wp.includes("<wp:anchor"), wp.slice(-40));
 
     // images to PDF, then open the result in the editor
     const img1 = path.join(tmp, "Foto 1.png");

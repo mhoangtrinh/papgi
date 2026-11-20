@@ -25,8 +25,9 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 | Compress PDF | Light (clean-up only), Recommended (pictures to 150 dpi) or Strong (96 dpi): pictures sharper than the page needs are scaled down and saved as JPEG; text and drawings stay sharp. Never returns a bigger file. The resulting size of each level shows before you press Compress (worked out in the background; pressing Compress then reuses it) |
 | Images to PDF | JPG, PNG, GIF, BMP, TIFF (and HEIC/WebP where the browser can read them) on A4, Letter or picture-sized pages; phone photos keep the right way up. A preview shows one page per picture: drag to reorder, turn or remove |
 | PDF to images | PNG or JPG at 72/150/300 dpi. A preview shows every page: remove the ones you don't need, turn or reorder the rest; ZIP, or Share (e.g. to Photos) on a phone |
+| PDF to Word | A .docx you can edit in Word: **Editable text** rebuilds paragraphs (fonts mapped to Word fonts, sizes, bold/italic, colours, super-/subscript, alignment, indents, spacing), headings (show in Word's navigation pane), two-column layouts as Word columns, bullet/numbered lists and references with hanging indents, table rows as tab stops, pictures as pictures; formulas and drawings become pictures of their area; lines, table borders, boxes and form fields sit behind the text as one see-through picture per page. Pages that are only a scan go in as pictures (use Recognize text in the editor first). **As pictures**: every page as one picture, looks exactly like the PDF |
 
-From the editor, the tools menu sends the open PDF straight to Merge, Split, Compress or PDF to images. Results can be downloaded, shared, or opened in the editor.
+From the editor, the tools menu sends the open PDF straight to Merge, Split, Compress, PDF to images or PDF to Word. Results can be downloaded, shared, or opened in the editor.
 
 **Recent files** are kept in this browser only. In Edge/Chrome on a computer papgi remembers the file itself and reopens it from disk; elsewhere it keeps a copy (files up to 40 MB). Samples aren't listed. Remove single files with × or all with *Clear*.
 
@@ -45,7 +46,7 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | Edit | Move, recolour, delete annotations; full undo/redo for everything |
 | **Scans (OCR)** | Recognize text on scanned pages (Document → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 
-Planned next: PDF to Word (as pictures, or fully editable), bold/italic changes while editing text.
+Planned next: real Word tables from PDF tables, bold/italic changes while editing text.
 
 Text editing limits: formulas and sub/superscripts inside an edited paragraph are flattened onto one line; rotated text can't be edited yet. On scans, edit only after recognizing the text; Chinese, Japanese, Korean, Arabic and other scripts aren't supported for recognition.
 
@@ -97,6 +98,8 @@ src/
   core/ocrlangs.ts   the recognition languages on offer
   ui/ocr.ts          recognition dialog, progress, and the tesseract.js runner
   ui/print.ts        printing (browser PDF viewer, or rendered pages)
+  engine/toword.ts   PDF -> Word: text, layout and pictures (unit-tested in Node)
+  core/docx.ts       small .docx writer (sections, columns, paragraphs, tabs, pictures)
   engine/tools.ts    merge, split, images <-> PDF, compress (work on copies; unit-tested in Node)
   hub/registry.ts    the list of tools
   hub/flows.ts       each stand-alone tool's options and what it runs

@@ -3,7 +3,7 @@
 // text, annotating, filling, signing, recognizing scans all happen there). "flow" tools are
 // stand-alone pages: pick files -> choose options -> get the result.
 
-export type ToolId = "open" | "merge" | "split" | "compress" | "images-to-pdf" | "pdf-to-images";
+export type ToolId = "open" | "merge" | "split" | "compress" | "images-to-pdf" | "pdf-to-images" | "pdf-to-word";
 
 export interface ToolDef {
   id: ToolId;
@@ -29,6 +29,7 @@ export const TOOL_LIST: ToolDef[] = [
   { id: "compress", name: "Compress PDF", desc: "Make a PDF smaller to send or upload", icon: "compress", kind: "flow" },
   { id: "images-to-pdf", name: "Images to PDF", desc: "Photos and scans (JPG, PNG…) into a PDF", icon: "toPdf", kind: "flow" },
   { id: "pdf-to-images", name: "PDF to images", desc: "Save pages as PNG or JPG pictures", icon: "fromPdf", kind: "flow" },
+  { id: "pdf-to-word", name: "PDF to Word", desc: "Editable Word document, or pages as pictures", icon: "toWord", kind: "flow" },
 ];
 
 export const tool = (id: string): ToolDef | undefined => TOOL_LIST.find((t) => t.id === id);
