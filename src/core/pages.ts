@@ -115,3 +115,20 @@ export function everyN(count: number, n: number): number[][] {
   for (let i = 0; i < count; i += size) out.push([...Array(Math.min(size, count - i)).keys()].map((k) => i + k));
   return out;
 }
+
+/** File names for split parts (0-based pages): "base-p03.pdf", "base-p01-02.pdf",
+ *  "base-part2.pdf" for scattered pages. Names are made unique. */
+export function splitNames(base: string, groups: number[][], total: number): string[] {
+  const width = String(total).length;
+  const pad = (v: number) => String(v + 1).padStart(width, "0");
+  const seen = new Map<string, number>();
+  return groups.map((g, i) => {
+    const run = g.every((v, j) => j === 0 || v === g[j - 1] + 1);
+    const range = g.length === 1 ? `p${pad(g[0])}` : run ? `p${pad(g[0])}-${pad(g[g.length - 1])}` : `part${i + 1}`;
+    let name = `${base}-${range}`;
+    const n = (seen.get(name) ?? 0) + 1;
+    seen.set(name, n);
+    if (n > 1) name += ` (${n})`;
+    return `${name}.pdf`;
+  });
+}

@@ -11,6 +11,7 @@ import { ago, forgetAll, forgetFile, formatSize, listRecent, readRecent, type Re
 import { TOOL_LIST, tool, type ToolDef, type ToolId } from "./registry";
 import { FLOWS, type FlowDef, type Item, type Option, type PageSlot } from "./flows";
 import { FILE_COLORS, PageGrid, type GridFile } from "./pagegrid";
+import { everyN, parseGroups, splitNames } from "../core/pages";
 import { isPdf, normalizeImage, looksLikeImage } from "./images";
 
 export interface HubHost {
@@ -74,6 +75,8 @@ export class Hub {
   private files = new Map<string, GridFile>();
   private grid: PageGrid | null = null;
   private fileCount = 0;
+  /** Split: the files to make, each with its pages (edited in the preview). */
+  private parts: PageSlot[][] = [];
 
   constructor(
     private host: HubHost,
@@ -160,6 +163,7 @@ export class Hub {
     this.thumbs.clear();
     this.files.clear();
     this.fileCount = 0;
+    this.parts = [];
     this.grid = null;
     this.results = [];
     this.cancel = true;
@@ -271,7 +275,7 @@ export class Hub {
   private flowHtml(f: FlowDef): string {
     const what = f.takes === "pdf" ? (f.multiple ? "PDFs" : "a PDF") : "pictures";
     return `
-      <main class="hub-main flow" data-flow="${f.id}">
+      <main class="hub-main flow${f.pageView && f.takes === "image" ? " files-as-pages" : ""}" data-flow="${f.id}">
         <div class="flow-head">
           <span class="tool-icon big">${icon(tool(f.id)!.icon)}</span>
           <div><h1>${f.title}</h1><p class="muted">${f.intro}</p></div>
@@ -286,13 +290,22 @@ export class Hub {
         ${
           f.pageView
             ? `<section class="flow-pages" hidden>
-          <div class="sec-head"><h2>Pages <span class="muted page-count"></span></h2><button class="btn flat small" data-act="reset-order" title="All pages of all files, in file order">Reset order</button></div>
-          <p class="muted small pages-hint">Drag pages to reorder (on a phone: press and hold, then drag). Hover a page to turn or remove it.</p>
+          <div class="sec-head"><h2>${f.takes === "image" ? "Pictures" : "Pages"} <span class="muted page-count"></span></h2><button class="btn flat small" data-act="reset-order" title="Everything back, in the original order">Reset</button></div>
+          <p class="muted small pages-hint">Preview: drag to reorder (on a phone: press and hold, then drag). Hover to turn or remove.</p>
           <div class="grid-host"></div>
         </section>`
             : ""
         }
         <section class="flow-options">${f.options.map((o) => this.optionHtml(o)).join("")}</section>
+        ${
+          f.splitView
+            ? `<section class="split-view" hidden>
+          <div class="sec-head"><h2>Preview <span class="muted split-count"></span></h2><button class="btn flat small" data-act="reset-parts" title="Back to what the options above give">Reset</button></div>
+          <p class="muted small pages-hint">Each row becomes one file. Click ✂ between two pages to cut there, “Join” to put a file together with the one before; hover a page to turn or remove it.</p>
+          <div class="split-rows"></div>
+        </section>`
+            : ""
+        }
         <div class="flow-actions">
           <p class="flow-error" role="alert"></p>
           <button class="btn primary big" data-act="run"></button>
@@ -346,6 +359,7 @@ export class Hub {
       this.renderPagesHead();
       this.grid?.render();
     }
+    if (f.splitView) this.renderSplit();
     this.renderAction();
   }
 
@@ -356,6 +370,71 @@ export class Hub {
     const total = this.items.reduce((n, it) => n + it.pages, 0);
     const n = this.order.length;
     sec.querySelector(".page-count")!.textContent = n === total ? `(${n})` : `(${n} of ${total})`;
+  }
+
+  // ---------- split preview ----------
+
+  /** The files the split options give (each part: its pages). Keeps the old preview if the ranges don't parse. */
+  private buildParts(): void {
+    const it = this.items[0];
+    if (!it) return void (this.parts = []);
+    const o = this.opts;
+    const groups =
+      o.mode === "every" ? everyN(it.pages, Number(o.n) || 1) : o.mode === "ranges" ? parseGroups(o.ranges ?? "", it.pages) : everyN(it.pages, 1);
+    if (!groups) return;
+    this.parts = groups.map((g) => g.map((page) => ({ item: it.id, page, rotate: 0 })));
+  }
+
+  private renderSplit(): void {
+    const sec = this.el.querySelector<HTMLElement>(".split-view");
+    if (!sec) return;
+    sec.hidden = !this.items.length;
+    if (!this.items.length) return;
+    const files = this.parts.filter((p) => p.length).length;
+    sec.querySelector(".split-count")!.textContent = `(${files} ${files === 1 ? "file" : "files"})`;
+    const color = this.files.get(this.items[0].id)?.color ?? "var(--accent)";
+    const stemName = this.items[0].name.replace(/\.[^.]+$/, "");
+    const kept = this.parts.filter((p) => p.length);
+    const names = splitNames(stemName, kept.map((p) => p.map((s) => s.page)), this.items[0].pages);
+    sec.querySelector(".split-rows")!.innerHTML = this.parts
+      .map((part, r) => {
+        if (!part.length) return "";
+        const pages = part.map((s) => s.page + 1);
+        const run = pages.every((v, i) => i === 0 || v === pages[i - 1] + 1);
+        const label = pages.length === 1 ? `page ${pages[0]}` : run ? `pages ${pages[0]}–${pages[pages.length - 1]}` : `${pages.length} pages`;
+        const tiles = part
+          .map((s, c) => {
+            const src = this.thumbs.get(`${s.item}:${s.page}`) ?? "";
+            const turned = s.rotate % 180 !== 0;
+            const cut = c < part.length - 1 ? `<button class="scut" data-scut="${r},${c}" title="Cut here: pages after this become a new file">✂</button>` : "";
+            return `<div class="ptile stile" style="--file:${color}">
+                <div class="pthumb${turned ? " turned" : ""}">${src ? `<img src="${src}" alt="" draggable="false" style="transform: rotate(${s.rotate}deg)">` : `<span class="pload"></span>`}</div>
+                <div class="pmeta"><span class="pnum">${s.page + 1}</span></div>
+                <div class="ptools"><button class="icon-btn sm" data-sturn="${r},${c}" title="Turn right">${icon("rotR")}</button><button class="icon-btn sm" data-sdel="${r},${c}" title="Leave this page out">${icon("close")}</button></div>
+              </div>${cut}`;
+          })
+          .join("");
+        return `<div class="split-row">
+            <div class="split-head"><span class="file-badge" style="--file:${color}">${r + 1}</span><b>${esc(names[kept.indexOf(part)])}</b><span class="muted small">${label}</span>
+              ${r > 0 ? `<button class="btn flat small" data-sjoin="${r}" title="Put these pages at the end of the file before">Join with file ${r}</button>` : ""}</div>
+            <div class="split-pages">${tiles}</div>
+          </div>`;
+      })
+      .join("");
+  }
+
+  private editParts(d: DOMStringMap): void {
+    const [r, c] = (d.scut ?? d.sturn ?? d.sdel ?? `${d.sjoin},0`).split(",").map(Number);
+    const parts = this.parts.filter((p) => p.length).map((p) => p.slice());
+    if (d.scut !== undefined) parts.splice(r + 1, 0, parts[r].splice(c + 1));
+    if (d.sjoin !== undefined && r > 0) parts.splice(r - 1, 2, [...parts[r - 1], ...parts[r]]);
+    if (d.sturn !== undefined) parts[r][c] = { ...parts[r][c], rotate: (parts[r][c].rotate + 90) % 360 };
+    if (d.sdel !== undefined) parts[r].splice(c, 1);
+    this.parts = parts.filter((p) => p.length);
+    this.results = [];
+    this.renderResult();
+    this.renderSplit();
+    this.renderAction();
   }
 
   /** Page thumbnails for the page view, a few at a time. */
@@ -375,6 +454,8 @@ export class Hub {
         const url = URL.createObjectURL(new Blob([b as Uint8Array<ArrayBuffer>], { type: "image/jpeg" }));
         this.thumbs.set(key, url);
         this.grid?.setThumb(key, url);
+        const box = this.el.querySelectorAll(".split-view .stile .pthumb");
+        if (box.length && this.flow?.splitView) this.renderSplit();
       });
     }
   }
@@ -385,7 +466,7 @@ export class Hub {
     const run = this.el.querySelector<HTMLButtonElement>("[data-act=run]")!;
     const err = this.el.querySelector<HTMLElement>(".flow-error")!;
     const problem = this.items.length >= f.min ? (f.check?.(this.items, this.opts, f.pageView ? this.order : undefined) ?? null) : null;
-    run.innerHTML = `${icon(tool(f.id)!.icon)}${f.action(this.items)}`;
+    run.innerHTML = `${icon(tool(f.id)!.icon)}${f.action(this.items, this.order)}`;
     run.disabled = this.running || this.items.length < f.min || !!problem;
     err.textContent = problem ?? "";
     run.hidden = this.running;
@@ -461,11 +542,22 @@ export class Hub {
     if (d.choose) {
       this.opts[d.choose] = d.value!;
       saveOpts(this.flow!.id, this.opts);
+      if (this.flow?.splitView) {
+        this.buildParts();
+        this.renderSplit();
+      }
       return this.syncOptions();
     }
     if (d.act === "run") return this.run();
+    if (d.scut || d.sjoin || d.sturn || d.sdel) return this.editParts(d);
     if (d.act === "reset-order") {
       this.order = this.items.flatMap((it) => [...Array(it.pages).keys()].map((page) => ({ item: it.id, page, rotate: 0 })));
+      this.results = [];
+      this.renderResult();
+      return this.renderFiles();
+    }
+    if (d.act === "reset-parts") {
+      this.buildParts();
       this.results = [];
       this.renderResult();
       return this.renderFiles();
@@ -490,11 +582,17 @@ export class Hub {
     const t = e.target as HTMLInputElement;
     const key = t.dataset.input;
     if (!key || !this.flow) return;
+    // ("change" after "input" carries the same value: don't throw away edits made in the preview)
+    if (e.type === "change" && this.opts[key] === t.value) return;
     this.opts[key] = t.value;
     const out = t.parentElement?.querySelector("output");
     const o = this.flow.options.find((x) => x.key === key);
     if (out && o?.kind === "range") out.textContent = `${t.value}${o.unit}`;
     saveOpts(this.flow.id, this.opts);
+    if (this.flow.splitView) {
+      this.buildParts();
+      this.renderSplit();
+    }
     this.renderAction();
   }
 
@@ -534,7 +632,12 @@ export class Hub {
     if (!f.multiple) {
       files = files.slice(0, 1);
       for (const it of this.items) URL.revokeObjectURL(it.thumb);
+      for (const u of this.thumbs.values()) URL.revokeObjectURL(u);
       this.items = [];
+      this.order = [];
+      this.thumbs.clear();
+      this.files.clear();
+      this.parts = [];
     }
     this.results = [];
     this.renderResult();
@@ -544,12 +647,16 @@ export class Hub {
         const item = f.takes === "pdf" ? await this.pdfItem(file) : await this.imageItem(file);
         if (item) {
           this.items.push(item);
-          if (f.pageView) {
+          if (f.pageView || f.splitView) {
             const k = this.fileCount++;
-            this.files.set(item.id, { id: item.id, name: item.name, color: FILE_COLORS[k % FILE_COLORS.length], letter: String.fromCharCode(65 + (k % 26)) });
+            // (pictures and single-file tools need no letters to tell files apart)
+            const letter = f.takes === "pdf" && f.multiple ? String.fromCharCode(65 + (k % 26)) : "";
+            this.files.set(item.id, { id: item.id, name: f.takes === "image" ? item.name : "", color: FILE_COLORS[k % FILE_COLORS.length], letter });
             for (let page = 0; page < item.pages; page++) this.order.push({ item: item.id, page, rotate: 0 });
-            void this.loadThumbs(item);
+            if (item.kind === "image") this.thumbs.set(`${item.id}:0`, item.thumb);
+            else void this.loadThumbs(item);
           }
+          if (f.splitView) this.buildParts();
         }
       } catch (err) {
         skipped.push(`${file.name}: ${(err as Error).message}`);
@@ -666,6 +773,7 @@ export class Hub {
         engine: this.host.engine,
         items: this.items,
         order: this.order,
+        parts: this.parts,
         opts: this.opts,
         progress: (done, total, text) => {
           bar.style.width = `${Math.round((done / Math.max(1, total)) * 100)}%`;

@@ -2,7 +2,7 @@
 // result) is in flow-view.ts; the PDF work happens in the engine worker (engine/tools.ts).
 import type { Engine } from "../engine/client";
 import type { OutFile } from "../engine/tools";
-import { everyN, parseGroups } from "../core/pages";
+import { parseGroups } from "../core/pages";
 import { formatSize } from "../recent";
 import type { ToolId } from "./registry";
 
@@ -28,6 +28,8 @@ export interface RunContext {
   items: Item[];
   /** Page order (tools with a page view). */
   order: PageSlot[];
+  /** Split: the files to make, each with its pages. */
+  parts: PageSlot[][];
   opts: Record<string, string>;
   progress(done: number, total: number, text?: string): void;
   cancelled(): boolean;
@@ -55,10 +57,12 @@ export interface FlowDef {
   min: number;
   /** Files can be put in order (images). */
   reorder: boolean;
-  /** Shows every page; pages can be reordered, turned and removed (merge). */
+  /** Shows every page (or picture); they can be reordered, turned and removed. */
   pageView?: boolean;
+  /** Split: shows each resulting file with its pages. */
+  splitView?: boolean;
   options: Option[];
-  action(items: Item[]): string;
+  action(items: Item[], order: PageSlot[]): string;
   /** Problem with the current options, shown instead of running. */
   check?(items: Item[], opts: Record<string, string>, order?: PageSlot[]): string | null;
   run(ctx: RunContext): Promise<RunResult>;
@@ -79,8 +83,8 @@ export const FLOWS: Record<string, FlowDef> = {
     reorder: false,
     pageView: true,
     options: [],
-    action: (items) =>
-      items.length === 0 ? "Add PDFs to merge" : items.length === 1 ? "Save pages in this order" : `Merge ${items.length} files`,
+    action: (items, order) =>
+      items.length === 0 ? "Add PDFs to merge" : items.length === 1 ? `Save ${plural(order.length, "page")} in this order` : `Merge ${items.length} files (${plural(order.length, "page")})`,
     check: (_items, _o, order) => (order && order.length === 0 ? "All pages were removed. Add a file or start over." : null),
     async run({ engine, items, order }) {
       const index = new Map(items.map((it, i) => [it.id, i]));
@@ -119,14 +123,16 @@ export const FLOWS: Record<string, FlowDef> = {
       { kind: "range", key: "n", label: "Pages per file", min: 1, max: 50, step: 1, value: "2", unit: "", showIf: ["mode", "every"] },
       { kind: "text", key: "ranges", label: "Ranges", placeholder: "e.g. 1-3, 4, 5-", value: "", showIf: ["mode", "ranges"], hint: "Commas separate the files: “1-3, 4, 5-” makes 3 files. “5-” means 5 to the end." },
     ],
+    splitView: true,
     action: () => "Split",
     check(items, o) {
       if (o.mode === "ranges" && items[0] && !parseGroups(o.ranges, items[0].pages)) return `Enter page ranges between 1 and ${items[0].pages}, like “1-3, 4, 5-”.`;
       return null;
     },
-    async run({ engine, items, opts }) {
+    async run({ engine, items, parts }) {
       const it = items[0];
-      const groups = opts.mode === "each" ? everyN(it.pages, 1) : opts.mode === "every" ? everyN(it.pages, Number(opts.n)) : parseGroups(opts.ranges, it.pages)!;
+      const groups = parts.filter((p) => p.length).map((p) => p.map((s) => ({ page: s.page, rotate: s.rotate })));
+      if (!groups.length) throw new Error("All pages were removed");
       const files = await engine.toolSplit(src(it), groups, stem(it.name));
       return { files, note: `${plural(files.length, "file")} from ${plural(it.pages, "page")}` };
     },
@@ -176,11 +182,12 @@ export const FLOWS: Record<string, FlowDef> = {
   "images-to-pdf": {
     id: "images-to-pdf",
     title: "Images to PDF",
-    intro: "Turn photos and scans into one PDF, one picture per page, in the order shown. Phone photos keep the right way up.",
+    intro: "Turn photos and scans into one PDF, one picture per page. Drag them into order (long-press on a phone), turn or remove them before making the PDF. Phone photos keep the right way up.",
     takes: "image",
     multiple: true,
     min: 1,
-    reorder: true,
+    reorder: false,
+    pageView: true,
     options: [
       {
         kind: "choice",
@@ -205,26 +212,30 @@ export const FLOWS: Record<string, FlowDef> = {
         ],
       },
     ],
-    action: (items) => (items.length ? `Make PDF from ${plural(items.length, "picture")}` : "Add pictures"),
-    async run({ engine, items, opts }) {
+    action: (items, order) => (items.length ? `Make PDF from ${plural(order.length, "picture")}` : "Add pictures"),
+    check: (items, _o, order) => (items.length && order && !order.length ? "All pictures were removed. Add some or start over." : null),
+    async run({ engine, items, opts, order }) {
       const page = opts.page as "a4" | "letter" | "fit";
+      const byId = new Map(items.map((it) => [it.id, it]));
+      const pics = order.map((s) => byId.get(s.item)!);
       const bytes = await engine.toolImagesToPdf(
-        items.map((it) => ({ name: it.name, bytes: it.bytes })),
+        order.map((s, i) => ({ name: pics[i].name, bytes: pics[i].bytes, rotate: s.rotate })),
         { page, margin: page === "fit" ? 0 : Number(opts.margin) },
       );
-      const name = items.length === 1 ? `${stem(items[0].name)}.pdf` : "Images.pdf";
-      return { files: [{ name, bytes, type: "application/pdf" }], note: plural(items.length, "page") };
+      const name = pics.length === 1 ? `${stem(pics[0].name)}.pdf` : "Images.pdf";
+      return { files: [{ name, bytes, type: "application/pdf" }], note: plural(pics.length, "page") };
     },
   },
 
   "pdf-to-images": {
     id: "pdf-to-images",
     title: "PDF to images",
-    intro: "Save each page as a picture. Several pages come as one ZIP; on a phone you can share them to Photos.",
+    intro: "Save pages as pictures. All pages are shown below: remove the ones you don't need, turn or reorder the rest. Several pictures come as one ZIP; on a phone you can share them to Photos.",
     takes: "pdf",
     multiple: false,
     min: 1,
     reorder: false,
+    pageView: true,
     options: [
       {
         kind: "choice",
@@ -247,16 +258,13 @@ export const FLOWS: Record<string, FlowDef> = {
           ["300", "Print", "300 dpi"],
         ],
       },
-      { kind: "text", key: "pages", label: "Pages", placeholder: "All pages, or e.g. 1-3, 5", value: "" },
     ],
-    action: () => "Make images",
-    check(items, o) {
-      if (o.pages.trim() && items[0] && !parseGroups(o.pages, items[0].pages)) return `Pages must be between 1 and ${items[0].pages}, like “1-3, 5”.`;
-      return null;
-    },
-    async run({ engine, items, opts, progress, cancelled }) {
+    action: (_items, order) => (order.length ? `Make ${plural(order.length, "picture")}` : "Make images"),
+    check: (items, _o, order) => (items.length && order && !order.length ? "All pages were removed. Use Reset order to start again." : null),
+    async run({ engine, items, opts, order, progress, cancelled }) {
       const it = items[0];
-      const pages = opts.pages.trim() ? [...new Set(parseGroups(opts.pages, it.pages)!.flat())].sort((a, b) => a - b) : [...Array(it.pages).keys()];
+      const pages = order.map((s) => s.page);
+      const turns = order.map((s) => s.rotate);
       const fmt = opts.format as "png" | "jpeg";
       const ext = fmt === "png" ? "png" : "jpg";
       const width = String(it.pages).length;
@@ -265,7 +273,7 @@ export const FLOWS: Record<string, FlowDef> = {
       for (let k = 0; k < pages.length && !cancelled(); k += 4) {
         const batch = pages.slice(k, k + 4);
         progress(k, pages.length, `Page ${batch[0] + 1} of ${it.pages}…`);
-        const out = await engine.toolPagesToImages(src(it), batch, { format: fmt, dpi: Number(opts.dpi), quality: 85 });
+        const out = await engine.toolPagesToImages(src(it), batch, { format: fmt, dpi: Number(opts.dpi), quality: 85 }, turns.slice(k, k + 4));
         out.forEach((bytes, j) =>
           files.push({ name: `${stem(it.name)}-${String(batch[j] + 1).padStart(width, "0")}.${ext}`, bytes, type: fmt === "png" ? "image/png" : "image/jpeg" }),
         );

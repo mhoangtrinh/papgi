@@ -7,7 +7,7 @@ import { PdfEngine } from "../src/engine/engine";
 import { orientationMatrix, PasswordError } from "../src/engine/tools";
 import { jpegOrientation } from "../src/core/exif";
 import { crc32, uniqueNames, zip } from "../src/core/zip";
-import { everyN, parseGroups } from "../src/core/pages";
+import { everyN, parseGroups, splitNames } from "../src/core/pages";
 
 const sample = (n: string) => new Uint8Array(fs.readFileSync(new URL(`../public/samples/${n}`, import.meta.url)));
 const pdf = (name: string) => ({ name, bytes: sample(name) });
@@ -92,6 +92,14 @@ describe("split", () => {
     expect(() => engine.toolSplit(pdf("pages.pdf"), [[7]], "pages")).toThrow(/doesn't exist/);
   });
 
+  it("turns pages in the parts", () => {
+    const [part] = engine.toolSplit(pdf("pages.pdf"), [[{ page: 1, rotate: 90 }, 2]], "pages");
+    const e = open(part.bytes);
+    expect(e.pageText(0)).toBe(open(sample("pages.pdf")).pageText(1));
+    expect(e.info().pages[0].rotation).toBe(90);
+    expect(e.info().pages[1].rotation).toBe(0);
+  });
+
   it("keeps form fields fillable in the parts", () => {
     const parts = engine.toolSplit(pdf("form.pdf"), [[0]], "form");
     expect(open(parts[0].bytes).listWidgets(0).length).toBeGreaterThan(2);
@@ -169,6 +177,13 @@ describe("images to PDF", () => {
     }
   });
 
+  it("turns pictures on request", async () => {
+    const doc = engine.toolImagesToPdf([{ name: "a.png", bytes: await marked(400, 300, "png"), rotate: 90 }], { page: "fit", margin: 0 });
+    const pg = open(doc).info().pages[0];
+    expect(pg.h).toBeGreaterThan(pg.w);
+    expect(redCorner(doc)).toBe("tr");
+  });
+
   it("names a file that isn't a picture", () => {
     expect(() => engine.toolImagesToPdf([{ name: "x.txt", bytes: new TextEncoder().encode("nope") }], { page: "fit", margin: 0 })).toThrow(/x\.txt/);
   });
@@ -184,6 +199,10 @@ describe("PDF to images", () => {
     const jpg = engine.toolPageToImage(pdf("pages.pdf"), 1, { format: "jpeg", dpi: 72, quality: 80 });
     expect([jpg[0], jpg[1]]).toEqual([0xff, 0xd8]);
     expect(jpg.length).toBeLessThan(png.length);
+    // turned: width and height swap
+    const [turned] = engine.toolPagesToImages(pdf("pages.pdf"), [0], { format: "png", dpi: 72, quality: 85 }, [90]);
+    const t = new mupdf.Image(turned);
+    expect(t.getWidth()).toBeGreaterThan(t.getHeight());
   });
 });
 
@@ -252,5 +271,11 @@ describe("zip", () => {
     expect(names).toEqual(["a.pdf", "a (2).pdf", "Tiếng Việt.png"]);
     expect(crc32(new TextEncoder().encode("123456789"))).toBe(0xcbf43926);
     expect(uniqueNames(["x", "X", "x"])).toEqual(["x", "X (2)", "x (3)"]);
+  });
+});
+
+describe("splitNames", () => {
+  it("names parts by their pages and keeps names unique", () => {
+    expect(splitNames("doc", [[0, 1], [2], [4, 3], [2]], 12)).toEqual(["doc-p01-02.pdf", "doc-p03.pdf", "doc-part3.pdf", "doc-p03 (2).pdf"]);
   });
 });

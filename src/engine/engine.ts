@@ -9,7 +9,7 @@ import { extractBlocks, fontsNeeded, replaceBlock, type EditBlock, type EditResu
 import { addOcrWords, isOcrPage, OCR_FONT_FILE, type OcrWord } from "./ocr";
 import {
   compressPdf, graftPages, imagesToPdf, mergePages, mergePdfs, pageToImage, pagesToImages, pdfPageCount, splitPdf,
-  type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions,
+  type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions, type SplitPage,
 } from "./tools";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
@@ -939,7 +939,7 @@ export class PdfEngine {
     return mergePages(this.mupdf, files, order);
   }
 
-  toolSplit(f: PdfInput, groups: number[][], baseName: string): OutFile[] {
+  toolSplit(f: PdfInput, groups: SplitPage[][], baseName: string): OutFile[] {
     return splitPdf(this.mupdf, f, groups, baseName);
   }
 
@@ -951,8 +951,8 @@ export class PdfEngine {
     return pageToImage(this.mupdf, f, index, opts);
   }
 
-  toolPagesToImages(f: PdfInput, pages: number[], opts: RenderOptions): Uint8Array[] {
-    return pagesToImages(this.mupdf, f, pages, opts);
+  toolPagesToImages(f: PdfInput, pages: number[], opts: RenderOptions, turns?: number[]): Uint8Array[] {
+    return pagesToImages(this.mupdf, f, pages, opts, turns);
   }
 
   toolCompress(f: PdfInput, opts: CompressOptions): CompressResult {

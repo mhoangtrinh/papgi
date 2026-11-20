@@ -2,6 +2,7 @@
 // files it is given and never touches the document open in the editor.
 import type * as MuPDF from "mupdf";
 import { jpegOrientation } from "../core/exif";
+import { splitNames } from "../core/pages";
 
 type M = typeof MuPDF;
 
@@ -152,6 +153,16 @@ export interface PageRef {
   rotate?: number;
 }
 
+/** Turn page `at` of `doc` by `deg` more (multiples of 90). */
+function turnPage(doc: MuPDF.PDFDocument, at: number, deg = 0): void {
+  const turn = ((deg % 360) + 360) % 360;
+  if (!turn) return;
+  const pg = doc.findPage(at);
+  const r = pg.getInheritable("Rotate");
+  const cur = r.isNumber() ? r.asNumber() : 0;
+  pg.put("Rotate", (((cur + turn) % 360) + 360) % 360);
+}
+
 /** Pages of several files, in any order (each may be turned), as one PDF. */
 export function mergePages(mupdf: M, files: PdfInput[], order: PageRef[]): Uint8Array {
   if (!order.length) throw new Error("No pages to merge");
@@ -168,13 +179,7 @@ export function mergePages(mupdf: M, files: PdfInput[], order: PageRef[]): Uint8
       const map = (maps[ref.file] ??= out.newGraftMap());
       graftOne(out, src, ref.page, at, map);
       placed[ref.file].push(at);
-      const turn = (((ref.rotate ?? 0) % 360) + 360) % 360;
-      if (turn) {
-        const pg = out.findPage(at);
-        const r = pg.getInheritable("Rotate");
-        const cur = r.isNumber() ? r.asNumber() : 0;
-        pg.put("Rotate", (((cur + turn) % 360) + 360) % 360);
-      }
+      turnPage(out, at, ref.rotate);
     });
     srcs.forEach((src, i) => src && mergeForm(out, src, maps[i]!, placed[i]));
     return save(out);
@@ -184,22 +189,26 @@ export function mergePages(mupdf: M, files: PdfInput[], order: PageRef[]): Uint8
   }
 }
 
-/** One PDF per group of pages (0-based page numbers). */
-export function splitPdf(mupdf: M, f: PdfInput, groups: number[][], baseName: string): OutFile[] {
+/** A page to put in a split part: its number, or number + extra turn. */
+export type SplitPage = number | { page: number; rotate?: number };
+
+/** One PDF per group of pages (0-based page numbers; pages may be turned). */
+export function splitPdf(mupdf: M, f: PdfInput, parts: SplitPage[][], baseName: string): OutFile[] {
+  const groups = parts.map((g) => g.map((p) => (typeof p === "number" ? p : p.page)));
+  const turns = parts.map((g) => g.map((p) => (typeof p === "number" ? 0 : (p.rotate ?? 0))));
   const src = openPdf(mupdf, f);
   try {
     const n = src.countPages();
-    const width = String(n).length;
-    const pad = (v: number) => String(v).padStart(width, "0");
-    return groups
-      .filter((g) => g.length)
-      .map((g) => {
+    const kept = groups.map((g, gi) => ({ g, t: turns[gi] })).filter(({ g }) => g.length);
+    const names = splitNames(baseName, kept.map(({ g }) => g), n);
+    return kept
+      .map(({ g, t }, k) => {
         if (g.some((p) => p < 0 || p >= n)) throw new Error(`Page ${Math.max(...g) + 1} doesn't exist (the file has ${n})`);
         const out = new mupdf.PDFDocument();
         try {
           graftPages(out, src, g, 0);
-          const range = g.length === 1 ? `p${pad(g[0] + 1)}` : isRun(g) ? `p${pad(g[0] + 1)}-${pad(g[g.length - 1] + 1)}` : `part`;
-          return { name: `${baseName}-${range}.pdf`, bytes: save(out), type: "application/pdf" };
+          t.forEach((deg, i) => turnPage(out, i, deg));
+          return { name: names[k], bytes: save(out), type: "application/pdf" };
         } finally {
           out.destroy();
         }
@@ -210,11 +219,12 @@ export function splitPdf(mupdf: M, f: PdfInput, groups: number[][], baseName: st
   }
 }
 
-const isRun = (g: number[]) => g.every((v, i) => i === 0 || v === g[i - 1] + 1);
 
 export interface ImageInput {
   name: string;
   bytes: Uint8Array;
+  /** Extra turn in degrees (multiples of 90), on top of the camera orientation. */
+  rotate?: number;
 }
 
 export interface ImagesToPdfOptions {
@@ -271,6 +281,7 @@ export function imagesToPdf(mupdf: M, images: ImageInput[], opts: ImagesToPdfOpt
       res.put("XObject", xo);
       const cm = orientationMatrix(orient, dw, dh, x, y).map((v) => +v.toFixed(4)).join(" ");
       out.insertPage(-1, out.addPage([0, 0, pageW, pageH], 0, res, `q ${cm} cm /Im0 Do Q`));
+      turnPage(out, out.countPages() - 1, im.rotate);
     }
     return save(out);
   } finally {
@@ -303,16 +314,17 @@ export interface RenderOptions {
 }
 
 /** Pages as pictures (opens the file once for all of them). */
-export function pagesToImages(mupdf: M, f: PdfInput, pages: number[], opts: RenderOptions): Uint8Array[] {
+export function pagesToImages(mupdf: M, f: PdfInput, pages: number[], opts: RenderOptions, turns: number[] = []): Uint8Array[] {
   const doc = openPdf(mupdf, f);
   try {
-    return pages.map((index) => {
+    return pages.map((index, k) => {
       const page = doc.loadPage(index);
       try {
         const b = page.getBounds();
         // (keep within ~60 megapixels)
         const s = Math.min(opts.dpi / 72, Math.sqrt(60e6 / Math.max(1, (b[2] - b[0]) * (b[3] - b[1]))));
-        const pix = page.toPixmap(mupdf.Matrix.scale(s, s), mupdf.ColorSpace.DeviceRGB, false, true);
+        const turn = (((turns[k] ?? 0) % 360) + 360) % 360;
+        const pix = page.toPixmap(mupdf.Matrix.concat(mupdf.Matrix.scale(s, s), mupdf.Matrix.rotate(turn)), mupdf.ColorSpace.DeviceRGB, false, true);
         try {
           pix.setResolution(Math.round(s * 72), Math.round(s * 72));
           return (opts.format === "png" ? pix.asPNG() : pix.asJPEG(opts.quality, false)).slice();

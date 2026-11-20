@@ -75,7 +75,7 @@ export class PageGrid {
         return `
         <div class="ptile" role="listitem" tabindex="0" data-pos="${i}" style="--file:${f.color}" aria-label="Page ${i + 1}: ${f.name.replace(/"/g, "")}, page ${s.page + 1}">
           <div class="pthumb${turned ? " turned" : ""}">${src ? `<img src="${src}" alt="" draggable="false" style="transform: rotate(${s.rotate}deg)">` : `<span class="pload"></span>`}</div>
-          <div class="pmeta"><span class="pnum">${i + 1}</span>${f.letter ? `<span class="psrc" title="${f.name.replace(/"/g, "")}, page ${s.page + 1}">${f.letter}·${s.page + 1}</span>` : ""}</div>
+          <div class="pmeta"><span class="pnum">${i + 1}</span>${f.letter ? `<span class="psrc" title="${f.name.replace(/"/g, "")}, page ${s.page + 1}">${f.letter}·${s.page + 1}</span>` : f.name ? `<span class="pname" title="${f.name.replace(/"/g, "")}">${f.name.replace(/[<&]/g, "")}</span>` : ""}</div>
           <div class="ptools">
             <button class="icon-btn sm" data-turn="${i}" title="Turn right (R)">${icon("rotR")}</button>
             <button class="icon-btn sm" data-del="${i}" title="Remove this page (Delete)">${icon("close")}</button>

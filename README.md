@@ -21,10 +21,10 @@ Updates: when a new version is ready, papgi switches to it right away if no docu
 |---|---|
 | Open PDF | Drop or browse for a PDF; it opens in the editor (below): edit text, highlight and draw, text boxes, fill forms, sign, recognize scans (OCR), pages, print |
 | Merge PDFs | All pages of the added files as thumbnails (each file its own colour): drag pages into any order (long-press on a phone), turn or remove single pages, *Reset order* to start again. Form fields, annotations and signatures come along. Password-protected files ask for the password |
-| Split PDF | Single pages, every N pages, or custom ranges (“1-3, 4, 5-”); several files come as one ZIP |
+| Split PDF | Single pages, every N pages, or custom ranges (“1-3, 4, 5-”). A preview shows each file it will make: click ✂ between two pages to cut there, *Join* to put a file back together with the one before, turn or leave out pages. Several files come as one ZIP |
 | Compress PDF | Light (clean-up only), Recommended (pictures to 150 dpi) or Strong (96 dpi): pictures sharper than the page needs are scaled down and saved as JPEG; text and drawings stay sharp. Never returns a bigger file |
-| Images to PDF | JPG, PNG, GIF, BMP, TIFF (and HEIC/WebP where the browser can read them) on A4, Letter or picture-sized pages; phone photos keep the right way up |
-| PDF to images | PNG or JPG at 72/150/300 dpi, all or chosen pages; ZIP, or Share (e.g. to Photos) on a phone |
+| Images to PDF | JPG, PNG, GIF, BMP, TIFF (and HEIC/WebP where the browser can read them) on A4, Letter or picture-sized pages; phone photos keep the right way up. A preview shows one page per picture: drag to reorder, turn or remove |
+| PDF to images | PNG or JPG at 72/150/300 dpi. A preview shows every page: remove the ones you don't need, turn or reorder the rest; ZIP, or Share (e.g. to Photos) on a phone |
 
 From the editor, the tools menu sends the open PDF straight to Merge, Split, Compress or PDF to images. Results can be downloaded, shared, or opened in the editor.
 

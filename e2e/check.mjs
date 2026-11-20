@@ -864,10 +864,34 @@ try {
     await page.fill('[data-input="ranges"]', "1-2, 9");
     check("split: bad ranges are explained", (await page.locator("[data-act=run]").isDisabled()) && /between 1 and 5/.test(await page.textContent(".flow-error")));
     await page.fill('[data-input="ranges"]', "1-2, 3-");
+    await page.waitForFunction(() => document.querySelectorAll(".split-view .stile img").length === 5, null, { timeout: 20000 });
+    const heads = () => page.$$eval(".split-head b", (bs) => bs.map((b) => b.textContent).join(" "));
+    check("split: preview shows the files it will make", (await heads()) === "pages-p1-2.pdf pages-p3-5.pdf", await heads());
+    // edit the preview: cut after page 3, turn page 1, leave out page 5, join page 4 back to page 3
+    await page.click('[data-scut="1,0"]');
+    check("split preview: cut makes a new file", (await heads()) === "pages-p1-2.pdf pages-p3.pdf pages-p4-5.pdf", await heads());
+    await page.hover(".split-row >> nth=0 >> .stile >> nth=0");
+    await page.click('[data-sturn="0,0"]');
+    await page.hover(".split-row >> nth=2 >> .stile >> nth=1");
+    await page.click('[data-sdel="2,1"]');
+    await page.click('[data-sjoin="2"]');
+    check("split preview: turn, remove and join", (await heads()) === "pages-p1-2.pdf pages-p3-4.pdf" && (await page.textContent(".split-count")) === "(2 files)", await heads());
+    await page.screenshot({ path: shots + "desktop-tool-split-light.png" });
     await page.click("[data-act=run]");
     await waitDone();
     const parts = await download(() => page.click("[data-act=save-all]"));
-    check("split: a ZIP with one PDF per range", JSON.stringify(zipNames(parts.bytes)) === JSON.stringify(["pages-p1-2.pdf", "pages-p3-5.pdf"]), zipNames(parts.bytes).join());
+    check("split: a ZIP that matches the preview", JSON.stringify(zipNames(parts.bytes)) === JSON.stringify(["pages-p1-2.pdf", "pages-p3-4.pdf"]), zipNames(parts.bytes).join());
+    const unzip = (bytes, name) => {
+      const f = path.join(tmp, "y.zip");
+      fs.writeFileSync(f, bytes);
+      return new Uint8Array(execSync(`python3 -c "import zipfile,sys; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))" ${f} "${name}"`));
+    };
+    const p1 = mupdf.Document.openDocument(unzip(parts.bytes, "pages-p1-2.pdf"), "application/pdf");
+    const p2 = mupdf.Document.openDocument(unzip(parts.bytes, "pages-p3-4.pdf"), "application/pdf");
+    const wide = (d, i) => { const b = d.loadPage(i).getBounds(); return b[2] - b[0] > b[3] - b[1]; };
+    check("split: turned page and left-out page", p1.countPages() === 2 && wide(p1, 0) && !wide(p1, 1) && p2.countPages() === 2 && p2.loadPage(1).toStructuredText().asText().includes("Page 4"), p2.loadPage(1).toStructuredText().asText().slice(0, 20));
+    await page.click("[data-act=reset-parts]");
+    check("split preview: reset", (await heads()) === "pages-p1-2.pdf pages-p3-5.pdf", await heads());
 
     // PDF to images
     await page.goto(URL_ + "#pdf-to-images");
@@ -875,12 +899,23 @@ try {
     await page.evaluate(() => (window.showSaveFilePicker = undefined));
     await choose([path.join(samplesDir, "pages.pdf")]);
     await page.waitForSelector(".file-row");
+    await page.waitForFunction(() => document.querySelectorAll(".flow .ptile img").length === 5, null, { timeout: 20000 });
     await page.click('[data-choose="format"][data-value="jpeg"]');
-    await page.fill('[data-input="pages"]', "2-3");
+    // leave out pages 1, 4 and 5, turn page 3
+    for (const i of [0, 2, 2]) {
+      await page.focus(`.flow .ptile >> nth=${i}`);
+      await page.keyboard.press("Delete");
+    }
+    await page.hover(".flow .ptile >> nth=1");
+    await page.click(".flow .ptile >> nth=1 >> [data-turn]");
+    check("PDF to images: preview with the chosen pages", (await page.locator(".flow .ptile").count()) === 2 && /2 pictures/.test(await page.textContent("[data-act=run]")), await page.textContent("[data-act=run]"));
+    await page.screenshot({ path: shots + "desktop-tool-pdf-to-images-light.png" });
     await page.click("[data-act=run]");
     await waitDone();
     const pics = await download(() => page.click("[data-act=save-all]"));
     check("PDF to images: chosen pages as JPGs", JSON.stringify(zipNames(pics.bytes)) === JSON.stringify(["pages-2.jpg", "pages-3.jpg"]), zipNames(pics.bytes).join());
+    const third = await sharp(Buffer.from(unzip(pics.bytes, "pages-3.jpg"))).metadata();
+    check("PDF to images: turned page comes out turned", third.width > third.height, `${third.width}x${third.height}`);
     const one = await download(() => page.click('[data-out="0"]'));
     check("PDF to images: single picture download", one.bytes[0] === 0xff && one.bytes[1] === 0xd8);
 
@@ -892,7 +927,12 @@ try {
     await page.goto(URL_ + "#images-to-pdf");
     await page.waitForSelector('[data-flow="images-to-pdf"]');
     await choose([img1, img2]);
-    await page.waitForFunction(() => document.querySelectorAll(".file-row").length === 2);
+    await page.waitForFunction(() => document.querySelectorAll(".flow .ptile img").length === 2, null, { timeout: 15000 });
+    // second picture first, then turn the first picture (now second)
+    await page.focus(".flow .ptile >> nth=1");
+    await page.keyboard.press("Control+ArrowLeft");
+    await page.hover(".flow .ptile >> nth=1");
+    await page.click(".flow .ptile >> nth=1 >> [data-turn]");
     await page.screenshot({ path: shots + "desktop-tool-images-light.png" });
     await page.click("[data-act=run]");
     await waitDone();
@@ -904,7 +944,7 @@ try {
     await page.waitForFunction(() => document.querySelector("#docname .name")?.textContent === "Images.pdf", null, { timeout: 15000 });
     await waitRendered();
     const imgInfo = await page.evaluate(() => window.papgi.info.pages.map((p) => [Math.round(p.w), Math.round(p.h)]));
-    check("images to PDF: one A4 page per picture, turned to fit", JSON.stringify(imgInfo) === JSON.stringify([[842, 595], [842, 595]]), JSON.stringify(imgInfo));
+    check("images to PDF: follows the preview (order, turn)", JSON.stringify(imgInfo) === JSON.stringify([[842, 595], [595, 842]]), JSON.stringify(imgInfo));
     check("images to PDF: opens in the editor", (await page.evaluate(() => location.hash)) === "#edit" && (await page.textContent("#docname .name")) === "Images.pdf");
 
     // recent files
