@@ -17,6 +17,8 @@ export interface SidebarHost {
   viewerBusy(): boolean;
   /** The panel was resized by hand (px; 0 = back to the default). */
   resized(width: number): void;
+  /** The page size in the panel was zoomed (px). */
+  zoomed(size: number): void;
 }
 
 interface Thumb {
@@ -29,9 +31,35 @@ interface Thumb {
   near: boolean;
 }
 
-/** Panel width limits; from GRID_AT on, pages are laid out left to right. */
 export const SIDE_MIN = 120;
-export const GRID_AT = 300;
+/** Page size in the panel (px, zoomable): pages grow with the panel up to this
+ *  size, and a new column starts only when it fits at this size. */
+export const TILE_DEFAULT = 200;
+export const TILE_MIN = 72;
+export const TILE_MAX = 640;
+const COL_GAP = 8;
+const ROW_GAP = 12;
+/** Space around the picture in a thumb: padding + number below. */
+const THUMB_PAD = 12;
+const THUMB_LABEL = 20;
+
+/** Thumb width and columns for the panel: never smaller than before when the panel
+ *  gets wider; a few pages grow as big as they can while all of them still fit. */
+export function thumbLayout(w: number, h: number, count: number, ratio: number, tile: number): { cols: number; width: number } {
+  if (w <= 0) return { cols: 1, width: 0 };
+  // biggest width that shows every page without scrolling
+  let fit = 0;
+  for (let n = 1; n <= Math.max(1, count); n++) {
+    const rows = Math.ceil(count / n);
+    const byW = (w - COL_GAP * (n - 1)) / n;
+    const byH = ((h - ROW_GAP * (rows - 1)) / rows - THUMB_PAD - THUMB_LABEL) / ratio + THUMB_PAD;
+    fit = Math.max(fit, Math.min(byW, byH));
+    if (byW < TILE_MIN) break;
+  }
+  const width = Math.floor(Math.min(w, Math.max(Math.min(w, tile), fit)));
+  const cols = Math.max(1, Math.floor((w + COL_GAP) / (width + COL_GAP)));
+  return { cols, width };
+}
 
 export class Sidebar {
   readonly el: HTMLElement;
@@ -43,6 +71,8 @@ export class Sidebar {
   private rendering = false;
   private observer: IntersectionObserver;
   private dragging: number[] | null = null;
+  private cols = 1;
+  private tile = TILE_DEFAULT;
   private dropAt = -1;
 
   constructor(private host: SidebarHost, mount: HTMLElement) {
@@ -57,7 +87,7 @@ export class Sidebar {
         <button class="icon-btn" data-act="insert" title="Insert PDF after">${icon("insert")}</button>
         <button class="icon-btn" data-act="blank" title="Insert blank page after">${icon("blank")}</button>
       </div>
-      <div class="side-hint muted"></div>
+      <div class="side-sub"><span class="side-hint muted"></span><span class="side-zoom"><button class="icon-btn sm" data-zoom="-1" title="Smaller pages (Ctrl + scroll)">${icon("zoomOut")}</button><button class="icon-btn sm" data-zoom="1" title="Bigger pages (Ctrl + scroll)">${icon("zoomIn")}</button></span></div>
       <div class="thumbs" tabindex="0" aria-label="Pages"></div>
       <div class="side-resize" role="separator" aria-orientation="vertical" aria-label="Resize the pages panel" tabindex="0" title="Drag to resize (wider shows pages side by side). Double-click: back to normal"></div>`;
     this.list = this.el.querySelector(".thumbs")!;
@@ -65,6 +95,26 @@ export class Sidebar {
     this.bindResize(this.el.querySelector(".side-resize")!);
     // (a smaller window squeezes the panel; the chosen width comes back when there's room)
     addEventListener("resize", () => this.wanted && this.setWidth(this.wanted, false));
+    new ResizeObserver(() => this.layout()).observe(this.list);
+    // page size: buttons, Ctrl + wheel / trackpad pinch over the panel
+    this.el.querySelector(".side-zoom")!.addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>("[data-zoom]");
+      if (b) this.zoomBy(Number(b.dataset.zoom) > 0 ? 1.25 : 0.8);
+    });
+    let wheelAt = 0;
+    this.list.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        // (a pinch sends many small steps; a mouse wheel few big ones)
+        const now = performance.now();
+        if (Math.abs(e.deltaY) < 20 && now - wheelAt < 40) return this.zoomBy(Math.exp(-e.deltaY / 100));
+        wheelAt = now;
+        this.zoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15);
+      },
+      { passive: false },
+    );
 
     this.el.querySelector(".side-actions")!.addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
@@ -95,6 +145,10 @@ export class Sidebar {
         e.preventDefault();
         e.stopPropagation();
         host.remove(this.targetPages());
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=" || e.key === "-")) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.zoomBy(e.key === "-" ? 0.8 : 1.25);
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp" || (this.isGrid() && (e.key === "ArrowLeft" || e.key === "ArrowRight"))) {
         e.preventDefault();
         const step = e.key === "ArrowLeft" || e.key === "ArrowRight" ? 1 : this.columns();
@@ -175,16 +229,63 @@ export class Sidebar {
   }
 
   isGrid(): boolean {
-    return this.el.classList.contains("grid");
+    return this.cols > 1;
   }
 
   /** Pages per row (1 in the list). */
   private columns(): number {
-    if (!this.isGrid() || !this.thumbs.length) return 1;
-    const top = this.thumbs[0].el.offsetTop;
-    let n = 0;
-    while (n < this.thumbs.length && this.thumbs[n].el.offsetTop === top) n++;
-    return Math.max(1, n);
+    return this.cols;
+  }
+
+  // ---------- page size ----------
+
+  /** Page size in px (0: default). */
+  setTile(px: number): void {
+    this.tile = px > 0 ? Math.round(Math.max(TILE_MIN, Math.min(TILE_MAX, px))) : TILE_DEFAULT;
+    this.layout();
+  }
+
+  private zoomBy(f: number): void {
+    // zoom from what is shown (a few pages may be shown bigger than the size set)
+    const shown = this.thumbs[0]?.el.offsetWidth || this.tile;
+    const from = f > 1 ? Math.max(shown, this.tile) : Math.min(shown, this.tile);
+    const w = this.contentWidth();
+    const next = Math.round(Math.max(TILE_MIN, Math.min(TILE_MAX, w || TILE_MAX, from * f)));
+    if (next === this.tile) return;
+    this.tile = next;
+    this.layout();
+    clearTimeout(this.zoomSave);
+    this.zoomSave = window.setTimeout(() => this.host.zoomed(this.tile), 300);
+  }
+  private zoomSave = 0;
+
+  private contentWidth(): number {
+    const cs = getComputedStyle(this.list);
+    return this.list.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  }
+
+  /** Columns and thumb width for the panel's size, the page count and the page size. */
+  private layout(): void {
+    if (this.el.hidden || !this.list.clientWidth) return;
+    const cs = getComputedStyle(this.list);
+    const w = this.contentWidth();
+    const h = this.list.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const pages = this.info?.pages ?? [];
+    // tallest page shape (the first 200), so the "all pages fit" size really fits
+    let ratio = 1.294;
+    if (pages.length) ratio = Math.max(...pages.slice(0, 200).map((p) => p.h / Math.max(1, p.w)));
+    const { cols, width } = thumbLayout(w, h, pages.length, ratio, this.tile);
+    if (cols === this.cols && this.list.style.getPropertyValue("--tw") === `${width}px`) return;
+    this.cols = cols;
+    this.list.style.setProperty("--tw", `${width}px`);
+    this.list.style.gridTemplateColumns = `repeat(${cols}, ${width}px)`;
+    this.el.classList.toggle("grid", cols > 1);
+    const zoom = this.el.querySelector(".side-zoom") as HTMLElement;
+    zoom.querySelector<HTMLButtonElement>('[data-zoom="1"]')!.disabled = width >= w - 1;
+    zoom.querySelector<HTMLButtonElement>('[data-zoom="-1"]')!.disabled = this.tile <= TILE_MIN;
+    // pictures drawn for a smaller size get drawn again, sharper
+    for (const t of this.thumbs) if (t.renderedWidth && width - THUMB_PAD > t.renderedWidth * 1.25) t.version++;
+    this.schedule();
   }
 
   // ---------- width ----------
@@ -196,11 +297,8 @@ export class Sidebar {
     const max = this.maxWidth();
     const w = px > 0 ? Math.round(Math.max(SIDE_MIN, Math.min(max, px))) : 0;
     this.el.style.width = w ? `${w}px` : "";
-    this.el.classList.toggle("grid", w >= GRID_AT);
     this.el.classList.toggle("wide", w > 0);
-    // pictures drawn for a smaller size get drawn again, sharper
-    for (const t of this.thumbs) if (t.renderedWidth && t.el.clientWidth > t.renderedWidth * 1.25) t.version++;
-    this.schedule();
+    this.layout();
   }
 
   private maxWidth(): number {
@@ -296,6 +394,7 @@ export class Sidebar {
     });
     this.updateHint();
     this.paintSelection();
+    this.layout();
     this.setCurrent(Math.min(this.current, info.pageCount - 1));
   }
 
@@ -325,7 +424,7 @@ export class Sidebar {
   private updateHint(): void {
     const hint = this.el.querySelector(".side-hint")!;
     const n = this.sel.selected.length;
-    hint.textContent = n > 1 ? `${n} pages selected` : n === 1 ? `Page ${this.sel.selected[0] + 1} selected` : "Ctrl/Shift-click to select pages";
+    hint.textContent = n > 1 ? `${n} pages selected` : n === 1 ? `Page ${this.sel.selected[0] + 1} selected` : "Ctrl/Shift-click: select";
   }
 
   private waiting = 0;
@@ -367,6 +466,9 @@ export class Sidebar {
 
   show(on: boolean): void {
     this.el.hidden = !on;
-    if (on) this.schedule();
+    if (on) {
+      this.layout();
+      this.schedule();
+    }
   }
 }

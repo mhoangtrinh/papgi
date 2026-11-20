@@ -33,6 +33,8 @@ export interface Settings {
   sidebar: boolean;
   /** Pages panel width set by hand (px; 0 = default). */
   sidebarWidth: number;
+  /** Page size in the pages panel (px; 0 = default). */
+  sidebarZoom: number;
   signatures: SavedSignature[];
   activeSignature: string | null;
   signatureWidth: number;
@@ -64,6 +66,7 @@ export const DEFAULTS: Settings = {
   shapeKind: "Square",
   sidebar: true,
   sidebarWidth: 0,
+  sidebarZoom: 0,
   signatures: [],
   activeSignature: null,
   signatureWidth: 150,
@@ -99,6 +102,7 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   if (!out.signatures.some((x) => x.id === out.activeSignature)) out.activeSignature = out.signatures[0]?.id ?? null;
   out.ocrLangs = cleanOcrLangs(out.ocrLangs);
   out.ocrSerif = out.ocrSerif === true;
+  out.sidebarZoom = typeof out.sidebarZoom === "number" && out.sidebarZoom > 0 && out.sidebarZoom < 4000 ? Math.round(out.sidebarZoom) : 0;
   out.sidebarWidth = typeof out.sidebarWidth === "number" && out.sidebarWidth > 0 && out.sidebarWidth < 4000 ? Math.round(out.sidebarWidth) : 0;
   return out;
 }

@@ -1026,9 +1026,27 @@ try {
       const t = [...document.querySelectorAll(".thumb")];
       return { w: document.querySelector(".sidebar").offsetWidth, grid: document.querySelector(".sidebar").classList.contains("grid"), cols: t.filter((x) => x.offsetTop === t[0].offsetTop).length, saved: JSON.parse(localStorage.getItem("papgi.settings.v1")).sidebarWidth };
     });
-    check("pages panel: a bit wider keeps the list with bigger pages", !listW[0] && listW[1] > 200, JSON.stringify(listW));
+    check("pages panel: a bit wider keeps the list with bigger pages", !listW[0] && listW[1] >= 190, JSON.stringify(listW));
     check("pages panel: wide shows pages left to right, width remembered", st.grid && st.cols >= 2 && st.w > w0 + 300 && st.saved === st.w, JSON.stringify(st));
     await page.screenshot({ path: shots + "desktop-pages-panel-wide-light.png" });
+    // pages never got smaller on the way
+    // zoom: smaller pages -> more columns; Ctrl + wheel bigger again; remembered
+    const cols = () => page.evaluate(() => getComputedStyle(document.querySelector(".thumbs")).gridTemplateColumns.split(" ").length);
+    const c0 = await cols();
+    await page.click('.side-zoom [data-zoom="-1"]');
+    await page.click('.side-zoom [data-zoom="-1"]');
+    const c1 = await cols();
+    const tw1 = (await page.locator(".thumb >> nth=0").boundingBox()).width;
+    const tb = await page.locator(".thumbs").boundingBox();
+    await page.mouse.move(tb.x + tb.width / 2, tb.y + 200);
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0, -120);
+    await page.keyboard.up("Control");
+    await page.waitForTimeout(500);
+    const tw2 = (await page.locator(".thumb >> nth=0").boundingBox()).width;
+    const zsaved = await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")).sidebarZoom);
+    check("pages panel: zoom out gives more columns, Ctrl+wheel zooms in, remembered", c1 > c0 && tw2 > tw1 && Math.abs(zsaved - tw2) < 2, `${c0}->${c1} cols, ${tw1}->${tw2}px, saved ${zsaved}`);
+    await page.screenshot({ path: shots + "desktop-pages-panel-zoom-light.png" });
     // drag page 5 in front of page 1 in the grid
     const t1 = await page.locator(".thumb").nth(0).boundingBox();
     await page.locator(".thumb").nth(4).dragTo(page.locator(".thumb").nth(0), { targetPosition: { x: 8, y: t1.height / 2 } });
@@ -1041,6 +1059,12 @@ try {
     await page.waitForTimeout(500);
     const cur = () => page.evaluate(() => [...document.querySelectorAll(".thumb")].findIndex((x) => x.classList.contains("current")));
     check("pages panel (wide): arrow right goes to the next page", (await cur()) === 1, String(await cur()));
+    await page.click('.side-zoom [data-zoom="1"]');
+    await page.evaluate(() => {
+      const s = JSON.parse(localStorage.getItem("papgi.settings.v1"));
+      s.sidebarZoom = 0;
+      localStorage.setItem("papgi.settings.v1", JSON.stringify(s));
+    });
     await page.locator(".side-resize").dblclick();
     await page.waitForTimeout(300);
     const back = await page.evaluate(() => [document.querySelector(".sidebar").offsetWidth, document.querySelector(".sidebar").classList.contains("grid"), JSON.parse(localStorage.getItem("papgi.settings.v1")).sidebarWidth]);

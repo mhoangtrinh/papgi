@@ -71,6 +71,10 @@ export class App {
           this.settings.sidebarWidth = w;
           saveSettings(this.settings);
         },
+        zoomed: (z) => {
+          this.settings.sidebarZoom = z;
+          saveSettings(this.settings);
+        },
       },
       main,
     );
@@ -93,6 +97,7 @@ export class App {
     // On phones the pages panel covers the page, so start with it closed there.
     if (window.matchMedia("(max-width: 760px)").matches) this.settings.sidebar = false;
     this.sidebar.show(this.settings.sidebar);
+    this.sidebar.setTile(this.settings.sidebarZoom);
     this.sidebar.setWidth(this.settings.sidebarWidth);
     this.bind();
     this.setTool(this.settings.tool);

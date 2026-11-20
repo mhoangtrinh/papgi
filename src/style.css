@@ -629,19 +629,47 @@ body:not(.has-doc) .sidebar {
   height: 18px;
 }
 
+.side-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 0 10px;
+}
+
 .side-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
-  padding: 6px 10px 2px;
-  text-align: center;
+}
+
+.side-zoom {
+  display: flex;
+  flex: none;
+}
+
+.side-zoom .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.side-zoom .ic {
+  width: 16px;
+  height: 16px;
 }
 
 .thumbs {
   flex: 1;
   overflow-y: auto;
   padding: 8px 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: 100%;
+  justify-content: center;
+  align-content: start;
+  align-items: end;
+  gap: 12px 8px;
   outline: none;
   padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
@@ -3276,14 +3304,6 @@ body.side-resizing {
 
 body.side-resizing .viewer {
   pointer-events: none;
-}
-
-.sidebar.grid .thumbs {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  align-content: start;
-  align-items: end;
-  gap: 12px 8px;
 }
 
 .sidebar.grid .thumb.drop-before::before,
