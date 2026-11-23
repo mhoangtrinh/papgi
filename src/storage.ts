@@ -5,7 +5,7 @@ import { SHAPE_KINDS, isLineKind, type LineStyle, type ShapeKind, type ShapeStyl
 export type { ShapeKind, LineStyle } from "./core/shapes";
 
 export type Theme = "auto" | "light" | "dark";
-export type Tool = "select" | "area" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign" | "eraser";
+export type Tool = "select" | "area" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign" | "eraser" | "note";
 export type MarkKind = "Highlight" | "Underline" | "StrikeOut";
 
 /** A signature made from a picture: transparent PNG as a data URL, with its pixel size. */
@@ -74,6 +74,7 @@ export const DEFAULTS: Settings = {
     shape: "#e5484d",
     sign: "#1a3a8f",
     eraser: "#1c1c1c",
+    note: "#ffd400",
   },
   penWidth: 2,
   shapeWidth: 2,

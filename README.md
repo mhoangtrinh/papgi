@@ -49,6 +49,12 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | **Copy & paste** | Ctrl+C / Ctrl+X / Ctrl+V for anything you added (text boxes, drawings, signatures, pictures), also into another PDF; Ctrl+D duplicates. Pastes go where the mouse is (or a long press / right-click → Paste; the Paste button on phones). Screenshots and pictures from other apps paste as pictures, text as a text box |
 | **Select area** | Drag a box around any part of a page, then **Copy**, **Cut**, **Erase**, or drag it somewhere else (also onto another page). Everything in the box goes: the page's content, form fields (moved fields stay the same fields; copied ones become new fields with their own name) and added items. The copy is the real content (text stays text, drawings stay sharp), not a picture; letters belong where their middle is. A cut is filled with the colour around it. Moved and pasted parts can be moved again; they become ordinary page content when the file is saved |
 | **Eraser** | *Added items*: rubs out drawings where you pass (the rest of the stroke stays) and removes highlights, shapes, text boxes it touches. *Everything*: also really removes the PDF's own text, pictures and lines under the brush (not just covered up), and form fields it touches. Size slider |
+| **Notes** | Note tool (N): click to add a sticky note, click a note to read or change it (also from the Select tool) |
+| **Pictures** | Document → *Add a picture…* (or paste one): placed on the current page, then move and resize it |
+| **Watermark** | Document → *Watermark…*: text, size, opacity, colour, bold, diagonal or across, on all pages or a range, with a preview. Written into the pages (Vietnamese and other Latin letters work) |
+| **Page numbers** | Document → *Page numbers, header & footer…*: "1", "Page 1 of 9", "1 / 9"… in any corner, a header and footer text ({page}, {pages}, {date}, {file}), start number, skip a title page, page range, with a preview |
+| **Redact** | Select area → *Redact*, or Document → *Redact a text everywhere…* (shows how many places first): black boxes, and the text, pictures and drawings under them are really removed from the file |
+| **Password** | Document → *Password protection…*: AES-256 password on the saved file, or remove one. Takes effect when you save |
 | **Contents** | Sidebar → *Contents*: the PDF's bookmarks, or, when it has none, its headings (found from their size, bold and numbering; running headers and table headers are skipped). Click to jump; the section you're reading is marked |
 | **Scans (OCR)** | Recognize text on scanned pages (Document → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 
@@ -60,7 +66,7 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 
 | Key | Action |
 |---|---|
-| V / A / E / H / P / T / R / X / S | Select, Select area, Edit text, Highlight, Pen, Text box, Shapes, Eraser, Sign |
+| V / A / E / H / P / T / R / N / X / S | Select, Select area, Edit text, Highlight, Pen, Text box, Shapes, Note, Eraser, Sign |
 | Ctrl+P | Print |
 | Shift while drawing a shape | Square / circle, lines at 45° steps |
 | Edit text: Ctrl+Enter / Esc | Finish / cancel editing a paragraph (clicking outside also finishes) |
@@ -110,6 +116,8 @@ src/
   core/docx.ts       small .docx writer (sections, columns, paragraphs, tabs, pictures)
   engine/tools.ts    merge, split, images <-> PDF, compress (work on copies; unit-tested in Node)
   engine/clip.ts     copy/cut/paste of items and page areas, erasing, baking pasted areas on save
+  engine/stamp.ts    watermarks, page numbers, headers and footers written into the pages
+  ui/doc-tools.ts    watermark, page-number, password, redact and note dialogs
   core/erase.ts      eraser geometry: brush coverage, rubbing strokes (pure, tested)
   core/toc.ts        table of contents from headings (pure, tested)
   core/shapes.ts     shape kinds, styles and geometry (pure, tested)

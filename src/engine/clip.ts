@@ -122,14 +122,14 @@ function clearGraphics(m: M, page: MuPDF.PDFPage, rects: Rect[], text = false): 
  * drawings inside are removed, then the areas are painted white (so parts of lines and
  * letters reaching in are rubbed out too).
  */
-export function eraseRects(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rects: Rect[], opts: { fields?: boolean; annots?: boolean } = {}): void {
+export function eraseRects(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rects: Rect[], opts: { fields?: boolean; annots?: boolean; fill?: number[] } = {}): void {
   if (!rects.length) return;
-  // the colour around the erased part (paper, or a coloured band it sits in)
-  const [r, g, b] = surroundColor(m, page, rects);
+  // the colour around the erased part (paper, or a coloured band it sits in), or the one given (redaction: black)
+  const [r, g, b] = opts.fill ? opts.fill.map((v) => v * 255) : surroundColor(m, page, rects);
   const mid = (f: Rect) => inRects(rects, (f[0] + f[2]) / 2, (f[1] + f[3]) / 2);
   // form fields (and added items) whose middle is in the erased part go too
   if (opts.fields !== false) removeFields(page, mid);
-  if (opts.annots) for (const a of itemsIn(page, rects[0]).annots) page.deleteAnnotation(a);
+  if (opts.annots) for (const rr of rects) for (const a of itemsIn(page, rr).annots) page.deleteAnnotation(a);
   clearGraphics(m, page, rects);
   removeGlyphs(m, page, (c) => inRects(rects, c[0], c[1]));
   const inv = m.Matrix.invert(page.getTransform());

@@ -43,6 +43,20 @@ export class WorkerEngine extends PdfEngine {
     return this.replaceText(index, block, runs, opts);
   }
 
+  /** A watermark, first fetching a font if Helvetica lacks some of its letters. */
+  async addWatermark(o: import("./stamp").WatermarkOptions, fontBase: string): Promise<void> {
+    const file = this.stampFontFile([o.text], o.bold);
+    if (file) await this.loadFonts([file], fontBase).catch(() => {});
+    this.watermark(o);
+  }
+
+  /** Page numbers, header and footer (fetching a font when needed). */
+  async addHeaderFooter(o: import("./stamp").HeaderFooterOptions, fontBase: string): Promise<number> {
+    const file = this.stampFontFile(Object.values(o.items).filter((t): t is string => !!t), false);
+    if (file) await this.loadFonts([file], fontBase).catch(() => {});
+    return this.headerFooter(o);
+  }
+
   /** What's printed in a part of a page on a transparent background (drag preview). */
   async renderAreaBitmap(index: number, rect: [number, number, number, number], scale: number, content = true): Promise<ImageBitmap> {
     const img = this.renderArea(index, rect, scale, content);

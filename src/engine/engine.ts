@@ -18,6 +18,8 @@ export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
 export type { ClipInfo } from "./clip";
 import type { TextLine, TocItem } from "../core/toc";
+import { addHeaderFooter, addWatermark, pickFont, type HeaderFooterOptions, type WatermarkOptions } from "./stamp";
+export type { HeaderFooterOptions, WatermarkOptions, Corner } from "./stamp";
 import { dashPattern, isLineKind, shapeGeometry, type LineStyle, type ShapeKind, type ShapeStyle } from "../core/shapes";
 
 type M = typeof MuPDF;
@@ -93,6 +95,9 @@ export class PdfEngine {
   private stext = new Map<number, MuPDF.StructuredText>();
   private lines = new Map<number, Rect[]>();
   private helv: MuPDF.Font | null = null;
+  private helvBold: MuPDF.Font | null = null;
+  /** Password protection to apply when saving: new passwords, "none" to remove, null to keep as it is. */
+  private protect: { user: string; owner: string } | "none" | null = null;
   private bundled = new Map<string, MuPDF.Font>();
   private title = "";
   // Each journal step gets a unique id, so "dirty" survives undo + new edit sequences.
@@ -130,6 +135,7 @@ export class PdfEngine {
     this.close();
     this.doc = pdf;
     this.fileSerial++;
+    this.protect = null;
     this.docSize = bytes.length;
     this.title = title;
     this.password = "";
@@ -226,7 +232,8 @@ export class PdfEngine {
   private writeOut(doc: MuPDF.PDFDocument): Uint8Array {
     // (big files: start without the cache of decoded pictures)
     if (this.docSize > PdfEngine.BIG_FILE) this.mupdf.emptyStore();
-    const tries = ["garbage=deduplicate,compress", "garbage,compress", "", ""];
+    const enc = this.encryptOptions();
+    const tries = ["garbage=deduplicate,compress", "garbage,compress", "", ""].map((o) => [o, enc].filter(Boolean).join(","));
     let last: unknown;
     for (const [k, opt] of tries.entries()) {
       if (k === 3) {
@@ -254,6 +261,72 @@ export class PdfEngine {
       }
     }
     throw last;
+  }
+
+  // ---------- password protection ----------
+
+  /** Whether the file needs a password to open (as it will be saved). */
+  protection(): { locked: boolean; changed: boolean } {
+    const p = this.protect;
+    return { locked: p === null ? this.password !== "" || this.requireDoc().needsPassword() : p !== "none", changed: p !== null };
+  }
+
+  /** Protect the file with a password when it's saved (owner password: the same unless given), or remove it ("none"). */
+  setProtection(p: { user: string; owner?: string } | "none"): void {
+    this.requireDoc();
+    if (p !== "none" && !p.user) throw new Error("The password is empty");
+    // (the save options are a comma-separated list)
+    if (p !== "none" && /,/.test(p.user + (p.owner ?? ""))) throw new Error("A password can't contain a comma");
+    this.protect = p === "none" ? "none" : { user: p.user, owner: p.owner || p.user };
+    // (a change to save, though not one to undo)
+    this.stateId = this.nextStateId++;
+  }
+
+  private encryptOptions(): string {
+    const p = this.protect;
+    if (p === null) return "";
+    if (p === "none") return "encrypt=none";
+    return `encrypt=aes-256,user-password=${p.user},owner-password=${p.owner}`;
+  }
+
+  // ---------- watermark, page numbers, header and footer ----------
+
+  /** The bundled font file needed for these texts (when Helvetica lacks some of their letters), or null. */
+  stampFontFile(texts: string[], bold = false): string | null {
+    const helv = this.stampHelv(bold);
+    if (texts.every((t) => pickFont([helv], t))) return null;
+    return bold ? "LiberationSans-Bold.ttf" : "LiberationSans-Regular.ttf";
+  }
+
+  private stampHelv(bold: boolean): MuPDF.Font {
+    return bold ? (this.helvBold ??= new this.mupdf.Font("Helvetica-Bold")) : (this.helv ??= new this.mupdf.Font("Helvetica"));
+  }
+
+  private stampFont(text: string, bold: boolean): MuPDF.Font {
+    const helv = this.stampHelv(bold);
+    if (pickFont([helv], text)) return helv;
+    const lib = this.bundled.get(bold ? "LiberationSans-Bold.ttf" : "LiberationSans-Regular.ttf");
+    return lib && pickFont([lib], text) ? lib : helv;
+  }
+
+  /** A text watermark on pages (real page content; one undo step). */
+  watermark(o: WatermarkOptions): void {
+    const doc = this.requireDoc();
+    if (!o.text.trim()) throw new Error("The watermark has no text");
+    this.journaled("Watermark", () => addWatermark(this.mupdf, doc, o, this.stampFont(o.text, o.bold)), o.pages);
+    for (const i of o.pages) this.forgetText(i);
+  }
+
+  /** Page numbers, header and footer text (real page content; one undo step). Returns pages changed. */
+  headerFooter(o: HeaderFooterOptions): number {
+    const doc = this.requireDoc();
+    let n = 0;
+    this.journaled("Page numbers", () => {
+      n = addHeaderFooter(this.mupdf, doc, o, (t) => this.stampFont(t, false));
+      return n > 0;
+    }, o.pages);
+    for (const i of o.pages) this.forgetText(i);
+    return n;
   }
 
   /** Something to tell the person after the last save, once. */
@@ -778,6 +851,30 @@ export class PdfEngine {
     });
   }
 
+  /** A sticky note (comment) at a point: an icon on the page with the text in it. */
+  addNote(index: number, at: Point, text: string, color: RGB): AnnotInfo[] {
+    return this.op("Note", index, (page) => {
+      const a = page.createAnnotation("Text");
+      // (the icon's box: 18 pt, its top-left corner where it was put)
+      a.setRect([at[0], at[1], at[0] + 18, at[1] + 18]);
+      a.setIcon("Comment");
+      a.setColor(color);
+      a.setContents(text);
+      a.update();
+    });
+  }
+
+  /** Change the text of a note (or any annotation's comment). */
+  setNoteText(index: number, annot: number, text: string): AnnotInfo[] {
+    return this.op("Note", index, (page) => {
+      const a = page.getAnnotations()[annot];
+      if (!a) throw new Error("No such annotation");
+      if (a.getContents() === text) return false;
+      a.setContents(text);
+      a.update();
+    });
+  }
+
   setAnnotColor(index: number, annot: number, color: RGB): AnnotInfo[] {
     return this.op("Colour", index, (page) => {
       const a = page.getAnnotations()[annot];
@@ -911,6 +1008,41 @@ export class PdfEngine {
     this.journaled(name, () => this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect], { fields: true, annots: true })), [index]);
     this.forgetText(index);
     return this.listAnnots(index);
+  }
+
+  /**
+   * Redact a part of a page: everything in it is really removed (text, pictures, drawings,
+   * form fields, added items) and a black box put in its place.
+   */
+  redactArea(index: number, rect: Rect): AnnotInfo[] {
+    const doc = this.requireDoc();
+    this.journaled("Redact", () => this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect], { fields: true, annots: true, fill: [0, 0, 0] })), [index]);
+    this.forgetText(index);
+    return this.listAnnots(index);
+  }
+
+  /** Redact every place a text appears (one undo step). Returns the pages changed and how many places. */
+  redactText(needle: string): { pages: number[]; count: number } {
+    const doc = this.requireDoc();
+    const hits = this.search(needle, 10000);
+    if (!hits.length) return { pages: [], count: 0 };
+    const byPage = new Map<number, Rect[]>();
+    for (const h of hits) {
+      // a hit can span lines: one box per line piece, a little bigger than the letters
+      for (const q of h.quads) {
+        const xs = [q[0], q[2], q[4], q[6]];
+        const ys = [q[1], q[3], q[5], q[7]];
+        const pad = 0.5;
+        const r: Rect = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
+        byPage.set(h.page, [...(byPage.get(h.page) ?? []), r]);
+      }
+    }
+    const pages = [...byPage.keys()];
+    this.journaled("Redact", () => {
+      for (const [i, rects] of byPage) this.withPage(i, (page) => eraseRects(this.mupdf, doc, page, rects, { fields: false, annots: false, fill: [0, 0, 0] }));
+    }, pages);
+    for (const i of pages) this.forgetText(i);
+    return { pages, count: hits.length };
   }
 
   /**

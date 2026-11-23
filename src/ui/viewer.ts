@@ -11,6 +11,7 @@ import {
   type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight,
 } from "../core/geometry";
 import { icon } from "./icons";
+import { noteDialog, esc } from "./doc-tools";
 import { toast } from "./dialogs";
 import { dataUrlBytes } from "./signature-dialog";
 
@@ -588,6 +589,7 @@ export class Viewer {
       case "text":
       case "sign":
       case "edit":
+      case "note":
         this.drag = { kind: "click", pv, start: p, x: e.clientX, y: e.clientY };
         break;
     }
@@ -872,6 +874,10 @@ export class Viewer {
             await this.placeSignature(d.pv, d.start);
           } else if (this.tool === "edit") {
             await this.openParagraph(d.pv, d.start, e.clientX, e.clientY);
+          } else if (this.tool === "note") {
+            const a = this.annotAt(d.pv, d.start);
+            if (a?.kind === "Text") await this.editNote(d.pv, a);
+            else await this.newNote(d.pv, d.start);
           }
           break;
         }
@@ -1407,16 +1413,18 @@ export class Viewer {
       a.rect,
       "annot",
       `${a.kind === "Stamp" || a.area || a.shape ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
-       ${a.kind === "FreeText" ? `<button data-act="edit" title="Edit text">${icon("edit")}</button>` : ""}
+       ${a.kind === "Text" ? `<span class="note-peek" data-act="edit" title="Read or change the note">${a.contents ? esc(a.contents) : `<span class="muted">Empty note</span>`}</span>` : ""}
+       ${a.kind === "FreeText" || a.kind === "Text" ? `<button data-act="edit" title="${a.kind === "Text" ? "Edit note" : "Edit text"}">${icon("edit")}</button>` : ""}
        <button data-act="copy" title="Copy (Ctrl+C)">${icon("copy")}</button>
        <button data-act="duplicate" title="Duplicate (Ctrl+D)">${icon("duplicate")}</button>
        <button data-act="delete" title="Delete (Del)">${icon("trash")}</button>`,
     );
     this.floating.onclick = async (e) => {
-      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
+      const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-act]");
       if (!b) return;
       try {
-        if (b.dataset.color) {
+        if (b.dataset.act === "edit" && a.kind === "Text") await this.editNote(pv, a);
+        else if (b.dataset.color) {
           this.afterAnnotEdit(pv, await this.host.engine.setAnnotColor(pv.index, a.index, hexToRgb(b.dataset.color)));
         } else if (b.dataset.act === "delete") await this.deleteSelectedAnnot();
         else if (b.dataset.act === "edit") this.openEditor(pv, a);
@@ -1426,6 +1434,29 @@ export class Viewer {
         toast((err as Error).message, "error");
       }
     };
+  }
+
+  // ---------- sticky notes ----------
+
+  private async newNote(pv: PageView, p: Point): Promise<void> {
+    const text = await noteDialog("", true);
+    if (text === null || text === "delete") return;
+    const at = this.clampToPage(pv, [p[0] - 9, p[1] - 9], 18, 18);
+    const annots = await this.host.busy(this.host.engine.addNote(pv.index, at, text, hexToRgb(this.host.settings.colors.note)));
+    this.afterAnnotEdit(pv, annots);
+  }
+
+  private async editNote(pv: PageView, a: AnnotInfo): Promise<void> {
+    const text = await noteDialog(a.contents, false);
+    if (text === null) return;
+    if (text === "delete") {
+      this.selectAnnot({ page: pv.index, index: a.index });
+      await this.deleteSelectedAnnot();
+      return;
+    }
+    const annots = await this.host.busy(this.host.engine.setNoteText(pv.index, a.index, text));
+    this.afterAnnotEdit(pv, annots);
+    if (this.tool !== "note") this.selectAnnot({ page: pv.index, index: a.index });
   }
 
   // ---------- select area ----------
@@ -1466,6 +1497,7 @@ export class Viewer {
       `<button data-act="copy" title="Copy (Ctrl+C)">${icon("copy")}</button>
        <button data-act="cut" title="Cut (Ctrl+X)">${icon("cut")}</button>
        <button data-act="erase" title="Erase (Del)">${icon("eraser")}</button>
+       <button data-act="redact" title="Redact: black out and remove what's under it">${icon("redact")}</button>
        <span class="sep"></span><span class="float-hint">Drag to move</span>`,
     );
     this.floating.onclick = async (e) => {
@@ -1475,6 +1507,7 @@ export class Viewer {
         if (b.dataset.act === "copy") await this.copy(false);
         else if (b.dataset.act === "cut") await this.copy(true);
         else if (b.dataset.act === "erase") await this.eraseArea();
+        else if (b.dataset.act === "redact") await this.redactArea();
       } catch (err) {
         toast((err as Error).message, "error");
       }
@@ -1490,6 +1523,17 @@ export class Viewer {
     this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.eraseArea(a.page, a.rect, "Erase", !a.moved)));
     this.refreshFields(pv);
     return true;
+  }
+
+  /** Black out the selected area, really removing the text, pictures and drawings under it. */
+  async redactArea(): Promise<void> {
+    const a = this.area;
+    if (!a) return;
+    const pv = this.pages[a.page];
+    this.setArea(null);
+    this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.redactArea(a.page, a.rect)));
+    this.refreshFields(pv);
+    toast("Redacted. What was under the box is gone from the file.");
   }
 
   /** A picture of the selected area that follows the pointer while it's dragged. */
@@ -1699,6 +1743,25 @@ export class Viewer {
     const cy = bottom > top ? (top + bottom) / 2 : r.top + r.height / 2;
     const cx = right > left ? (left + right) / 2 : r.left + r.width / 2;
     return this.toPagePoint(pv, { clientX: cx, clientY: cy });
+  }
+
+  /** Choose a picture file and put it in the middle of the current page (selected, so it can be resized). */
+  pickPicture(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.style.display = "none";
+      input.addEventListener("cancel", () => (input.remove(), resolve()));
+      input.addEventListener("change", () => {
+        const f = input.files?.[0];
+        input.remove();
+        if (!f) return resolve();
+        this.pastePicture(f, { page: this.current, center: null }).then(resolve, () => reject(new Error(`Couldn't read ${f.name} as a picture`)));
+      });
+      document.body.append(input);
+      input.click();
+    });
   }
 
   private async pastePicture(blob: Blob, place: { page: number; center: Point | null }): Promise<void> {

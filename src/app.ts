@@ -9,6 +9,7 @@ import { signatureDialog } from "./ui/signature-dialog";
 import { ocrDialog, runOcr } from "./ui/ocr";
 import { Organize } from "./ui/organize";
 import { ShapeOptions } from "./ui/shape-options";
+import { headerFooterDialog, passwordDialog, redactTextDialog, watermarkDialog } from "./ui/doc-tools";
 import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, friendlyError, type OpenedFile } from "./files";
@@ -27,6 +28,7 @@ const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "pen", label: "Pen", key: "P", icon: "pen" },
   { id: "text", label: "Text box", key: "T", icon: "text" },
   { id: "shape", label: "Shapes", key: "R", icon: "shape" },
+  { id: "note", label: "Note", key: "N", icon: "note" },
   { id: "eraser", label: "Eraser", key: "X", icon: "eraser" },
   { id: "sign", label: "Sign", key: "S", icon: "sign" },
 ];
@@ -207,6 +209,11 @@ export class App {
             <button data-menu="ocr" data-needs-doc>${icon("scan")}Recognize text (OCR)…</button>
             <button data-menu="signature">${icon("sign")}Add a signature…</button>
             <button data-menu="insert" data-needs-doc>${icon("insert")}Insert PDF at end…</button>
+            <button data-menu="picture" data-needs-doc>${icon("image")}Add a picture…</button>
+            <button data-menu="watermark" data-needs-doc>${icon("watermark")}Watermark…</button>
+            <button data-menu="numbers" data-needs-doc>${icon("pageNum")}Page numbers, header &amp; footer…</button>
+            <button data-menu="redact" data-needs-doc>${icon("redact")}Redact a text everywhere…</button>
+            <button data-menu="password" data-needs-doc>${icon("lock")}Password protection…</button>
             <button data-menu="flatten" data-needs-doc>${icon("flatten")}Flatten forms &amp; annotations</button>
             <hr>
             ${TOOL_LIST.filter((t) => FLOWS[t.id]?.takes === "pdf").map((t) => `<button data-goto="${t.id}" data-needs-doc>${icon(t.icon)}${t.id === "merge" ? "Merge with other PDFs…" : `${t.name}…`}</button>`).join("")}
@@ -556,6 +563,9 @@ export class App {
       case "shape":
         html = this.shapeOpts.html(true);
         break;
+      case "note":
+        html = swatches() + `<span class="muted hint">Click to add a sticky note · click a note to read or change it</span>`;
+        break;
       case "sign": {
         const active = this.activeSignature();
         const chips = s.signatures
@@ -802,6 +812,11 @@ export class App {
       case "saveas": return void this.saveCopy();
       case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
       case "flatten": return void this.flatten();
+      case "picture": return void this.viewer.pickPicture().catch((err) => toast(err.message, "error"));
+      case "watermark": return void this.watermark();
+      case "numbers": return void this.pageNumbers();
+      case "redact": return void this.redactText();
+      case "password": return void this.password();
       case "organize": return this.toggleOrganize(true);
       case "ocr": return void this.recognize();
       case "print": return void this.print();
@@ -1061,6 +1076,67 @@ export class App {
     if (!this.info) return;
     if (!(await confirmDialog("Flatten?", "Annotations and form fields become part of the page and can no longer be edited. You can undo this until you close the file.", "Flatten"))) return;
     await this.pageOp(this.engine.flatten());
+  }
+
+  // ---------- document tools ----------
+
+  private currentPage(): number {
+    const n = Number(this.$<HTMLInputElement>("#page-input").value) - 1;
+    return this.info ? Math.max(0, Math.min(this.info.pageCount - 1, Number.isFinite(n) ? n : 0)) : 0;
+  }
+
+  /** Run a change to page content, then repaint everything. */
+  private async contentOp(job: Promise<unknown>, msg: string): Promise<void> {
+    try {
+      await this.busy(job);
+      await this.afterHistory(await this.engine.info(), msg);
+    } catch (e) {
+      toast(friendlyError((e as Error).message), "error");
+    }
+  }
+
+  private async watermark(): Promise<void> {
+    if (!this.info) return;
+    const o = await watermarkDialog(this.info.pageCount, this.info.pages[this.currentPage()]);
+    if (!o) return;
+    const n = o.pages.length;
+    await this.contentOp(this.engine.addWatermark(o, new URL("fonts/", document.baseURI).href), `Watermark added to ${n === this.info.pageCount ? "every page" : `${n} page${n > 1 ? "s" : ""}`}`);
+  }
+
+  private async pageNumbers(): Promise<void> {
+    if (!this.info || !this.file) return;
+    const o = await headerFooterDialog(this.info.pageCount, this.info.pages[this.currentPage()], this.file.name);
+    if (!o) return;
+    const job = this.engine.addHeaderFooter(o, new URL("fonts/", document.baseURI).href);
+    await this.contentOp(job, "Added");
+    const n = await job.catch(() => 0);
+    if (n) toast(`Added to ${n} page${n > 1 ? "s" : ""}`);
+  }
+
+  private async redactText(): Promise<void> {
+    if (!this.info) return;
+    const q = await redactTextDialog(async (t) => (await this.engine.search(t, 10000)).reduce((s, h) => s + h.quads.length, 0));
+    if (!q) return;
+    try {
+      const r = await this.busy(this.engine.redactText(q));
+      if (!r.count) return void toast("Not found in this file.");
+      await this.afterHistory(await this.engine.info(), `Redacted ${r.count} place${r.count > 1 ? "s" : ""} on ${r.pages.length} page${r.pages.length > 1 ? "s" : ""}`);
+    } catch (e) {
+      toast(friendlyError((e as Error).message), "error");
+    }
+  }
+
+  private async password(): Promise<void> {
+    if (!this.info) return;
+    const p = await passwordDialog(await this.engine.protection());
+    if (!p) return;
+    try {
+      await this.engine.setProtection(p);
+      this.updateUi(await this.engine.state());
+      toast(p === "none" ? "Password removed. Save to keep the change." : "Password set. Save to protect the file.", "info", { label: "Save", run: () => void this.save() });
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
   }
 
   // ---------- search ----------

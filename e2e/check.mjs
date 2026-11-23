@@ -1381,6 +1381,129 @@ try {
     check("pages panel: double-click the edge resets it", back[0] === w0 && !back[1] && back[2] === 0, JSON.stringify(back));
   }
 
+  // ---- document tools: watermark, page numbers, redaction, password, notes, picture from a file ----
+  {
+    await page.evaluate(async () => {
+      window.papgi["dirty"] = false;
+      location.hash = "#edit";
+      const r = await fetch("./samples/pages.pdf");
+      await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    });
+    await waitRendered();
+    await page.evaluate(() => { window.papgi.viewer.setZoom(0.75); document.querySelector(".viewer").scrollTop = 0; });
+    await page.waitForTimeout(500);
+    const docMenu = async (item) => {
+      await page.click("#btn-doc");
+      await page.click(`#doc-menu [data-menu="${item}"]`);
+      await page.waitForSelector(".modal");
+    };
+    const allText = async () => (await Promise.all([0, 1, 2, 3, 4].map((i) => engine("pageText", i)))).map((t) => t.replace(/\s+/g, " "));
+    // watermark: a wrong page range keeps the dialog open and says why
+    await docMenu("watermark");
+    await page.waitForTimeout(150);
+    check("watermark dialog: text, size, opacity, direction, colour, pages, preview", (await page.locator('.modal [data-k="text"]').count()) === 1 && (await page.locator(".modal .dt-wm").textContent()) === "CONFIDENTIAL" && (await page.locator(".modal [data-angle]").count()) === 2);
+    await page.fill('.modal [data-k="text"]', "DRAFT");
+    await page.fill('.modal [data-k="pages"]', "9-12");
+    await page.click('.modal [data-v="ok"]');
+    check("watermark: a wrong page range is explained, the dialog stays", (await page.locator(".modal").count()) === 1 && /from 1 to 5/.test(await page.textContent(".modal .dt-error")));
+    await page.fill('.modal [data-k="pages"]', "");
+    await page.screenshot({ path: shots + "desktop-watermark-dialog.png" });
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForSelector(".modal", { state: "detached" });
+    await page.waitForTimeout(800);
+    let txt = await allText();
+    check("watermark on every page (one undo step)", txt.every((t) => t.includes("DRAFT")) && (await engine("state")).undoName === "Watermark", txt[4].slice(0, 60));
+    await page.screenshot({ path: shots + "desktop-watermark.png" });
+    // page numbers "1 / 5", nothing on the title page
+    await docMenu("numbers");
+    await page.selectOption('.modal [data-k="format"]', "{page} / {pages}");
+    await page.check('.modal [data-k="skipFirst"]');
+    await page.waitForTimeout(100);
+    const prev = await page.textContent(".modal .dt-bc");
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForSelector(".modal", { state: "detached" });
+    await page.waitForTimeout(800);
+    txt = await allText();
+    check("page numbers: preview, then 1 / 4 … 4 / 4 after a bare title page", prev === "1 / 4" && txt[1].includes("1 / 4") && txt[4].includes("4 / 4") && !/\d \/ \d/.test(txt[0]), `${prev} · ${txt[1].slice(-12)} · ${txt[4].slice(-12)}`);
+    // redact a word everywhere: live count, then gone from every page
+    await docMenu("redact");
+    await page.fill('.modal [data-k="q"]', "rotating");
+    await page.waitForFunction(() => /Found in 5 places/.test(document.querySelector(".modal .dt-count")?.textContent ?? ""), null, { timeout: 5000 });
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForSelector(".modal", { state: "detached" });
+    await page.waitForTimeout(800);
+    txt = await allText();
+    check("redact a text everywhere: count shown, then removed from all pages", txt.every((t) => !t.includes("rotating") && t.includes("deleting")), txt[0]);
+    // redact an area: the heading of page 1
+    await page.keyboard.press("a");
+    await page.mouse.move(...(await raw(0, 35, 30)));
+    await page.mouse.down();
+    await page.mouse.move(...(await raw(0, 200, 110)), { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    await page.click('.floating[data-kind="area"] [data-act="redact"]');
+    await page.waitForTimeout(800);
+    txt = await allText();
+    check("select area → Redact removes what's under the box", !txt[0].includes("Page 1") && txt[1].includes("Page 2") && (await engine("state")).undoName === "Redact", txt[0].slice(0, 40));
+    await page.screenshot({ path: shots + "desktop-redacted.png" });
+    // sticky note: N, click, type, Ctrl+Enter; the select tool shows its text
+    await page.keyboard.press("n");
+    await page.mouse.click(...(await raw(0, 480, 300)));
+    await page.waitForSelector(".modal textarea");
+    await page.keyboard.type("Check this figure");
+    await page.keyboard.press("Control+Enter");
+    await page.waitForSelector(".modal", { state: "detached" });
+    await page.waitForTimeout(600);
+    const note = (await engine("listAnnots", 0)).find((x) => x.kind === "Text");
+    check("note tool: click, write, a note on the page", note?.contents === "Check this figure", JSON.stringify(note));
+    await page.keyboard.press("v");
+    await page.mouse.click(...(await raw(0, (note.rect[0] + note.rect[2]) / 2, (note.rect[1] + note.rect[3]) / 2)));
+    await page.waitForTimeout(300);
+    check("clicking a note shows its text", (await page.textContent(".floating .note-peek").catch(() => "")) === "Check this figure");
+    await page.screenshot({ path: shots + "desktop-note.png" });
+    await page.click(".floating .note-peek");
+    await page.waitForSelector(".modal textarea");
+    await page.fill(".modal textarea", "Changed");
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForTimeout(600);
+    check("a note's text can be changed", (await engine("listAnnots", 0)).find((x) => x.kind === "Text")?.contents === "Changed");
+    // a picture from a file
+    const pics = async () => (await engine("listAnnots", 0)).filter((x) => x.kind === "Stamp" && !x.area).length;
+    const p0 = await pics();
+    await page.click("#btn-doc");
+    const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.click('#doc-menu [data-menu="picture"]')]);
+    await fc.setFiles([new URL("../public/pwa-192.png", import.meta.url).pathname]);
+    await page.waitForTimeout(900);
+    check("Add a picture… puts the file's picture on the page, ready to resize", (await pics()) === p0 + 1 && (await page.locator(".page .handle").count()) === 4);
+    // password: set it, save, the file needs it to open
+    await docMenu("password");
+    await page.fill('.modal [data-k="p1"]', "s3cret");
+    await page.fill('.modal [data-k="p2"]', "other");
+    await page.click('.modal [data-v="ok"]');
+    check("password: different passwords are refused", (await page.locator(".modal").count()) === 1 && /aren't the same/.test(await page.textContent(".modal .dt-error")));
+    await page.fill('.modal [data-k="p2"]', "s3cret");
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForSelector(".modal", { state: "detached" });
+    const [pdl] = await Promise.all([page.waitForEvent("download"), page.keyboard.press("Control+s")]);
+    await pdl.saveAs(shots + "saved-protected.pdf");
+    const pdoc = mupdf.Document.openDocument(fs.readFileSync(shots + "saved-protected.pdf"), "application/pdf");
+    const needs = pdoc.needsPassword();
+    const wrong = pdoc.authenticatePassword("nope");
+    const right = pdoc.authenticatePassword("s3cret");
+    const ptext = right ? pdoc.loadPage(1).toStructuredText("").asText() : "";
+    const pann = right ? pdoc.loadPage(0).getAnnotations().map((a) => a.getType()) : [];
+    check("saved with a password: locked, opens with it, keeps every change", needs && !wrong && !!right && ptext.includes("DRAFT") && ptext.includes("1 / 4") && !ptext.includes("rotating") && pann.includes("Text"), `${needs} ${wrong} ${right} ${pann}`);
+    // remove it again
+    await docMenu("password");
+    check("password dialog offers Remove when the file is protected", (await page.locator('.modal [data-v="remove"]').count()) === 1);
+    await page.click('.modal [data-v="remove"]');
+    await page.waitForSelector(".modal", { state: "detached" });
+    const [udl] = await Promise.all([page.waitForEvent("download"), page.keyboard.press("Control+s")]);
+    await udl.saveAs(shots + "saved-unprotected.pdf");
+    check("password removed: the saved file opens without one", !mupdf.Document.openDocument(fs.readFileSync(shots + "saved-unprotected.pdf"), "application/pdf").needsPassword());
+    await page.keyboard.press("v");
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 
@@ -1420,7 +1543,17 @@ try {
     await pp.screenshot({ path: shots + `phone-doc-menu-${scheme}.png` });
     const menuFits = await pp.evaluate(() => { const r = document.querySelector("#doc-menu").getBoundingClientRect(); return r.left >= 0 && r.right <= window.innerWidth; });
     check(`phone ${scheme}: Document menu fits on screen`, menuFits);
-    await pp.tap("#btn-doc");
+    await pp.tap('#doc-menu [data-menu="numbers"]');
+    await pp.waitForSelector(".modal .dt-page");
+    await pp.waitForTimeout(150);
+    await pp.screenshot({ path: shots + `phone-numbers-${scheme}.png` });
+    const dlg = await pp.evaluate(() => {
+      const m = document.querySelector(".modal").getBoundingClientRect();
+      const wide = [...document.querySelectorAll(".modal .field, .modal input")].some((e) => e.getBoundingClientRect().right > m.right + 1);
+      return m.left >= 0 && m.right <= window.innerWidth && m.bottom <= window.innerHeight && !wide;
+    });
+    check(`phone ${scheme}: page-numbers dialog fits (fields inside, scrolls if long)`, dlg);
+    await pp.tap('.modal [data-v=""]');
     const overflow = await pp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     check(`phone ${scheme}: no page overflow`, !overflow);
     check(`phone ${scheme}: no errors`, perr.length === 0, perr.join(" | "));

@@ -77,7 +77,7 @@ export function modal(opts: ModalOpts, onOpen?: (root: HTMLElement) => void): Pr
     document.addEventListener("keydown", onKey, true);
     document.body.append(back);
     onOpen?.(back);
-    back.querySelector<HTMLElement>("input, .btn.primary")?.focus();
+    back.querySelector<HTMLElement>("input, textarea, .btn.primary")?.focus();
   });
 }
 
