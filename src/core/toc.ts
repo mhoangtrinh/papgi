@@ -35,19 +35,26 @@ export function bodySize(lines: TextLine[]): number {
   return best || 10;
 }
 
-/** Text repeated on many pages (running headers and footers). */
-function furniture(lines: TextLine[], pageCount: number): Set<string> {
-  const pages = new Map<string, Set<number>>();
-  for (const l of lines) {
-    const k = key(l.text);
-    if (!pages.has(k)) pages.set(k, new Set());
-    pages.get(k)!.add(l.page);
-  }
+/**
+ * Text repeated on many pages (running headers and footers): the same text, or (for text
+ * no bigger than the body) the same text apart from numbers ("Page 3", "Report · 3").
+ */
+function furniture(lines: TextLine[], pageCount: number): { same: Set<string>; pattern: Set<string> } {
   const min = Math.max(3, Math.ceil(pageCount * 0.3));
-  return new Set([...pages].filter(([, p]) => p.size >= min).map(([k]) => k));
+  const count = (k: (t: string) => string) => {
+    const pages = new Map<string, Set<number>>();
+    for (const l of lines) {
+      const kk = k(l.text);
+      if (!pages.has(kk)) pages.set(kk, new Set());
+      pages.get(kk)!.add(l.page);
+    }
+    return new Set([...pages].filter(([, p]) => p.size >= min).map(([kk]) => kk));
+  };
+  return { same: count(exact), pattern: count(key) };
 }
 
-const key = (t: string) => t.toLowerCase().replace(/\d+/g, "#").replace(/\s+/g, " ").trim();
+const exact = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+const key = (t: string) => exact(t).replace(/\d+/g, "#");
 
 /**
  * Pick the headings: lines clearly bigger than the body text, short bold lines that stand
@@ -60,7 +67,9 @@ export function headingsToc(all: TextLine[], pageCount: number): TocItem[] {
   const skip = furniture(lines, pageCount);
   const isHeading = (l: TextLine) => {
     const t = l.text;
-    if (t.length < 2 || t.length > 120 || !/\p{L}/u.test(t) || skip.has(key(t))) return false;
+    if (t.length < 2 || t.length > 120 || !/\p{L}/u.test(t)) return false;
+    // (numbered headings in the same pattern on many pages are chapters, not a running header)
+    if (skip.same.has(exact(t)) || (skip.pattern.has(key(t)) && l.size <= body * 1.15)) return false;
     if (/^(page|seite)\s+\d+(\s+(of|von)\s+\d+)?$/i.test(t)) return false;
     if (l.lines > 4) return false; // a paragraph, however big
     const sentence = /[.,;:]$/.test(t) && !NUMBERED.test(t);

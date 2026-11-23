@@ -55,6 +55,18 @@ describe("table of contents from headings", () => {
     expect(headingsToc(lines, 1).map((t) => t.title)).toEqual(["A Long Title That Wraps onto a Second Line", "Summary"]);
   });
 
+  it("keeps chapters numbered the same way on every page, but not a big running title", () => {
+    const lines: TextLine[] = [];
+    for (let p = 0; p < 6; p++) {
+      lines.push(L(p, 20, "ANNUAL REPORT", 14, true));
+      lines.push(L(p, 60, `Chapter ${p + 1}: Results of part ${p + 1}`, 18, true));
+      lines.push(body(p, 100), body(p, 200));
+      lines.push(L(p, 780, `Page ${p + 1}`, 9));
+    }
+    const toc = headingsToc(lines, 6);
+    expect(toc.map((t) => t.title)).toEqual([1, 2, 3, 4, 5, 6].map((n) => `Chapter ${n}: Results of part ${n}`));
+  });
+
   it("finds nothing in plain text", () => {
     expect(headingsToc([body(0, 10), body(0, 100), body(1, 10)], 2)).toEqual([]);
   });

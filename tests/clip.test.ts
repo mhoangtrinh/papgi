@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import * as mupdf from "mupdf";
 import fs from "node:fs";
 import { PdfEngine } from "../src/engine/engine";
-import { brushRects, eraseStroke, brushTouchesOutline } from "../src/core/erase";
+import { brushRects, eraseStroke, brushTouchesOutline, distToSegment } from "../src/core/erase";
 import type { Point, Rect } from "../src/core/geometry";
 
 const sample = (name: string) => new Uint8Array(fs.readFileSync(new URL(`../public/samples/${name}`, import.meta.url)));
@@ -395,5 +395,36 @@ describe("moving a moved box again", () => {
     e.eraseArea(0, box, "Erase", false);
     expect(e.listAnnots(0).some((a) => a.area)).toBe(false);
     expect(e.pageText(0)).toContain("reordering");
+  });
+});
+
+describe("eraser coverage (fast version)", () => {
+  it("covers exactly the cells the brush reaches, on random strokes", () => {
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let n = 0; n < 25; n++) {
+      const r = 2 + rnd() * 20;
+      const len = 1 + Math.floor(rnd() * 60);
+      const path: Point[] = [];
+      let x = 100 + rnd() * 300;
+      let y = 100 + rnd() * 500;
+      for (let i = 0; i < len; i++) {
+        x += (rnd() - 0.5) * 40;
+        y += (rnd() - 0.5) * 40;
+        path.push([x, y]);
+      }
+      const cell = Math.max(r / 2.5, 0.75);
+      const rects = brushRects(path, r);
+      const inside = (px: number, py: number) => rects.some((q) => px > q[0] && px < q[2] && py > q[1] && py < q[3]);
+      // every cell centre: covered exactly when it's within r of the path
+      const xs = path.map((p) => p[0]);
+      const ys = path.map((p) => p[1]);
+      for (let gy = Math.floor((Math.min(...ys) - r) / cell) - 1; gy <= Math.ceil((Math.max(...ys) + r) / cell) + 1; gy++)
+        for (let gx = Math.floor((Math.min(...xs) - r) / cell) - 1; gx <= Math.ceil((Math.max(...xs) + r) / cell) + 1; gx++) {
+          const c: Point = [(gx + 0.5) * cell, (gy + 0.5) * cell];
+          const want = path.length === 1 ? Math.hypot(c[0] - path[0][0], c[1] - path[0][1]) <= r : path.slice(1).some((p, i) => distToSegment(c, path[i], p) <= r);
+          if (inside(c[0], c[1]) !== want) throw new Error(`stroke ${n}: cell ${gx},${gy} covered ${!want}`);
+        }
+    }
   });
 });
