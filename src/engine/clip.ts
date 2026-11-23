@@ -147,7 +147,7 @@ export function surroundColor(m: M, page: MuPDF.PDFPage, rects: Rect[]): [number
   const pad = 2.5;
   const ub = bounds(rects);
   const area: Rect = [ub[0] - pad - 1, ub[1] - pad - 1, ub[2] + pad + 1, ub[3] + pad + 1];
-  const s = Math.min(2, 600 / Math.max(area[2] - area[0], area[3] - area[1], 1));
+  const s = Math.min(1.5, 400 / Math.max(area[2] - area[0], area[3] - area[1], 1));
   const w = Math.max(1, Math.ceil((area[2] - area[0]) * s));
   const h = Math.max(1, Math.ceil((area[3] - area[1]) * s));
   const pix = new m.Pixmap(m.ColorSpace.DeviceRGB, [0, 0, w, h], false);

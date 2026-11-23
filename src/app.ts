@@ -376,7 +376,7 @@ export class App {
 
     document.addEventListener("keydown", (e) => this.onKey(e));
     document.addEventListener("paste", (e) => {
-      if (!this.info || this.isTyping(e.target) || document.querySelector(".modal-back") || this.hub?.visible()) return;
+      if (!this.info || this.isTyping(e.target) || document.querySelector(".modal-back") || this.hub?.visible() || this.organize.isOpen()) return;
       e.preventDefault();
       void this.viewer.pasteEvent(e).catch((err) => toast(err.message, "error"));
     });
@@ -439,6 +439,8 @@ export class App {
       e.preventDefault();
       return void this.redo();
     }
+    // (copy, paste and duplicate act on the page: not while the page grid covers it)
+    if (mod && "cxdv".includes(k) && k.length === 1 && this.organize.isOpen()) return;
     if (mod && (k === "c" || k === "x")) {
       if (k === "c" && this.viewer.hasTextSelection()) {
         e.preventDefault();

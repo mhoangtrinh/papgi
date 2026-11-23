@@ -601,7 +601,9 @@ export class Sidebar {
     if (el && !this.el.hidden) {
       const lr = this.tocEl.getBoundingClientRect();
       const r = el.getBoundingClientRect();
-      if (r.top < lr.top || r.bottom > lr.bottom) el.scrollIntoView({ block: "nearest" });
+      // (up and down only: the panel never scrolls sideways)
+      if (r.top < lr.top) this.tocEl.scrollTop -= lr.top - r.top + 8;
+      else if (r.bottom > lr.bottom) this.tocEl.scrollTop += r.bottom - lr.bottom + 8;
     }
   }
 }

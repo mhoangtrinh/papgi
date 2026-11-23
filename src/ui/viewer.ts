@@ -853,7 +853,7 @@ export class Viewer {
           const held = this.holdPreview(d.pv);
           const path = d.points.length > 2 ? simplifyStroke(d.points, 0.4 / this.zoom + 0.1) : d.points;
           try {
-            this.afterAnnotEdit(d.pv, await eng.erase(d.pv.index, path, s.eraserSize / 2, s.eraserAll));
+            this.afterAnnotEdit(d.pv, await this.host.busy(eng.erase(d.pv.index, path, s.eraserSize / 2, s.eraserAll)));
             if (s.eraserAll) this.refreshFields(d.pv);
             held.release(true);
           } catch (err) {

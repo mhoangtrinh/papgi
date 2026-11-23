@@ -109,7 +109,7 @@ function thin(s: Point[], step: number): Point[] {
  * The area a brush path covers, as a few rectangles: the path is laid on a grid of `cell`
  * points, and covered cells are merged into runs (row by row, then equal runs downwards).
  */
-export function brushRects(path: Point[], r: number, cell = Math.max(r / 3, 0.5)): Rect[] {
+export function brushRects(path: Point[], r: number, cell = Math.max(r / 2.5, 0.75)): Rect[] {
   if (!path.length) return [];
   const xs = path.map((p) => p[0]);
   const ys = path.map((p) => p[1]);
@@ -117,26 +117,36 @@ export function brushRects(path: Point[], r: number, cell = Math.max(r / 3, 0.5)
   const gy0 = Math.floor((Math.min(...ys) - r) / cell);
   const gx1 = Math.ceil((Math.max(...xs) + r) / cell);
   const gy1 = Math.ceil((Math.max(...ys) + r) / cell);
-  // runs per row: [start, end) in cell units
-  const rows = new Map<number, [number, number][]>();
-  for (let gy = gy0; gy < gy1; gy++) {
+  const W = gx1 - gx0 + 1;
+  const H = gy1 - gy0 + 1;
+  // mark the cells each segment covers (only the cells near that segment are looked at)
+  const grid = new Uint8Array(W * H);
+  const segs: [Point, Point][] = path.length === 1 ? [[path[0], path[0]]] : path.slice(1).map((p, i) => [path[i], p]);
+  for (const [a, b] of segs) {
+    const cx0 = Math.max(gx0, Math.floor((Math.min(a[0], b[0]) - r) / cell));
+    const cx1 = Math.min(gx1, Math.ceil((Math.max(a[0], b[0]) + r) / cell));
+    const cy0 = Math.max(gy0, Math.floor((Math.min(a[1], b[1]) - r) / cell));
+    const cy1 = Math.min(gy1, Math.ceil((Math.max(a[1], b[1]) + r) / cell));
+    for (let gy = cy0; gy < cy1; gy++)
+      for (let gx = cx0; gx < cx1; gx++) {
+        const k = (gy - gy0) * W + (gx - gx0);
+        if (!grid[k] && distToSegment([(gx + 0.5) * cell, (gy + 0.5) * cell], a, b) <= r) grid[k] = 1;
+      }
+  }
+  // runs per row, then equal runs in consecutive rows merged downwards
+  const out: Rect[] = [];
+  const open = new Map<string, Rect>();
+  for (let gy = gy0; gy <= gy1; gy++) {
     const runs: [number, number][] = [];
     let start: number | null = null;
-    for (let gx = gx0; gx <= gx1; gx++) {
-      const covered = gx < gx1 && distToPath([(gx + 0.5) * cell, (gy + 0.5) * cell], path) <= r;
+    for (let gx = gx0; gx <= gx1 + 1; gx++) {
+      const covered = gy < gy1 && gx <= gx1 && grid[(gy - gy0) * W + (gx - gx0)] === 1;
       if (covered && start === null) start = gx;
       else if (!covered && start !== null) {
         runs.push([start, gx]);
         start = null;
       }
     }
-    if (runs.length) rows.set(gy, runs);
-  }
-  // merge equal runs in consecutive rows
-  const out: Rect[] = [];
-  const open = new Map<string, Rect>();
-  for (let gy = gy0; gy <= gy1; gy++) {
-    const runs = rows.get(gy) ?? [];
     const keys = new Set(runs.map(([a, b]) => `${a}:${b}`));
     for (const [k, rect] of open)
       if (!keys.has(k)) {

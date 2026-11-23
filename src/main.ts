@@ -8,6 +8,12 @@ const app = new App(document.getElementById("app")!);
 // (tells builds apart in the update test)
 if (import.meta.env.VITE_BUILD_TAG) (window as unknown as { papgiBuild: string }).papgiBuild = import.meta.env.VITE_BUILD_TAG;
 
+// The page itself never scrolls (older Safari has no overflow: clip): undo any nudge
+for (const el of [document.documentElement, document.body])
+  el.addEventListener("scroll", () => {
+    if (el.scrollLeft || el.scrollTop) el.scrollTo(0, 0);
+  });
+
 let registration: ServiceWorkerRegistration | undefined;
 let applying = false;
 
