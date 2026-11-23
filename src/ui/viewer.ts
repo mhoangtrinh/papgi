@@ -6,7 +6,7 @@ import { ParagraphEditor } from "./text-editor";
 import type { Engine } from "../engine/client";
 import type { Settings, Tool, SavedSignature } from "../storage";
 import { hexToRgb, rgbToHex, shapeStyle } from "../storage";
-import { dashPattern, isLineKind, shapeBigEnough, shapeGeometry, type ShapeKind, type ShapeStyle } from "../core/shapes";
+import { arrowHeadPoints, dashPattern, isLineKind, shapeBigEnough, shapeGeometry, type ShapeKind, type ShapeStyle } from "../core/shapes";
 import {
   type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight,
 } from "../core/geometry";
@@ -68,7 +68,7 @@ type Drag =
   | { kind: "shape"; pv: PageView; start: Point; last: Point; square: boolean }
   | { kind: "click"; pv: PageView; start: Point; x: number; y: number }
   | { kind: "area"; pv: PageView; start: Point; last: Point }
-  | { kind: "areamove"; pv: PageView; rect: Rect; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null }
+  | { kind: "areamove"; pv: PageView; rect: Rect; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null; content: boolean }
   | { kind: "erase"; pv: PageView; points: Point[] }
   | { kind: "resize"; pv: PageView; annot: AnnotInfo; corner: number; rect: Rect; next: Rect; keep: boolean; ghost: HTMLCanvasElement | null };
 
@@ -521,7 +521,7 @@ export class Viewer {
       case "area": {
         const a = this.annotAt(pv, p);
         if (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1])) {
-          const drag: Drag = { kind: "areamove", pv, rect: this.area.rect, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null };
+          const drag: Drag = { kind: "areamove", pv, rect: this.area.rect, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null, content: !this.area.moved };
           this.drag = drag;
           capture();
           e.preventDefault();
@@ -815,7 +815,7 @@ export class Viewer {
           this.setArea(null);
           let res: Awaited<ReturnType<typeof eng.moveArea>>;
           try {
-            res = await this.host.busy(eng.moveArea(d.pv.index, d.rect, target.index, topLeft));
+            res = await this.host.busy(eng.moveArea(d.pv.index, d.rect, target.index, topLeft, d.content));
           } catch (err) {
             ghost?.remove();
             throw err;
@@ -830,7 +830,7 @@ export class Viewer {
           if (target !== d.pv) this.refreshFields(target);
           if (ghost) this.keepUntilRendered(target, ghost);
           // the box stays selected where it landed: dragging again moves all of it again
-          this.setArea({ page: target.index, rect: [topLeft[0], topLeft[1], topLeft[0] + rectWidth(d.rect), topLeft[1] + rectHeight(d.rect)] });
+          this.setArea({ page: target.index, rect: [topLeft[0], topLeft[1], topLeft[0] + rectWidth(d.rect), topLeft[1] + rectHeight(d.rect)], moved: true });
           break;
         }
         case "resize": {
@@ -1430,14 +1430,15 @@ export class Viewer {
 
   // ---------- select area ----------
 
-  private area: { page: number; rect: Rect } | null = null;
+  /** The selected box. `moved`: it was just moved, and holds only what was moved (not the page under it). */
+  private area: { page: number; rect: Rect; moved?: boolean } | null = null;
 
   hasArea(): boolean {
     return this.area !== null;
   }
 
   /** Select a part of a page (null: none). */
-  setArea(a: { page: number; rect: Rect } | null): void {
+  setArea(a: { page: number; rect: Rect; moved?: boolean } | null): void {
     if (this.area) this.drawArea(this.pages[this.area.page], null);
     this.area = a;
     if (this.floating.dataset.kind === "area") this.hideFloating();
@@ -1486,7 +1487,7 @@ export class Viewer {
     if (!a) return false;
     const pv = this.pages[a.page];
     this.setArea(null);
-    this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.eraseArea(a.page, a.rect)));
+    this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.eraseArea(a.page, a.rect, "Erase", !a.moved)));
     this.refreshFields(pv);
     return true;
   }
@@ -1496,7 +1497,7 @@ export class Viewer {
     const dpr = window.devicePixelRatio || 1;
     let bmp: ImageBitmap | null = null;
     try {
-      bmp = await this.host.engine.renderAreaBitmap(d.pv.index, d.rect, this.zoom * dpr);
+      bmp = await this.host.engine.renderAreaBitmap(d.pv.index, d.rect, this.zoom * dpr, d.content);
     } catch {
       /* fall back to an outline */
     }
@@ -1598,14 +1599,14 @@ export class Viewer {
       const a = this.area;
       const pv = this.pages[a.page];
       job = cut
-        ? eng.cutArea(a.page, a.rect).then((r) => {
+        ? eng.cutArea(a.page, a.rect, !a.moved).then((r) => {
             if (!r) return null;
             this.setArea(null);
             this.afterAnnotEdit(pv, r.annots);
             this.refreshFields(pv);
             return r.clip;
           })
-        : eng.copyArea(a.page, a.rect);
+        : eng.copyArea(a.page, a.rect, !a.moved);
     } else return false;
     // (the system clipboard write starts now, while the key press or click still counts)
     const wrote = writeClipboardText(job.then((i) => i?.text ?? ""));
@@ -2058,13 +2059,12 @@ export function shapeSvg(kind: ShapeKind, a: Point, b: Point, st: ShapeStyle, sq
   if (kind === "Circle") return `<ellipse cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}" ${attrs}/>`;
   if (!line) return `<polygon points="${g.points.map((p) => p.join(",")).join(" ")}" ${attrs}/>`;
   const [p, q] = g.points;
+  // (the same heads as in the PDF: arrowHeadPoints; heads are never dashed)
   const head = (from: Point, to: Point) => {
-    const ang = Math.atan2(to[1] - from[1], to[0] - from[0]);
-    const L = Math.max(6, st.width * 4);
-    const h1: Point = [to[0] - L * Math.cos(ang - 0.45), to[1] - L * Math.sin(ang - 0.45)];
-    const h2: Point = [to[0] - L * Math.cos(ang + 0.45), to[1] - L * Math.sin(ang + 0.45)];
-    return ` M${h1.join(",")} L${to.join(",")} L${h2.join(",")}`;
+    const [h1, h2] = arrowHeadPoints(from, to, st.width);
+    return `M${h1.join(",")} L${to.join(",")} L${h2.join(",")}`;
   };
-  const d = `M${p.join(",")} L${q.join(",")}` + (kind !== "Line" ? head(p, q) : "") + (kind === "DoubleArrow" ? head(q, p) : "");
-  return `<path d="${d}" ${attrs} stroke-linecap="round"/>`;
+  const heads = (kind !== "Line" ? head(p, q) : "") + (kind === "DoubleArrow" ? " " + head(q, p) : "");
+  const solid = attrs.replace(/stroke-dasharray="[^"]*"/, "");
+  return `<path d="M${p.join(",")} L${q.join(",")}" ${attrs} stroke-linecap="round"/>` + (heads ? `<path d="${heads}" ${solid} stroke-linecap="round"/>` : "");
 }

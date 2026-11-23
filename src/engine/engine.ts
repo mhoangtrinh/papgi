@@ -12,7 +12,7 @@ import {
   type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions, type SplitPage,
 } from "./tools";
 import { pdfToWord, WordJob, type WordOptions, type WordResult } from "./toword";
-import { bakeAreas, copyAnnots, copyArea, eraseBrush, eraseRects, hasAreas, isArea, itemsIn, moveObjects, pasteClip, resizable, resizeAnnot, shiftAnnot, type Clip, type ClipInfo } from "./clip";
+import { arrowAppearance, bakeAreas, copyAnnots, copyArea, eraseBrush, eraseRects, hasAreas, isArea, itemsIn, moveObjects, pasteClip, removeItemsIn, resizable, resizeAnnot, shiftAnnot, type Clip, type ClipInfo } from "./clip";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
@@ -535,6 +535,7 @@ export class PdfEngine {
       else an.setRect(g.rect);
       applyShapeStyle(an, style);
       an.update();
+      arrowAppearance(this.mupdf, page, an);
     });
   }
 
@@ -554,6 +555,7 @@ export class PdfEngine {
       if (!an) throw new Error("No such annotation");
       applyShapeStyle(an, style);
       an.update();
+      arrowAppearance(this.mupdf, page, an);
     });
   }
 
@@ -693,7 +695,7 @@ export class PdfEngine {
   }
 
   /** Render what's printed in a part of a page (transparent background), for drag previews. */
-  renderArea(index: number, rect: Rect, scale: number): RGBAImage {
+  renderArea(index: number, rect: Rect, scale: number, content = true): RGBAImage {
     const m = this.mupdf;
     return this.withPage(index, (page) => {
       const w = Math.max(1, Math.ceil((rect[2] - rect[0]) * scale));
@@ -703,7 +705,7 @@ export class PdfEngine {
         pix.clear();
         const dev = new m.DrawDevice(m.Matrix.identity, pix);
         const mat = m.Matrix.concat(m.Matrix.translate(-rect[0], -rect[1]), m.Matrix.scale(scale, scale));
-        page.runPageContents(dev, mat);
+        if (content) page.runPageContents(dev, mat);
         page.runPageAnnots(dev, mat);
         page.runPageWidgets(dev, mat);
         dev.close();
@@ -825,21 +827,26 @@ export class PdfEngine {
   }
 
   /** Copy what's printed in a part of a page; null if there's nothing there. */
-  copyArea(index: number, rect: Rect): ClipInfo | null {
-    const c = this.withPage(index, (page) => copyArea(this.mupdf, this.requireDoc(), page, rect));
+  copyArea(index: number, rect: Rect, content = true): ClipInfo | null {
+    const c = this.withPage(index, (page) => copyArea(this.mupdf, this.requireDoc(), page, rect, true, content));
     return c ? this.setClip(c, index) : null;
   }
 
   /** Copy a part of a page and erase it there (one undo step); null if there's nothing there. */
-  cutArea(index: number, rect: Rect): { clip: ClipInfo; annots: AnnotInfo[] } | null {
-    const clip = this.copyArea(index, rect);
+  cutArea(index: number, rect: Rect, content = true): { clip: ClipInfo; annots: AnnotInfo[] } | null {
+    const clip = this.copyArea(index, rect, content);
     if (!clip) return null;
-    return { clip, annots: this.eraseArea(index, rect, "Cut") };
+    return { clip, annots: this.eraseArea(index, rect, "Cut", content) };
   }
 
   /** Erase what's printed in a part of a page. */
-  eraseArea(index: number, rect: Rect, name = "Erase"): AnnotInfo[] {
+  eraseArea(index: number, rect: Rect, name = "Erase", content = true): AnnotInfo[] {
     const doc = this.requireDoc();
+    if (!content) {
+      // a moved box: just what was moved goes
+      this.journaled(name, () => this.withPage(index, (page) => removeItemsIn(page, rect)), []);
+      return this.listAnnots(index);
+    }
     this.journaled(name, () => this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect], { fields: true, annots: true })), [index]);
     this.forgetText(index);
     return this.listAnnots(index);
@@ -849,10 +856,11 @@ export class PdfEngine {
    * Move a part of a page (cut + paste in one step) so its top-left lands at `topLeft` on
    * page `to`. The moved part can then be moved again like an added item.
    */
-  moveArea(index: number, rect: Rect, to: number, topLeft: Point): { from: AnnotInfo[]; to: AnnotInfo[]; index: number } | null {
+  moveArea(index: number, rect: Rect, to: number, topLeft: Point, content = true): { from: AnnotInfo[]; to: AnnotInfo[]; index: number } | null {
     const doc = this.requireDoc();
-    // what's printed is copied and erased; added items and form fields move as they are
-    const c = this.withPage(index, (page) => copyArea(this.mupdf, doc, page, rect, false));
+    // what's printed is copied and erased; added items and form fields move as they are.
+    // (A box that was moved before holds only what was moved: the page under it stays.)
+    const c = content ? this.withPage(index, (page) => copyArea(this.mupdf, doc, page, rect, false)) : null;
     const nums = this.withPage(index, (page) => {
       const inside = itemsIn(page, rect);
       return [...inside.annots, ...inside.widgets].map((a) => a.getObject().asIndirect());

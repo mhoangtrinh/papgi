@@ -6,6 +6,7 @@
 //   baked into the page content when the file is saved.
 import type * as MuPDF from "mupdf";
 import type { Point, Quad, Rect } from "../core/geometry";
+import { arrowHeadPoints } from "../core/shapes";
 import { brushRects, brushTouchesOutline, brushTouchesRect, brushTouchesSegment, eraseStroke, inRects, quadCenter } from "../core/erase";
 import { appendContent, ownResources } from "./ocr";
 
@@ -212,6 +213,14 @@ export function removeFields(page: MuPDF.PDFPage, test: (r: Rect) => boolean): n
   return gone.length;
 }
 
+/** Remove just the added items and form fields in an area (the page itself stays). */
+export function removeItemsIn(page: MuPDF.PDFPage, rect: Rect): boolean {
+  const inside = itemsIn(page, rect);
+  for (const a of inside.annots) page.deleteAnnotation(a);
+  for (const w of inside.widgets) page.deleteAnnotation(w);
+  return inside.annots.length + inside.widgets.length > 0;
+}
+
 /** Added items and form field boxes whose middle is inside `rect`. */
 export function itemsIn(page: MuPDF.PDFPage, rect: Rect): { annots: MuPDF.PDFAnnotation[]; widgets: MuPDF.PDFWidget[] } {
   const mid = (b: Rect) => inRects([rect], (b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
@@ -302,7 +311,7 @@ export function copyAnnots(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, in
  * count as inside when their centre is; the copy grows to hold them whole.
  * Returns null if there's nothing there.
  */
-export function copyArea(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rect: Rect, withItems = true): Clip | null {
+export function copyArea(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rect: Rect, withItems = true, content = true): Clip | null {
   const src = page.getObject();
   const cd = new m.PDFDocument();
   try {
@@ -326,6 +335,7 @@ export function copyArea(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rect
       }
       return { doc: cd, text: "", items, rect: bounds(items.map((x) => x.rect)), ctm: pageCtm, label: "part of the page", parents, dr };
     };
+    if (!content) return itemsOnly();
     const res = src.getInheritable("Resources");
     const box = (k: string) => {
       const v = src.getInheritable(k);
@@ -610,6 +620,56 @@ function acroForm(doc: MuPDF.PDFDocument, dr: MuPDF.PDFObject | null, map: MuPDF
   return form;
 }
 
+/**
+ * Arrows get their own appearance: MuPDF draws arrowheads about 9× the line width, far
+ * too big for thick lines. Call after every update() of a Line annotation (an update
+ * redraws it MuPDF's way). Plain lines are left to MuPDF.
+ */
+export function arrowAppearance(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation): void {
+  if (a.getType() !== "Line") return;
+  const le = a.getLineEndingStyles();
+  if (le.start === "None" && le.end === "None") return;
+  const doc = page._doc;
+  const [p, q] = a.getLine() as [Point, Point];
+  const w = a.getBorderWidth() || 1;
+  const c = a.getColor();
+  const inv = m.Matrix.invert(page.getTransform());
+  const pdf = ([x, y]: Point): Point => [x * inv[0] + y * inv[2] + inv[4], x * inv[1] + y * inv[3] + inv[5]];
+  const pt = (v: Point) => pdf(v).map(num).join(" ");
+  const heads: Point[][] = [];
+  if (le.end !== "None") heads.push([...arrowHeadPoints(p, q, w).slice(0, 1), q, arrowHeadPoints(p, q, w)[1]]);
+  if (le.start !== "None") heads.push([arrowHeadPoints(q, p, w)[0], p, arrowHeadPoints(q, p, w)[1]]);
+  const col = c.length === 3 ? `${c.map(num).join(" ")} RG` : c.length === 1 ? `${num(c[0])} G` : c.length === 4 ? `${c.map(num).join(" ")} K` : "0 G";
+  const dash = a.getBorderStyle() === "Dashed" ? `[${(a.getBorderDashPattern() as number[]).map(num).join(" ")}] 0 d` : "";
+  const op = a.getOpacity();
+  let ops = `q ${op < 1 ? "/G0 gs " : ""}${num(w)} w ${col} 1 J 1 j ${dash}\n${pt(p)} m ${pt(q)} l S\n[] 0 d\n`;
+  for (const h of heads) ops += `${pt(h[0])} m ${pt(h[1])} l ${pt(h[2])} l S\n`;
+  ops += "Q\n";
+  // the box: everything drawn, with room for the line width
+  const all = [p, q, ...heads.flat()].map(pdf);
+  const pad = w;
+  const bbox: Rect = [Math.min(...all.map((v) => v[0])) - pad, Math.min(...all.map((v) => v[1])) - pad, Math.max(...all.map((v) => v[0])) + pad, Math.max(...all.map((v) => v[1])) + pad];
+  const form = doc.addStream(ops, {});
+  form.put("Type", doc.newName("XObject"));
+  form.put("Subtype", doc.newName("Form"));
+  form.put("BBox", bbox);
+  if (op < 1) {
+    const res = doc.newDictionary();
+    const gs = doc.newDictionary();
+    const g0 = doc.newDictionary();
+    g0.put("CA", op);
+    g0.put("ca", op);
+    gs.put("G0", g0);
+    res.put("ExtGState", gs);
+    form.put("Resources", res);
+  }
+  const ap = doc.newDictionary();
+  ap.put("N", form);
+  const o = a.getObject();
+  o.put("AP", ap);
+  o.put("Rect", bbox);
+}
+
 /** Can this kind of item be resized by its corners? */
 export function resizable(type: string): boolean {
   return ["Stamp", "Square", "Circle", "Polygon", "Ink", "Line"].includes(type);
@@ -652,6 +712,7 @@ export function resizeAnnot(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation, r
     a.setRect([p0[0], p0[1], p1[0], p1[1]]);
   }
   a.update();
+  arrowAppearance(m, page, a);
 }
 
 /** Translate any kind of annotation by (dx, dy) in page space. */
@@ -676,6 +737,7 @@ export function shiftAnnot(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation, dx
     a.setRect([r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
   }
   a.update();
+  arrowAppearance(m, page, a);
 }
 
 /**

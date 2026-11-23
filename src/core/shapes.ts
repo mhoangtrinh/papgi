@@ -58,6 +58,28 @@ export function shapeGeometry(kind: ShapeKind, a: Point, b: Point, square = fals
   return { rect, points };
 }
 
+/** Arrowhead size for a line width: grows with the line, but slower (points). */
+export function arrowHead(width: number): { len: number; half: number } {
+  const len = 4 + 2.5 * Math.max(width, 0.5);
+  return { len, half: len * 0.42 };
+}
+
+/** The two back corners of an arrowhead pointing from `from` to `to`. */
+export function arrowHeadPoints(from: Point, to: Point, width: number): [Point, Point] {
+  const { len, half } = arrowHead(width);
+  const dx = to[0] - from[0];
+  const dy = to[1] - from[1];
+  const d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d;
+  const uy = dy / d;
+  const bx = to[0] - ux * len;
+  const by = to[1] - uy * len;
+  return [
+    [bx - uy * half, by + ux * half],
+    [bx + uy * half, by - ux * half],
+  ];
+}
+
 /** Dash pattern for a line style at a line width (points), or null for a solid line. */
 export function dashPattern(line: LineStyle, width: number): number[] | null {
   const w = Math.max(width, 0.5);

@@ -126,3 +126,28 @@ describe("resizing items", () => {
     expect(e.listAnnots(0)[2].rect[2]).toBeLessThan(210);
   });
 });
+
+describe("arrows", () => {
+  it("arrowheads stay a sensible size, also after restyling and moving", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    let a = e.drawShape(0, "Arrow", [100, 400], [300, 400], style({ width: 3, color: [0, 0, 0] }));
+    const h = (r: number[]) => r[3] - r[1];
+    // MuPDF's own heads would make this about 39pt tall
+    expect(h(a[0].rect)).toBeLessThan(18);
+    expect(a[0].shape!.kind).toBe("Arrow");
+    // the head is drawn at the tip
+    expect(px(e, 296, 400)).toEqual([0, 0, 0].map(() => expect.any(Number)));
+    expect(px(e, 296, 400)[0]).toBeLessThan(100);
+    expect(px(e, 292, 403)[0]).toBeLessThan(140);
+    a = e.styleAnnot(0, a[0].index, { width: 6 });
+    expect(h(a[0].rect)).toBeLessThan(30);
+    a = e.moveAnnot(0, a[0].index, 0, 50);
+    expect(h(a[0].rect)).toBeLessThan(30);
+    expect(px(e, 200, 450)[0]).toBeLessThan(100);
+    const d = e.drawShape(0, "DoubleArrow", [100, 600], [300, 600], style({ width: 2, line: "dashed", opacity: 0.5 }));
+    expect(d[1].shape!.kind).toBe("DoubleArrow");
+    expect(d[1].shape!.line).toBe("dashed");
+    expect(h(d[1].rect)).toBeLessThan(14);
+  });
+});

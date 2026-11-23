@@ -367,3 +367,33 @@ describe("form fields and added items in an area", () => {
     expect(m.to.some((a) => a.area)).toBe(true);
   });
 });
+
+describe("moving a moved box again", () => {
+  it("moves only what was moved: the page under it stays", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    // move the heading onto the sentence (y 157-173)
+    const first = e.moveArea(0, HEADING, 0, [45, 140])!;
+    expect(first.to.some((a) => a.area)).toBe(true);
+    expect(e.pageText(0)).toContain("reordering");
+    // drag the moved box on: the sentence under it must stay where it is
+    const box: Rect = [45, 140, 45 + (HEADING[2] - HEADING[0]), 140 + (HEADING[3] - HEADING[1])];
+    const again = e.moveArea(0, box, 0, [45, 400], false)!;
+    expect(e.pageText(0)).toContain("reordering");
+    const moved = again.to.find((a) => a.area)!;
+    expect(moved.rect[1]).toBeGreaterThan(390);
+    // nothing painted over the sentence
+    expect(inked(e, 0, [60, 158, 380, 172])).toBe(true);
+    expect(e.state().undoName).toBe("Move");
+  });
+
+  it("copying or erasing a moved box takes just what was moved", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.moveArea(0, HEADING, 0, [45, 140]);
+    const box: Rect = [45, 140, 45 + (HEADING[2] - HEADING[0]), 140 + (HEADING[3] - HEADING[1])];
+    e.eraseArea(0, box, "Erase", false);
+    expect(e.listAnnots(0).some((a) => a.area)).toBe(false);
+    expect(e.pageText(0)).toContain("reordering");
+  });
+});

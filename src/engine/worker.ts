@@ -44,8 +44,8 @@ export class WorkerEngine extends PdfEngine {
   }
 
   /** What's printed in a part of a page on a transparent background (drag preview). */
-  async renderAreaBitmap(index: number, rect: [number, number, number, number], scale: number): Promise<ImageBitmap> {
-    const img = this.renderArea(index, rect, scale);
+  async renderAreaBitmap(index: number, rect: [number, number, number, number], scale: number, content = true): Promise<ImageBitmap> {
+    const img = this.renderArea(index, rect, scale, content);
     return createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
   }
 
