@@ -13,6 +13,8 @@ In Edge/Chrome, **Save (Ctrl+S) writes back to the file you opened**. In other b
 
 The start screen lists all tools and your recent files. In the editor, the top-left bar has the papgi button (switch tools), **File** (open, save, print) and **Document** (recognize text, signatures, insert, flatten, send this PDF to Merge/Split/Compress/PDF to images). Tools have their own addresses (e.g. `…/papgi/#merge`) to bookmark, and an installed papgi offers them on right-click of its icon (Windows).
 
+Saving: results of the tools, copies and extracted pages are normal browser downloads (they show in the browser's downloads and land in the Downloads folder). Save (Ctrl+S) updates the PDF itself when it was opened from this computer in Chrome or Edge; otherwise it downloads it too.
+
 Updates: when a new version is ready, papgi switches to it right away if no document is open; otherwise it shows a small "Reload" bar so unsaved work isn't lost.
 
 ## Tools
@@ -57,7 +59,7 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 | V / E / H / P / T / R / S | Select, Edit text, Highlight, Pen, Text box, Shapes, Sign |
 | Ctrl+P | Print |
 | Edit text: Ctrl+Enter / Esc | Finish / cancel editing a paragraph (clicking outside also finishes) |
-| Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, Save, Save a copy |
+| Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, Save, Download a copy |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+F | Search (Enter / Shift+Enter to step) |
 | Ctrl+C | Copy selected text |

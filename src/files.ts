@@ -15,7 +15,6 @@ interface FsWindow {
 }
 const fsw = window as unknown as FsWindow;
 
-export const canSaveInPlace = typeof fsw.showSaveFilePicker === "function";
 
 export async function fileToOpened(file: File, handle: FileSystemFileHandle | null = null): Promise<OpenedFile> {
   return { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()), handle };
@@ -60,45 +59,16 @@ export async function writeToHandle(handle: FileSystemFileHandle, bytes: Uint8Ar
 }
 
 /**
- * Save as a new file. Returns the new handle (File System Access API) or null when
- * it fell back to a download. Returns undefined if the user cancelled.
+ * Save as a new file: a normal browser download (it shows in the browser's downloads and lands
+ * in the Downloads folder, or wherever the browser is set to ask). Always null: no file handle.
  */
-export async function saveAs(bytes: Uint8Array, suggestedName: string): Promise<FileSystemFileHandle | null | undefined> {
-  if (fsw.showSaveFilePicker) {
-    try {
-      const handle = await fsw.showSaveFilePicker({ suggestedName, types: PDF_TYPES, id: "papgi-save" });
-      await writeToHandle(handle, bytes);
-      return handle;
-    } catch (e) {
-      if ((e as Error).name === "AbortError") return undefined;
-      throw e;
-    }
-  }
+export async function saveAs(bytes: Uint8Array, suggestedName: string): Promise<null> {
   download(bytes, suggestedName);
   return null;
 }
 
-const SAVE_TYPES: Record<string, { description: string; accept: Record<string, string[]> }> = {
-  "application/pdf": { description: "PDF documents", accept: { "application/pdf": [".pdf"] } },
-  "application/zip": { description: "ZIP archive", accept: { "application/zip": [".zip"] } },
-  "image/png": { description: "PNG picture", accept: { "image/png": [".png"] } },
-  "image/jpeg": { description: "JPG picture", accept: { "image/jpeg": [".jpg", ".jpeg"] } },
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { description: "Word document", accept: { "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"] } },
-};
-
-/** Save a result file: a "Save as" dialog where the browser has one, otherwise a download. */
+/** Save a result file (any type) as a normal download. */
 export async function saveFile(bytes: Uint8Array, name: string, type: string): Promise<void> {
-  const t = SAVE_TYPES[type];
-  if (fsw.showSaveFilePicker && t) {
-    try {
-      const handle = await fsw.showSaveFilePicker({ suggestedName: name, types: [t], id: "papgi-tools" });
-      await writeToHandle(handle, bytes);
-      return;
-    } catch (e) {
-      if ((e as Error).name === "AbortError") return;
-      // (e.g. not allowed in this context): fall back to a download
-    }
-  }
   download(bytes, name, type);
 }
 

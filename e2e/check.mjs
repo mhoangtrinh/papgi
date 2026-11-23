@@ -879,7 +879,14 @@ try {
     // split, opened straight from its address
     await page.goto(URL_ + "#split");
     await page.waitForSelector('[data-flow="split"]');
-    await page.evaluate(() => (window.showSaveFilePicker = undefined));
+    // results are normal downloads, never a "Save as" dialog (a picker that is there must stay unused)
+    await page.evaluate(() => {
+      window.__picked = 0;
+      window.showSaveFilePicker = async () => {
+        window.__picked++;
+        throw new Error("no dialog wanted");
+      };
+    });
     check("tools open from their address", (await page.textContent(".flow-head h1")) === "Split PDF");
     await choose([path.join(samplesDir, "pages.pdf")]);
     await page.waitForSelector(".file-row");
@@ -959,6 +966,7 @@ try {
       return execSync(`python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(z.read('word/document.xml').decode()); print('MEDIA', len([n for n in z.namelist() if n.startswith('word/media/')]))" ${f}`).toString();
     };
     const wx = wordXml(word.bytes);
+    check("tool results (split, merge, word…): normal downloads, never a save dialog", (await page.evaluate(() => window.__picked)) === 0);
     check("PDF to Word: an editable .docx", word.name === "paper.docx" && wx.includes("Curvature Correction") && wx.includes('w:num="2"') && wx.includes("Heading"), `${word.name} ${word.bytes.length} B`);
     await page.click('[data-choose="mode"][data-value="pictures"]');
     await page.click("[data-act=run]");

@@ -10,7 +10,7 @@ import { ocrDialog, runOcr } from "./ui/ocr";
 import { Organize } from "./ui/organize";
 import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
-import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, canSaveInPlace, type OpenedFile } from "./files";
+import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, type OpenedFile } from "./files";
 import { nextZoom, strokesBounds, ZOOM_STEPS } from "./core/geometry";
 import { afterDelete, formatRange, movedSelection } from "./core/pages";
 import { Hub } from "./hub/hub";
@@ -159,7 +159,7 @@ export class App {
           <div class="menu left" id="file-menu" role="menu" hidden>
             <button data-menu="open">${icon("open")}Open…<kbd>Ctrl O</kbd></button>
             <button data-menu="save" data-needs-doc>${icon("save")}Save<kbd>Ctrl S</kbd></button>
-            <button data-menu="saveas" data-needs-doc>${icon("extract")}Save a copy…<kbd>Ctrl ⇧ S</kbd></button>
+            <button data-menu="saveas" data-needs-doc>${icon("extract")}Download a copy<kbd>Ctrl ⇧ S</kbd></button>
             <button data-menu="print" data-needs-doc>${icon("print")}Print…<kbd>Ctrl P</kbd></button>
             <hr>
             <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
@@ -814,11 +814,9 @@ export class App {
         void this.remember(bytes);
       } else {
         const bytes = await this.busy(this.engine.save(false));
-        const res = await saveAs(bytes, this.file.name);
-        if (res === undefined) return;
-        if (res) this.file = { name: res.name, handle: res };
+        await saveAs(bytes, this.file.name);
         await this.engine.markSaved();
-        toast(res ? `Saved ${res.name}` : "Downloaded");
+        toast(`Downloaded ${this.file.name}`);
         void this.remember(bytes);
       }
       this.updateUi(await this.engine.state());
@@ -833,8 +831,9 @@ export class App {
     await this.viewer.closeParagraph(true);
     try {
       const bytes = await this.busy(this.engine.save(false));
-      const res = await saveAs(bytes, `${baseName(this.file.name)} (copy).pdf`);
-      if (res !== undefined) toast(res ? `Saved ${res.name}` : "Downloaded");
+      const name = `${baseName(this.file.name)} (copy).pdf`;
+      await saveAs(bytes, name);
+      toast(`Downloaded ${name}`);
     } catch (e) {
       toast(`Couldn't save: ${(e as Error).message}`, "error");
     }
@@ -901,8 +900,8 @@ export class App {
     try {
       const bytes = await this.busy(this.engine.extractPages(pages));
       const name = `${baseName(this.file.name)} (p${formatRange(pages).replace(/\s/g, "")}).pdf`;
-      const res = canSaveInPlace ? await saveAs(bytes, name) : (download(bytes, name), null);
-      if (res !== undefined) toast(`Saved ${pages.length} page${pages.length > 1 ? "s" : ""} as a new PDF`);
+      download(bytes, name);
+      toast(`Downloaded ${pages.length} page${pages.length > 1 ? "s" : ""} as ${name}`);
     } catch (e) {
       toast((e as Error).message, "error");
     }
