@@ -1,5 +1,6 @@
 // The document view: pages, rendering, zoom, tools and form fields.
-import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit, EditBlock } from "../engine/engine";
+import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit, EditBlock, ClipInfo } from "../engine/engine";
+import { fromPasteEvent, pictureBytes, readClipboard, writeClipboardText, type ClipboardContent } from "./clipboard";
 import { editorRaise, loadTextBoxFont } from "./textbox-metrics";
 import { ParagraphEditor } from "./text-editor";
 import type { Engine } from "../engine/client";
@@ -24,6 +25,8 @@ export interface ViewerHost {
   busy<T>(p: Promise<T>): Promise<T>;
   /** Offer text recognition (scanned pages). */
   recognize(): void;
+  /** Something was copied (or the clipboard emptied). */
+  clipChanged(info: ClipInfo | null): void;
   saveSettings(): void;
 }
 
@@ -58,7 +61,10 @@ type Drag =
   | { kind: "mark"; pv: PageView; start: Point; last: Point; onText: boolean }
   | { kind: "pen"; pv: PageView; points: Point[] }
   | { kind: "shape"; pv: PageView; start: Point; last: Point }
-  | { kind: "click"; pv: PageView; start: Point; x: number; y: number };
+  | { kind: "click"; pv: PageView; start: Point; x: number; y: number }
+  | { kind: "area"; pv: PageView; start: Point; last: Point }
+  | { kind: "areamove"; pv: PageView; rect: Rect; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null }
+  | { kind: "erase"; pv: PageView; points: Point[] };
 
 export class Viewer {
   readonly el: HTMLDivElement;
@@ -117,7 +123,12 @@ export class Viewer {
     this.pagesEl.addEventListener("pointermove", (e) => this.onMove(e));
     this.pagesEl.addEventListener("pointerup", (e) => this.onUp(e));
     this.pagesEl.addEventListener("pointercancel", () => this.cancelDrag());
-    this.pagesEl.addEventListener("pointerleave", () => this.hideGhost());
+    this.pagesEl.addEventListener("pointerleave", () => {
+      this.hideGhost();
+      this.pointer = null;
+      for (const pv of this.pages) pv.svg.querySelector(".erase-cursor")?.remove();
+    });
+    this.pagesEl.addEventListener("contextmenu", (e) => this.onContextMenu(e));
     this.pagesEl.addEventListener("dblclick", (e) => this.onDblClick(e));
     new ResizeObserver(() => {
       if (this.fitWidth && this.info) this.setZoom(this.fitZoom(), false);
@@ -139,6 +150,7 @@ export class Viewer {
     }
     this.clearSelection();
     this.selectAnnot(null);
+    this.setArea(null);
     this.observer.disconnect();
     this.pagesEl.replaceChildren();
     this.pages = [];
@@ -172,6 +184,7 @@ export class Viewer {
     const list = pages === "all" ? this.pages : pages.map((i) => this.pages[i]).filter(Boolean);
     for (const pv of list) this.invalidate(pv);
     if (this.selected && !this.pages[this.selected.page]) this.selectAnnot(null);
+    if (this.area && !this.pages[this.area.page]) this.setArea(null);
     this.schedule();
   }
 
@@ -185,7 +198,7 @@ export class Viewer {
     svg.classList.add("page-overlay");
     svg.setAttribute("viewBox", `${info.x} ${info.y} ${info.w} ${info.h}`);
     svg.setAttribute("preserveAspectRatio", "none");
-    svg.innerHTML = `<g class="g-hits"></g><g class="g-sel"></g><g class="g-hover"></g><g class="g-annsel"></g><g class="g-preview"></g>`;
+    svg.innerHTML = `<g class="g-hits"></g><g class="g-sel"></g><g class="g-hover"></g><g class="g-annsel"></g><g class="g-area"></g><g class="g-preview"></g>`;
     const forms = document.createElement("div");
     forms.className = "page-forms";
     const label = document.createElement("div");
@@ -363,10 +376,12 @@ export class Viewer {
     this.setZoom(this.zoom * factor, true, { x: e.clientX - r.left, y: e.clientY - r.top });
   }
 
-  scrollToPage(index: number, smooth = true): void {
+  /** Scroll to a page (and a height on it, page space). */
+  scrollToPage(index: number, smooth = true, y: number | null = null): void {
     const pv = this.pages[index];
     if (!pv) return;
-    this.el.scrollTo({ top: pv.el.offsetTop - PAGE_GAP, behavior: smooth ? "smooth" : "auto" });
+    const off = y === null ? -PAGE_GAP : Math.max(0, (y - pv.info.y) * this.zoom - 24);
+    this.el.scrollTo({ top: pv.el.offsetTop + off, behavior: smooth ? "smooth" : "auto" });
   }
 
   private updateCurrent(): void {
@@ -400,10 +415,10 @@ export class Viewer {
     this.hideGhost();
     for (const pv of this.pages) pv.svg.querySelector(".g-hover")?.replaceChildren();
     if (tool === "edit") for (const pv of this.pages) if (pv.near) void this.ensureBlocks(pv).catch(() => {});
-    if (tool !== "select") {
-      this.clearSelection();
-      this.selectAnnot(null);
-    }
+    if (tool !== "select") this.clearSelection();
+    if (tool !== "select" && tool !== "area") this.selectAnnot(null);
+    if (tool !== "area") this.setArea(null);
+    for (const pv of this.pages) pv.svg.querySelector(".erase-cursor")?.remove();
     this.pagesEl.dataset.tool = tool;
   }
 
@@ -473,18 +488,44 @@ export class Viewer {
     const p = this.toPagePoint(pv, e);
     const capture = () => (e.target as Element).setPointerCapture?.(e.pointerId);
 
+    const grabAnnot = (a: AnnotInfo) => {
+      this.clearSelection();
+      this.selectAnnot({ page: pv.index, index: a.index });
+      const drag: Drag = { kind: "move", pv, annot: a, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null };
+      this.drag = drag;
+      capture();
+      e.preventDefault();
+      void this.makeGhost(drag);
+    };
     switch (this.tool) {
-      case "select": {
+      case "area": {
         const a = this.annotAt(pv, p);
-        if (a) {
-          this.clearSelection();
-          this.selectAnnot({ page: pv.index, index: a.index });
-          const drag: Drag = { kind: "move", pv, annot: a, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null };
+        if (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1])) {
+          const drag: Drag = { kind: "areamove", pv, rect: this.area.rect, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null };
           this.drag = drag;
           capture();
           e.preventDefault();
-          void this.makeGhost(drag);
-        } else if (this.onText(pv, p)) {
+          void this.makeAreaGhost(drag);
+        } else if (a) grabAnnot(a);
+        else {
+          this.setArea(null);
+          this.selectAnnot(null);
+          this.drag = { kind: "area", pv, start: p, last: p };
+          capture();
+          e.preventDefault();
+        }
+        break;
+      }
+      case "eraser":
+        this.drag = { kind: "erase", pv, points: [p] };
+        capture();
+        e.preventDefault();
+        this.previewErase(pv, [p]);
+        break;
+      case "select": {
+        const a = this.annotAt(pv, p);
+        if (a) grabAnnot(a);
+        else if (this.onText(pv, p)) {
           this.selectAnnot(null);
           this.clearSelection();
           this.drag = { kind: "select", pv, start: p, last: p };
@@ -497,6 +538,14 @@ export class Viewer {
             this.drag = { kind: "pan", startX: e.clientX, startY: e.clientY, left: this.el.scrollLeft, top: this.el.scrollTop };
             capture();
             this.pagesEl.classList.add("panning");
+          } else {
+            // a long press on an empty spot offers Paste
+            const at = { x: e.clientX, y: e.clientY };
+            this.cancelLongPress();
+            this.longPress = { x: at.x, y: at.y, timer: setTimeout(() => {
+              this.longPress = null;
+              this.showPasteMenu(pv, p);
+            }, 480) };
           }
         }
         break;
@@ -526,10 +575,16 @@ export class Viewer {
 
   private onMove(e: PointerEvent): void {
     const d = this.drag;
+    if (this.longPress && Math.hypot(e.clientX - this.longPress.x, e.clientY - this.longPress.y) > 8) this.cancelLongPress();
+    if (e.pointerType === "mouse") {
+      const pv = this.pageFromEvent(e);
+      this.pointer = pv ? { page: pv.index, p: this.toPagePoint(pv, e) } : null;
+    }
     if (!d) {
       if (this.tool === "sign") this.moveGhost(e);
       else if (this.tool === "edit") this.hoverBlock(e);
       else if (this.tool === "select") this.hoverCursor(e);
+      else if (this.tool === "eraser" && e.pointerType === "mouse") this.hoverEraser(e);
       return;
     }
     if (d.kind === "pan") {
@@ -568,10 +623,30 @@ export class Viewer {
         d.last = p;
         this.previewShape(d.pv, d.start, p);
         break;
+      case "area":
+        d.last = p;
+        this.drawArea(d.pv, normRect(d.start[0], d.start[1], p[0], p[1]), true);
+        break;
+      case "areamove": {
+        d.last = p;
+        if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) break;
+        d.moved = true;
+        this.hideFloating();
+        this.positionAreaGhost(d, e);
+        break;
+      }
+      case "erase": {
+        const pts = (e.getCoalescedEvents?.() ?? [e]).map((ce) => this.toPagePoint(d.pv, ce));
+        d.points.push(...pts);
+        this.previewErase(d.pv, d.points);
+        if (e.pointerType === "mouse") this.hoverEraser(e);
+        break;
+      }
     }
   }
 
   private async onUp(e: PointerEvent): Promise<void> {
+    this.cancelLongPress();
     const d = this.drag;
     this.drag = null;
     this.pagesEl.classList.remove("panning");
@@ -688,6 +763,56 @@ export class Viewer {
           }
           break;
         }
+        case "area": {
+          const r = normRect(d.start[0], d.start[1], d.last[0], d.last[1]);
+          if (rectWidth(r) * this.zoom < 6 || rectHeight(r) * this.zoom < 6) {
+            this.setArea(null);
+            return;
+          }
+          this.setArea({ page: d.pv.index, rect: r });
+          break;
+        }
+        case "areamove": {
+          if (!d.moved) {
+            d.ghost?.remove();
+            if (this.area) this.showAreaMenu();
+            return;
+          }
+          const target = this.pageAt(e.clientX, e.clientY) ?? d.pv;
+          const p = this.toPagePoint(target, e);
+          const topLeft: Point = [p[0] - (d.start[0] - d.rect[0]), p[1] - (d.start[1] - d.rect[1])];
+          const ghost = d.ghost;
+          ghost?.classList.add("dropped");
+          this.setArea(null);
+          let res: Awaited<ReturnType<typeof eng.moveArea>>;
+          try {
+            res = await this.host.busy(eng.moveArea(d.pv.index, d.rect, target.index, topLeft));
+          } catch (err) {
+            ghost?.remove();
+            throw err;
+          }
+          if (!res) {
+            ghost?.remove();
+            return void toast("There's nothing in that area to move", "info");
+          }
+          if (target !== d.pv) this.afterAnnotEdit(d.pv, res.from);
+          this.afterAnnotEdit(target, res.to);
+          if (ghost) this.keepUntilRendered(target, ghost);
+          this.selectAnnot({ page: target.index, index: res.index });
+          break;
+        }
+        case "erase": {
+          const held = this.holdPreview(d.pv);
+          const path = d.points.length > 2 ? simplifyStroke(d.points, 0.4 / this.zoom + 0.1) : d.points;
+          try {
+            this.afterAnnotEdit(d.pv, await eng.erase(d.pv.index, path, s.eraserSize / 2, s.eraserAll));
+            held.release(true);
+          } catch (err) {
+            held.release(false);
+            throw err;
+          }
+          break;
+        }
         case "click": {
           if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) return;
           if (this.tool === "text") {
@@ -709,13 +834,15 @@ export class Viewer {
   }
 
   private cancelDrag(): void {
+    this.cancelLongPress();
     const d = this.drag;
     this.drag = null;
     this.pagesEl.classList.remove("panning");
     if (d && "pv" in d) {
       this.clearPreview(d.pv);
       d.pv.el.classList.remove("moving");
-      if (d.kind === "move") d.ghost?.remove();
+      if (d.kind === "move" || d.kind === "areamove") d.ghost?.remove();
+      if (d.kind === "area") this.drawArea(d.pv, null);
     }
   }
 
@@ -1038,6 +1165,7 @@ export class Viewer {
 
   selectAnnot(sel: { page: number; index: number } | null): void {
     if (this.selected) this.pages[this.selected.page]?.svg.querySelector(".g-annsel")?.replaceChildren();
+    if (sel) this.setArea(null);
     this.selected = sel;
     if (this.floating.dataset.kind === "annot") this.hideFloating();
     if (sel) this.drawAnnotSelection();
@@ -1073,7 +1201,7 @@ export class Viewer {
     this.floating.remove();
   }
 
-  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot" | "edit", html: string): void {
+  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot" | "edit" | "area" | "paste", html: string): void {
     this.floating.innerHTML = html;
     this.floating.onpointerdown = null;
     this.floating.dataset.kind = kind;
@@ -1128,8 +1256,10 @@ export class Viewer {
       pv,
       a.rect,
       "annot",
-      `${a.kind === "Stamp" ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
+      `${a.kind === "Stamp" || a.area ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
        ${a.kind === "FreeText" ? `<button data-act="edit" title="Edit text">${icon("edit")}</button>` : ""}
+       <button data-act="copy" title="Copy (Ctrl+C)">${icon("copy")}</button>
+       <button data-act="duplicate" title="Duplicate (Ctrl+D)">${icon("duplicate")}</button>
        <button data-act="delete" title="Delete (Del)">${icon("trash")}</button>`,
     );
     this.floating.onclick = async (e) => {
@@ -1140,9 +1270,331 @@ export class Viewer {
           this.afterAnnotEdit(pv, await this.host.engine.setAnnotColor(pv.index, a.index, hexToRgb(b.dataset.color)));
         } else if (b.dataset.act === "delete") await this.deleteSelectedAnnot();
         else if (b.dataset.act === "edit") this.openEditor(pv, a);
+        else if (b.dataset.act === "copy") await this.copy(false);
+        else if (b.dataset.act === "duplicate") await this.duplicate();
       } catch (err) {
         toast((err as Error).message, "error");
       }
+    };
+  }
+
+  // ---------- select area ----------
+
+  private area: { page: number; rect: Rect } | null = null;
+
+  hasArea(): boolean {
+    return this.area !== null;
+  }
+
+  /** Select a part of a page (null: none). */
+  setArea(a: { page: number; rect: Rect } | null): void {
+    if (this.area) this.drawArea(this.pages[this.area.page], null);
+    this.area = a;
+    if (this.floating.dataset.kind === "area") this.hideFloating();
+    if (!a) return;
+    this.selectAnnot(null);
+    this.clearSelection();
+    this.drawArea(this.pages[a.page], a.rect);
+    this.showAreaMenu();
+  }
+
+  private drawArea(pv: PageView | undefined, r: Rect | null, drawing = false): void {
+    const g = pv?.svg.querySelector(".g-area");
+    if (!g) return;
+    g.innerHTML = r ? `<rect x="${r[0]}" y="${r[1]}" width="${rectWidth(r)}" height="${rectHeight(r)}" class="areasel ${drawing ? "drawing" : ""}"/>` : "";
+  }
+
+  private showAreaMenu(): void {
+    const a = this.area;
+    if (!a) return;
+    const pv = this.pages[a.page];
+    this.showFloatingAt(
+      pv,
+      a.rect,
+      "area",
+      `<button data-act="copy" title="Copy (Ctrl+C)">${icon("copy")}</button>
+       <button data-act="cut" title="Cut (Ctrl+X)">${icon("cut")}</button>
+       <button data-act="erase" title="Erase (Del)">${icon("eraser")}</button>
+       <span class="sep"></span><span class="float-hint">Drag to move</span>`,
+    );
+    this.floating.onclick = async (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
+      if (!b) return;
+      try {
+        if (b.dataset.act === "copy") await this.copy(false);
+        else if (b.dataset.act === "cut") await this.copy(true);
+        else if (b.dataset.act === "erase") await this.eraseArea();
+      } catch (err) {
+        toast((err as Error).message, "error");
+      }
+    };
+  }
+
+  /** Erase what's printed in the selected area. */
+  async eraseArea(): Promise<boolean> {
+    const a = this.area;
+    if (!a) return false;
+    const pv = this.pages[a.page];
+    this.setArea(null);
+    this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.eraseArea(a.page, a.rect)));
+    return true;
+  }
+
+  /** A picture of the selected area that follows the pointer while it's dragged. */
+  private async makeAreaGhost(d: Extract<Drag, { kind: "areamove" }>): Promise<void> {
+    const dpr = window.devicePixelRatio || 1;
+    let bmp: ImageBitmap | null = null;
+    try {
+      bmp = await this.host.engine.renderAreaBitmap(d.pv.index, d.rect, this.zoom * dpr);
+    } catch {
+      /* fall back to an outline */
+    }
+    if (this.drag !== d) {
+      bmp?.close();
+      return;
+    }
+    const c = document.createElement("canvas");
+    c.className = "drag-ghost area-ghost";
+    c.style.width = `${rectWidth(d.rect) * this.zoom}px`;
+    c.style.height = `${rectHeight(d.rect) * this.zoom}px`;
+    if (bmp) {
+      c.width = bmp.width;
+      c.height = bmp.height;
+      c.getContext("2d")!.drawImage(bmp, 0, 0);
+      bmp.close();
+    } else c.classList.add("outline");
+    d.ghost = c;
+    this.pagesEl.append(c);
+    if (!d.moved) c.style.display = "none";
+  }
+
+  private positionAreaGhost(d: Extract<Drag, { kind: "areamove" }>, e: PointerEvent): void {
+    const g = d.ghost;
+    if (!g) return;
+    g.style.display = "";
+    const host = this.pagesEl.getBoundingClientRect();
+    g.style.left = `${e.clientX - host.left - (d.start[0] - d.rect[0]) * this.zoom}px`;
+    g.style.top = `${e.clientY - host.top - (d.start[1] - d.rect[1]) * this.zoom}px`;
+    g.classList.toggle("nowhere", !this.pageAt(e.clientX, e.clientY));
+  }
+
+  // ---------- eraser ----------
+
+  private previewErase(pv: PageView, pts: Point[]): void {
+    const w = this.host.settings.eraserSize;
+    const p = pts.length === 1 ? [pts[0], [pts[0][0] + 0.01, pts[0][1]]] : pts;
+    pv.svg.querySelector(".g-preview")!.innerHTML = `<polyline points="${p.map((q) => q.join(",")).join(" ")}" class="erase-trail" stroke-width="${w}"/>`;
+  }
+
+  /** The eraser's size, following the mouse. */
+  private hoverEraser(e: PointerEvent): void {
+    const pv = this.pageFromEvent(e);
+    for (const other of this.pages) if (other !== pv) other.svg.querySelector(".erase-cursor")?.remove();
+    if (!pv) return;
+    const [x, y] = this.toPagePoint(pv, e);
+    let c = pv.svg.querySelector<SVGCircleElement>(".erase-cursor");
+    if (!c) {
+      c = document.createElementNS(SVGNS, "circle") as SVGCircleElement;
+      c.classList.add("erase-cursor");
+      pv.svg.append(c);
+    }
+    c.setAttribute("cx", String(x));
+    c.setAttribute("cy", String(y));
+    c.setAttribute("r", String(this.host.settings.eraserSize / 2));
+  }
+
+  // ---------- copy, cut, paste ----------
+
+  /** What was copied last (the engine keeps the thing itself). */
+  private clip: ClipInfo | null = null;
+  /** The text put on the system clipboard with it, and whether that worked. */
+  private clipText: string | null = null;
+  private clipOnSystem = false;
+  /** Last mouse position over a page (keyboard pastes go there). */
+  private pointer: { page: number; p: Point } | null = null;
+  private longPress: { x: number; y: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  private pasteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private cancelLongPress(): void {
+    if (this.longPress) clearTimeout(this.longPress.timer);
+    this.longPress = null;
+  }
+
+  hasClip(): boolean {
+    return this.clip !== null;
+  }
+
+  /** Is there a selected item or area to copy? */
+  canCopy(): boolean {
+    return !!this.selectedAnnot() || !!this.area;
+  }
+
+  /** Copy (or cut) the selected item or area. Returns false if nothing is selected. */
+  async copy(cut: boolean): Promise<boolean> {
+    const eng = this.host.engine;
+    const cur = this.selectedAnnot();
+    let job: Promise<ClipInfo | null>;
+    if (cur) {
+      const pv = this.pages[cur.page];
+      job = cut
+        ? eng.cutAnnot(cur.page, cur.annot.index).then((r) => {
+            this.selectAnnot(null);
+            this.afterAnnotEdit(pv, r.annots);
+            return r.clip;
+          })
+        : eng.copyAnnot(cur.page, cur.annot.index);
+    } else if (this.area) {
+      const a = this.area;
+      const pv = this.pages[a.page];
+      job = cut
+        ? eng.cutArea(a.page, a.rect).then((r) => {
+            if (!r) return null;
+            this.setArea(null);
+            this.afterAnnotEdit(pv, r.annots);
+            return r.clip;
+          })
+        : eng.copyArea(a.page, a.rect);
+    } else return false;
+    // (the system clipboard write starts now, while the key press or click still counts)
+    const wrote = writeClipboardText(job.then((i) => i?.text ?? ""));
+    const info = await this.host.busy(job);
+    if (!info) {
+      toast("There's nothing in that area to copy", "info");
+      return true;
+    }
+    this.clip = info;
+    this.clipText = info.text;
+    this.clipOnSystem = false;
+    void wrote.then((ok) => {
+      if (this.clip === info) this.clipOnSystem = ok;
+    });
+    this.host.clipChanged(info);
+    toast(`${cut ? "Cut" : "Copied"} ${info.label}. Paste with ${navigator.maxTouchPoints > 0 && !matchMedia("(pointer: fine)").matches ? "Paste (or a long press on the page)" : "Ctrl+V"}.`);
+    return true;
+  }
+
+  /** Copy the selected item and put the copy right next to it. */
+  async duplicate(): Promise<boolean> {
+    const cur = this.selectedAnnot();
+    if (!cur) return false;
+    const res = await this.host.busy(this.host.engine.duplicateAnnot(cur.page, cur.annot.index));
+    this.afterAnnotEdit(this.pages[cur.page], res.annots);
+    this.selectAnnot({ page: cur.page, index: res.index });
+    return true;
+  }
+
+  /** Ctrl+V was pressed: some browsers send no paste event outside text fields, so paste anyway if none comes. */
+  expectPaste(): void {
+    if (this.pasteTimer) clearTimeout(this.pasteTimer);
+    this.pasteTimer = setTimeout(() => {
+      this.pasteTimer = null;
+      void this.pasteButton(null).catch((err) => toast((err as Error).message, "error"));
+    }, 250);
+  }
+
+  /** A paste event (Ctrl+V): what's on the clipboard decides what gets pasted. */
+  async pasteEvent(e: ClipboardEvent): Promise<void> {
+    if (this.pasteTimer) clearTimeout(this.pasteTimer);
+    this.pasteTimer = null;
+    await this.pasteData(fromPasteEvent(e), null);
+  }
+
+  /** The Paste button: what papgi copied, otherwise what's on the system clipboard. */
+  async pasteButton(at: { page: number; center: Point } | null): Promise<void> {
+    if (this.clip) return this.pasteData(null, at);
+    const data = await readClipboard();
+    if (!data) return void toast("Nothing to paste: copy something first (or press Ctrl+V)", "info");
+    await this.pasteData(data, at);
+  }
+
+  private async pasteData(data: ClipboardContent | null, at: { page: number; center: Point | null } | null): Promise<void> {
+    if (!this.info) return;
+    this.hideFloating();
+    const place = at ?? (this.pointer ? { page: this.pointer.page, center: this.pointer.p } : { page: this.current, center: null });
+    // what papgi copied is on the clipboard when its text is (or the write didn't work)
+    const ours = !!this.clip && (!data || (!data.image && (!this.clipOnSystem || data.text === (this.clipText ?? ""))));
+    if (data && !ours) {
+      if (data.image) return this.pastePicture(data.image, place);
+      if (data.text.trim()) return this.pasteText(data.text, place);
+    }
+    if (!this.clip) return void toast("Nothing to paste: copy something first", "info");
+    const pv = this.pages[place.page];
+    let topLeft: Point | null = null;
+    if (place.center) {
+      const w = this.clip.w;
+      const h = this.clip.h;
+      topLeft = this.clampToPage(pv, [place.center[0] - w / 2, place.center[1] - h / 2], w, h);
+    }
+    const res = await this.host.busy(this.host.engine.paste(place.page, topLeft));
+    this.afterAnnotEdit(pv, res.annots);
+    this.selectAnnot({ page: place.page, index: res.index });
+  }
+
+  private clampToPage(pv: PageView, p: Point, w: number, h: number): Point {
+    const i = pv.info;
+    return [Math.max(i.x, Math.min(p[0], i.x + i.w - w)), Math.max(i.y, Math.min(p[1], i.y + i.h - h))];
+  }
+
+  /** The middle of the part of a page that's on screen. */
+  private visibleCenter(pv: PageView): Point {
+    const vr = this.el.getBoundingClientRect();
+    const r = pv.el.getBoundingClientRect();
+    const top = Math.max(vr.top, r.top);
+    const bottom = Math.min(vr.bottom, r.bottom);
+    const left = Math.max(vr.left, r.left);
+    const right = Math.min(vr.right, r.right);
+    const cy = bottom > top ? (top + bottom) / 2 : r.top + r.height / 2;
+    const cx = right > left ? (left + right) / 2 : r.left + r.width / 2;
+    return this.toPagePoint(pv, { clientX: cx, clientY: cy });
+  }
+
+  private async pastePicture(blob: Blob, place: { page: number; center: Point | null }): Promise<void> {
+    const pv = this.pages[place.page];
+    const { bytes, w, h } = await pictureBytes(blob);
+    // screen pixels at their usual size, but never more than most of the page
+    let pw = w * 0.75;
+    let ph = h * 0.75;
+    const k = Math.min(1, (pv.info.w * 0.6) / pw, (pv.info.h * 0.6) / ph);
+    pw *= k;
+    ph *= k;
+    const c = place.center ?? this.visibleCenter(pv);
+    const [x, y] = this.clampToPage(pv, [c[0] - pw / 2, c[1] - ph / 2], pw, ph);
+    const res = await this.host.busy(this.host.engine.addPicture(place.page, bytes, [x, y, x + pw, y + ph]));
+    this.afterAnnotEdit(pv, res.annots);
+    this.selectAnnot({ page: place.page, index: res.index });
+  }
+
+  private async pasteText(text: string, place: { page: number; center: Point | null }): Promise<void> {
+    const pv = this.pages[place.page];
+    const s = this.host.settings;
+    const c = place.center ?? this.visibleCenter(pv);
+    const clean = text.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").slice(0, 5000);
+    const annots = await this.host.busy(this.host.engine.addFreeText(place.page, [c[0], c[1] - s.textSize / 2], clean, s.textSize, hexToRgb(s.colors.text)));
+    this.afterAnnotEdit(pv, annots);
+    const last = annots[annots.length - 1];
+    if (last) this.selectAnnot({ page: place.page, index: last.index });
+  }
+
+  /** Right click: Paste here (and the usual menu for an item). */
+  private onContextMenu(e: MouseEvent): void {
+    if (this.tool !== "select" && this.tool !== "area") return;
+    const pv = this.pageFromEvent(e);
+    if (!pv || (e.target as Element).closest(".page-forms > *, .floating, .text-editor, .para-editor")) return;
+    const p = this.toPagePoint(pv, e);
+    if (this.annotAt(pv, p) || (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1]))) return;
+    e.preventDefault();
+    this.showPasteMenu(pv, p);
+  }
+
+  private showPasteMenu(pv: PageView, p: Point): void {
+    this.clearSelection();
+    this.selectAnnot(null);
+    this.setArea(null);
+    this.showFloatingAt(pv, [p[0], p[1], p[0], p[1]], "paste", `<button data-act="paste" class="labelled">${icon("paste")}<span>Paste</span></button>`);
+    this.floating.onclick = (e) => {
+      if (!(e.target as HTMLElement).closest("button")) return;
+      this.hideFloating();
+      void this.pasteButton({ page: pv.index, center: p }).catch((err) => toast((err as Error).message, "error"));
     };
   }
 

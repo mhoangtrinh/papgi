@@ -20,11 +20,13 @@ import { rememberFile } from "./recent";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "select", label: "Select", key: "V", icon: "select" },
+  { id: "area", label: "Select area", key: "A", icon: "area" },
   { id: "edit", label: "Edit text", key: "E", icon: "textEdit" },
   { id: "highlight", label: "Highlight", key: "H", icon: "highlight" },
   { id: "pen", label: "Pen", key: "P", icon: "pen" },
   { id: "text", label: "Text box", key: "T", icon: "text" },
   { id: "shape", label: "Shapes", key: "R", icon: "shape" },
+  { id: "eraser", label: "Eraser", key: "X", icon: "eraser" },
   { id: "sign", label: "Sign", key: "S", icon: "sign" },
 ];
 
@@ -90,6 +92,9 @@ export class App {
         busy: (p) => this.busy(p),
         recognize: () => void this.recognize(),
         saveSettings: () => saveSettings(this.settings),
+        clipChanged: () => {
+          if (this.settings.tool === "select" || this.settings.tool === "area") this.renderOptions();
+        },
       },
       main,
     );
@@ -341,6 +346,11 @@ export class App {
     });
 
     document.addEventListener("keydown", (e) => this.onKey(e));
+    document.addEventListener("paste", (e) => {
+      if (!this.info || this.isTyping(e.target) || document.querySelector(".modal-back") || this.hub?.visible()) return;
+      e.preventDefault();
+      void this.viewer.pasteEvent(e).catch((err) => toast(err.message, "error"));
+    });
     document.addEventListener("copy", (e) => {
       if (this.viewer.hasTextSelection() && !this.isTyping(e.target)) {
         e.preventDefault();
@@ -400,11 +410,26 @@ export class App {
       e.preventDefault();
       return void this.redo();
     }
-    if (mod && k === "c") {
-      if (this.viewer.hasTextSelection()) {
+    if (mod && (k === "c" || k === "x")) {
+      if (k === "c" && this.viewer.hasTextSelection()) {
         e.preventDefault();
         void this.viewer.copySelection();
+      } else if (this.viewer.canCopy()) {
+        e.preventDefault();
+        void this.viewer.copy(k === "x").catch((err) => toast(err.message, "error"));
       }
+      return;
+    }
+    if (mod && k === "d") {
+      if (this.viewer.selectedAnnot()) {
+        e.preventDefault();
+        void this.viewer.duplicate().catch((err) => toast(err.message, "error"));
+      }
+      return;
+    }
+    if (mod && k === "v") {
+      // (the paste event brings what's on the clipboard; not preventing it)
+      if (this.info) this.viewer.expectPaste();
       return;
     }
     if (mod || e.altKey) return;
@@ -417,6 +442,7 @@ export class App {
       this.closeMenus();
       this.viewer.clearSelection();
       this.viewer.selectAnnot(null);
+      this.viewer.setArea(null);
       if (this.settings.tool !== "select") this.setTool("select");
       return;
     }
@@ -424,6 +450,9 @@ export class App {
       if (this.viewer.selectedAnnot()) {
         e.preventDefault();
         void this.viewer.deleteSelectedAnnot().catch((err) => toast(err.message, "error"));
+      } else if (this.viewer.hasArea()) {
+        e.preventDefault();
+        void this.viewer.eraseArea().catch((err) => toast(err.message, "error"));
       } else if (this.sidebar.focused() && this.sidebar.hasSelection()) {
         e.preventDefault();
         this.removePages(this.sidebar.targetPages());
@@ -461,10 +490,20 @@ export class App {
       `<div class="seg">${items.map(([v, ic, label]) => `<button data-${name}="${v}" class="${v === value ? "on" : ""}" title="${label}">${icon(ic)}</button>`).join("")}</div>`;
     const range = (name: string, min: number, max: number, step: number, value: number, label: string, unit = "pt") =>
       `<label class="range"><span class="muted">${label}</span><input type="range" data-range="${name}" min="${min}" max="${max}" step="${step}" value="${value}"><output>${value}${unit}</output></label>`;
+    const pasteBtn = () => (this.viewer?.hasClip() ? `<button class="btn flat small" data-act="paste" title="Paste (Ctrl+V)">${icon("paste")}<span>Paste</span></button>` : "");
     let html = "";
     switch (t) {
       case "select":
-        html = `<span class="muted hint">Drag over text to select it · click an annotation to move, recolour or delete it · drag empty space to scroll</span>`;
+        html = pasteBtn() + `<span class="muted hint">Drag over text to select it · click an item to move, copy or delete it · drag empty space to scroll</span>`;
+        break;
+      case "area":
+        html = pasteBtn() + `<span class="muted hint">Drag a box around part of the page, then copy, cut or erase it, or drag it somewhere else</span>`;
+        break;
+      case "eraser":
+        html =
+          `<div class="seg text-seg" role="radiogroup" aria-label="What the eraser erases"><button data-erase="0" class="${s.eraserAll ? "" : "on"}" title="Only what was added: drawings, text boxes, highlights…">Added items</button><button data-erase="1" class="${s.eraserAll ? "on" : ""}" title="Also the page's own text and pictures">Everything</button></div>` +
+          range("eraserSize", 4, 60, 1, s.eraserSize, "Size") +
+          `<span class="muted hint">${s.eraserAll ? "Rubs out anything on the page, the PDF's own text and pictures too" : "Rubs out drawings, highlights and other added items"}</span>`;
         break;
       case "edit":
         html = `<span class="muted hint">Click a paragraph to change its text · Ctrl+Enter or click outside to finish · Esc to cancel</span>`;
@@ -529,6 +568,8 @@ export class App {
     else if (b.dataset.mark) s.markKind = b.dataset.mark as Settings["markKind"];
     else if (b.dataset.shape) s.shapeKind = b.dataset.shape as Settings["shapeKind"];
     else if (b.dataset.sigid) s.activeSignature = b.dataset.sigid;
+    else if (b.dataset.erase) s.eraserAll = b.dataset.erase === "1";
+    else if (b.dataset.act === "paste") return void this.viewer.pasteButton(null).catch((err) => toast(err.message, "error"));
     else if (b.dataset.act === "sig-add") return void this.addSignature();
     else if (b.dataset.act === "sig-edit") return void this.editSignature();
     else if (b.dataset.act === "sig-delete") return void this.deleteSignature();

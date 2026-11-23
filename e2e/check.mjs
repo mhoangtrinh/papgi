@@ -557,6 +557,110 @@ try {
   check("undo brings it back to page 1", (await engine("listAnnots", 0)).some((x) => x.kind === "Ink") && !(await engine("listAnnots", 1)).some((x) => x.kind === "Ink"));
   await page.screenshot({ path: shots + "desktop-pages-light.png" });
 
+  // --- copy, cut, paste, duplicate · select area · eraser ---
+  await ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: URL_ });
+  await page.evaluate(async () => {
+    window.papgi["dirty"] = false;
+    const r = await fetch("./samples/pages.pdf");
+    await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+  });
+  await waitRendered();
+  await page.evaluate(() => { window.papgi.viewer.setZoom(0.75); document.querySelector(".viewer").scrollTop = 0; });
+  await page.waitForTimeout(500);
+  const inks = async () => (await engine("listAnnots", 0)).filter((x) => x.kind === "Ink");
+  await page.keyboard.press("p");
+  const q0 = await raw(0, 100, 400);
+  await page.mouse.move(...q0);
+  await page.mouse.down();
+  for (let i = 1; i <= 15; i++) await page.mouse.move(q0[0] + i * 10 * 0.75, q0[1] + Math.sin(i / 3) * 6);
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  await page.keyboard.press("v");
+  const ink0 = (await inks())[0];
+  await page.mouse.click(...(await raw(0, ink0.rect[0] + 3, (ink0.rect[1] + ink0.rect[3]) / 2)));
+  await page.waitForTimeout(200);
+  check("an item's menu has Copy and Duplicate", (await page.locator('.floating [data-act="copy"]').count()) === 1 && (await page.locator('.floating [data-act="duplicate"]').count()) === 1);
+  await page.keyboard.press("Control+c");
+  await page.waitForTimeout(400);
+  await page.mouse.move(...(await raw(0, 300, 600)));
+  await page.keyboard.press("Control+v");
+  await page.waitForTimeout(700);
+  let list = await inks();
+  const pasted = list.find((x) => x.rect[1] > 500);
+  check("Ctrl+C, Ctrl+V pastes the drawing where the mouse is", list.length === 2 && !!pasted && Math.abs((pasted.rect[0] + pasted.rect[2]) / 2 - 300) < 8 && Math.abs((pasted.rect[1] + pasted.rect[3]) / 2 - 600) < 8, JSON.stringify(pasted?.rect));
+  await page.keyboard.press("Control+d");
+  await page.waitForTimeout(500);
+  check("Ctrl+D duplicates the selected item", (await inks()).length === 3);
+  check("the Paste button shows once something is copied", (await page.locator('#options [data-act="paste"]').count()) === 1);
+  // select area: drag around the heading of page 1, then drag it down the page
+  await page.keyboard.press("a");
+  await page.mouse.move(...(await raw(0, 35, 30)));
+  await page.mouse.down();
+  await page.mouse.move(...(await raw(0, 200, 110)), { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  check("select area: a box with Copy, Cut and Erase", (await page.locator('.floating[data-kind="area"] [data-act="cut"]').count()) === 1 && (await page.locator('.floating[data-kind="area"] [data-act="erase"]').count()) === 1);
+  await page.screenshot({ path: shots + "desktop-area-selected.png" });
+  await page.mouse.move(...(await raw(0, 100, 70)));
+  await page.mouse.down();
+  await page.mouse.move(...(await raw(0, 360, 470)), { steps: 12 });
+  await page.waitForTimeout(250);
+  const areaGhost = await page.locator(".area-ghost").isVisible();
+  await page.screenshot({ path: shots + "desktop-area-moving.png" });
+  await page.mouse.up();
+  await page.waitForTimeout(900);
+  const moved = (await engine("listAnnots", 0)).find((x) => x.area);
+  check("dragging the area moves that part of the page (a picture follows the mouse)", areaGhost && !!moved && Math.abs(moved.rect[0] - 295) < 12 && !(await engine("pageText", 0)).includes("Page 1"), JSON.stringify(moved?.rect));
+  await page.screenshot({ path: shots + "desktop-area-moved.png" });
+  // the eraser: rub through the first drawing, then (Everything) through the sentence
+  await page.keyboard.press("x");
+  check("eraser options: added items or everything, and a size", (await page.locator('#options [data-erase="1"]').count()) === 1 && (await page.locator('#options [data-range="eraserSize"]').count()) === 1);
+  const inkCount = (await inks()).length;
+  await page.mouse.move(...(await raw(0, 160, 380)));
+  await page.mouse.down();
+  await page.mouse.move(...(await raw(0, 160, 430)), { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const est = await engine("state");
+  check("the eraser rubs out part of a drawing (one undo step)", est.undoName === "Erase" && (await inks()).length === inkCount);
+  await page.click('#options [data-erase="1"]');
+  await page.mouse.move(...(await raw(0, 40, 165)));
+  await page.mouse.down();
+  await page.mouse.move(...(await raw(0, 420, 165)), { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(800);
+  check("with Everything, the eraser removes the PDF's own text", !(await engine("pageText", 0)).includes("reordering"));
+  await page.screenshot({ path: shots + "desktop-eraser.png" });
+  // pictures and text from other apps
+  await page.keyboard.press("v");
+  await page.mouse.move(...(await raw(0, 450, 700)));
+  const stamps = async () => (await engine("listAnnots", 0)).filter((x) => x.kind === "Stamp" && !x.area).length;
+  await page.evaluate(async () => {
+    const f = new File([await (await fetch("./pwa-192.png")).blob()], "shot.png", { type: "image/png" });
+    const dt = new DataTransfer();
+    dt.items.add(f);
+    document.body.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(800);
+  check("pasting a picture from another app puts it on the page", (await stamps()) === 1);
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "Pasted from somewhere");
+    document.body.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(600);
+  check("pasting text from another app makes a text box", (await engine("listAnnots", 0)).some((x) => x.kind === "FreeText" && x.contents === "Pasted from somewhere"));
+  // saved: the moved part is page content again
+  const savedArea = await page.evaluate(async () => Array.from(await window.papgi.engine.save(false)));
+  {
+    const d = new mupdf.PDFDocument(new Uint8Array(savedArea));
+    const p0 = d.loadPage(0);
+    const txt = p0.toStructuredText("").asText();
+    const hasArea = p0.getAnnotations().some((a) => a.getObject().get("PapgiArea").isBoolean());
+    check("saving turns the moved part back into page text", txt.includes("Page 1") && !hasArea && !txt.includes("reordering"));
+    d.destroy();
+  }
+
   // --- organize pages (editor): the Pages button ---
   {
     const pc = await page.evaluate(() => window.papgi.info.pageCount);

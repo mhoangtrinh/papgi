@@ -43,6 +43,12 @@ export class WorkerEngine extends PdfEngine {
     return this.replaceText(index, block, runs, opts);
   }
 
+  /** What's printed in a part of a page on a transparent background (drag preview). */
+  async renderAreaBitmap(index: number, rect: [number, number, number, number], scale: number): Promise<ImageBitmap> {
+    const img = this.renderArea(index, rect, scale);
+    return createImageBitmap(new ImageData(img.data as Uint8ClampedArray<ArrayBuffer>, img.width, img.height));
+  }
+
   /** One annotation on a transparent background (drag preview). */
   async renderAnnotBitmap(index: number, annot: number, scale: number): Promise<ImageBitmap | null> {
     const img = this.renderAnnot(index, annot, scale);

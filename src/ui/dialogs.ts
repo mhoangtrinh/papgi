@@ -99,6 +99,8 @@ export async function confirmDialog(title: string, text: string, ok: string, dan
 export function showShortcuts(): void {
   const rows: [string, string][] = [
     ["V", "Select / move"],
+    ["A", "Select an area (copy, cut, move, erase)"],
+    ["X", "Eraser"],
     ["E", "Edit text in the PDF"],
     ["H", "Highlight text"],
     ["P", "Pen"],
@@ -111,10 +113,11 @@ export function showShortcuts(): void {
     ["Ctrl + P", "Print"],
     ["Ctrl + Z / Ctrl + Y", "Undo / redo"],
     ["Ctrl + F", "Search"],
-    ["Ctrl + C", "Copy selected text"],
+    ["Ctrl + C / X / V", "Copy, cut, paste (text, items, areas, pictures)"],
+    ["Ctrl + D", "Duplicate the selected item"],
     ["Ctrl + + / − / 0", "Zoom in / out / fit width"],
     ["Ctrl + wheel", "Zoom"],
-    ["Delete", "Delete selected annotation or pages"],
+    ["Delete", "Delete the selected item, area or pages"],
     ["Double-click text box", "Edit it"],
     ["Esc", "Cancel / deselect"],
   ];

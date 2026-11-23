@@ -12,9 +12,12 @@ import {
   type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions, type SplitPage,
 } from "./tools";
 import { pdfToWord, WordJob, type WordOptions, type WordResult } from "./toword";
+import { bakeAreas, copyAnnots, copyArea, eraseBrush, eraseRects, hasAreas, isArea, pasteClip, shiftAnnot, type Clip, type ClipInfo } from "./clip";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
+export type { ClipInfo } from "./clip";
+import type { TextLine, TocItem } from "../core/toc";
 
 type M = typeof MuPDF;
 export type RGB = [number, number, number];
@@ -45,6 +48,8 @@ export interface AnnotInfo {
   color: number[];
   contents: string;
   fontSize?: number;
+  /** A pasted part of a page (becomes page content when saved). */
+  area?: boolean;
 }
 
 export type WidgetKind = "text" | "checkbox" | "radio" | "combobox" | "listbox" | "button" | "signature";
@@ -115,6 +120,7 @@ export class PdfEngine {
     }
     this.close();
     this.doc = pdf;
+    this.fileSerial++;
     this.docSize = bytes.length;
     this.title = title;
     this.password = "";
@@ -190,11 +196,26 @@ export class PdfEngine {
   /** Serialize the current document; by default this also marks it as saved. */
   save(markSaved = true): Uint8Array {
     const doc = this.requireDoc();
-    const buf = doc.saveToBuffer("garbage=deduplicate,compress");
+    // pasted parts of pages become page content in the file (they stay movable here)
+    const baked = hasAreas(doc) ? this.copyOfDoc() : null;
+    if (baked) bakeAreas(baked);
+    const buf = (baked ?? doc).saveToBuffer("garbage=deduplicate,compress");
     const out = buf.asUint8Array().slice();
     buf.destroy();
+    baked?.destroy();
     if (markSaved) this.markSaved();
     return out;
+  }
+
+  /** A separate copy of the open document. */
+  private copyOfDoc(): MuPDF.PDFDocument {
+    const buf = this.requireDoc().saveToBuffer("");
+    const d = this.mupdf.Document.openDocument(buf.asUint8Array().slice(), "application/pdf");
+    buf.destroy();
+    const pdf = d.asPDF();
+    if (!pdf) throw new Error("Copy failed");
+    if (pdf.needsPassword() && !pdf.authenticatePassword(this.password)) throw new Error("Copy failed (password)");
+    return pdf;
   }
 
   markSaved(): void {
@@ -448,6 +469,7 @@ export class PdfEngine {
           ? type
           : "Other") as AnnotKind;
         const info: AnnotInfo = { index: i, kind, rect: a.getBounds() as Rect, color: [...a.getColor()], contents: a.getContents() };
+        if (kind === "Stamp" && isArea(a)) info.area = true;
         if (kind === "FreeText") {
           try {
             info.fontSize = a.getDefaultAppearance().size;
@@ -568,7 +590,7 @@ export class PdfEngine {
     return this.op("Move", index, (page) => {
       const a = page.getAnnotations()[annot];
       if (!a) throw new Error("No such annotation");
-      shiftAnnot(a, dx, dy);
+      shiftAnnot(this.mupdf, page, a, dx, dy);
     });
   }
 
@@ -620,7 +642,7 @@ export class PdfEngine {
         const a = list[newIndex];
         if (!a) throw new Error("Move failed");
         const r = a.getBounds();
-        shiftAnnot(a, topLeft[0] - r[0], topLeft[1] - r[1]);
+        shiftAnnot(this.mupdf, page, a, topLeft[0] - r[0], topLeft[1] - r[1]);
       });
     }, []);
     this.clearText();
@@ -635,24 +657,27 @@ export class PdfEngine {
       if (!a) return null;
       const pix = a.toPixmap(m.Matrix.scale(scale, scale), m.ColorSpace.DeviceRGB, true);
       try {
-        const w = pix.getWidth();
-        const h = pix.getHeight();
-        const src = pix.getPixels();
-        const stride = pix.getStride();
-        const data = new Uint8ClampedArray(w * h * 4);
-        for (let y = 0; y < h; y++)
-          for (let x = 0; x < w; x++) {
-            const s = y * stride + x * 4;
-            const d = (y * w + x) * 4;
-            const al = src[s + 3];
-            // MuPDF pixmaps are premultiplied; ImageData is not
-            const k = al ? 255 / al : 0;
-            data[d] = src[s] * k;
-            data[d + 1] = src[s + 1] * k;
-            data[d + 2] = src[s + 2] * k;
-            data[d + 3] = al;
-          }
-        return { width: w, height: h, data };
+        return unpremultiply(pix);
+      } finally {
+        pix.destroy();
+      }
+    });
+  }
+
+  /** Render what's printed in a part of a page (transparent background), for drag previews. */
+  renderArea(index: number, rect: Rect, scale: number): RGBAImage {
+    const m = this.mupdf;
+    return this.withPage(index, (page) => {
+      const w = Math.max(1, Math.ceil((rect[2] - rect[0]) * scale));
+      const h = Math.max(1, Math.ceil((rect[3] - rect[1]) * scale));
+      const pix = new m.Pixmap(m.ColorSpace.DeviceRGB, [0, 0, w, h], true);
+      try {
+        pix.clear();
+        const dev = new m.DrawDevice(m.Matrix.identity, pix);
+        page.runPageContents(dev, m.Matrix.concat(m.Matrix.translate(-rect[0], -rect[1]), m.Matrix.scale(scale, scale)));
+        dev.close();
+        dev.destroy();
+        return unpremultiply(pix);
       } finally {
         pix.destroy();
       }
@@ -676,6 +701,222 @@ export class PdfEngine {
       const a = page.getAnnotations()[annot];
       if (a) page.deleteAnnotation(a);
     });
+  }
+
+  // ---------- table of contents ----------
+
+  /** The PDF's own bookmarks, flattened with levels; null if it has none. */
+  outline(): TocItem[] | null {
+    const doc = this.requireDoc();
+    let tree: ReturnType<MuPDF.PDFDocument["loadOutline"]>;
+    try {
+      tree = doc.loadOutline();
+    } catch {
+      return null;
+    }
+    if (!tree?.length) return null;
+    const out: TocItem[] = [];
+    const walk = (items: NonNullable<typeof tree>, level: number) => {
+      for (const it of items) {
+        let page = it.page ?? -1;
+        let y: number | null = null;
+        if (it.uri) {
+          try {
+            const d = doc.resolveLinkDestination(it.uri);
+            if (page < 0) page = d.page;
+            if (Number.isFinite(d.y) && (d.type === "XYZ" || d.type === "FitH" || d.type === "FitBH" || d.type === "FitR")) y = d.y;
+          } catch {
+            /* an outside link */
+          }
+        }
+        if (out.length < 5000) out.push({ title: (it.title ?? "").trim() || "(untitled)", page, y, level });
+        if (it.down?.length) walk(it.down, level + 1);
+      }
+    };
+    walk(tree, 0);
+    return out.length ? out : null;
+  }
+
+  /** Lines of text with their font size and weight (for finding headings). */
+  textLines(pages: number[]): TextLine[] {
+    const out: TextLine[] = [];
+    for (const index of pages) {
+      this.withPage(index, (page) => {
+        const st = page.toStructuredText("");
+        try {
+          const j = JSON.parse(st.asJSON()) as { blocks: { type: string; lines?: { text: string; bbox: { y: number }; font: { size: number; weight: string; name: string } }[] }[] };
+          j.blocks.forEach((b, bi) => {
+            const lines = b.lines ?? [];
+            lines.forEach((l, li) => {
+              if (!l.text.trim()) return;
+              const bold = l.font.weight === "bold" || /bold|black|heavy|semibold/i.test(l.font.name);
+              out.push({ page: index, y: l.bbox.y, size: l.font.size, bold, text: l.text, block: bi, first: li === 0, lines: lines.length });
+            });
+          });
+        } finally {
+          st.destroy();
+        }
+      });
+    }
+    return out;
+  }
+
+  // ---------- copy, cut, paste, erase ----------
+
+  /** What was copied last (kept when another file is opened). */
+  private clip: Clip | null = null;
+  /** Pastes in a row without a position go a little further down each time. */
+  private pasteRun = { page: -1, n: 0 };
+  /** Where the clip came from: pasting there again offsets it so it doesn't hide the original. */
+  private clipFrom = { file: -1, page: -1 };
+  private fileSerial = 0;
+
+  private setClip(c: Clip | null, page = -1): ClipInfo | null {
+    if (this.clip && this.clip !== c) this.clip.doc.destroy();
+    this.clip = c;
+    this.pasteRun = { page: -1, n: 0 };
+    this.clipFrom = { file: this.fileSerial, page };
+    return this.clipInfo();
+  }
+
+  clipInfo(): ClipInfo | null {
+    const c = this.clip;
+    return c ? { label: c.label, w: c.rect[2] - c.rect[0], h: c.rect[3] - c.rect[1], text: c.text } : null;
+  }
+
+  copyAnnot(index: number, annot: number): ClipInfo {
+    return this.withPage(index, (page) => this.setClip(copyAnnots(this.mupdf, this.requireDoc(), page, [annot]), index))!;
+  }
+
+  cutAnnot(index: number, annot: number): { clip: ClipInfo; annots: AnnotInfo[] } {
+    const clip = this.copyAnnot(index, annot);
+    return { clip, annots: this.op("Cut", index, (page) => void page.deleteAnnotation(page.getAnnotations()[annot])) };
+  }
+
+  /** Copy what's printed in a part of a page; null if there's nothing there. */
+  copyArea(index: number, rect: Rect): ClipInfo | null {
+    const c = this.withPage(index, (page) => copyArea(this.mupdf, page, rect));
+    return c ? this.setClip(c, index) : null;
+  }
+
+  /** Copy a part of a page and erase it there (one undo step); null if there's nothing there. */
+  cutArea(index: number, rect: Rect): { clip: ClipInfo; annots: AnnotInfo[] } | null {
+    const clip = this.copyArea(index, rect);
+    if (!clip) return null;
+    return { clip, annots: this.eraseArea(index, rect, "Cut") };
+  }
+
+  /** Erase what's printed in a part of a page. */
+  eraseArea(index: number, rect: Rect, name = "Erase"): AnnotInfo[] {
+    const doc = this.requireDoc();
+    this.journaled(name, () => this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect])), [index]);
+    this.forgetText(index);
+    return this.listAnnots(index);
+  }
+
+  /**
+   * Move a part of a page (cut + paste in one step) so its top-left lands at `topLeft` on
+   * page `to`. The moved part can then be moved again like an added item.
+   */
+  moveArea(index: number, rect: Rect, to: number, topLeft: Point): { from: AnnotInfo[]; to: AnnotInfo[]; index: number } | null {
+    const doc = this.requireDoc();
+    const c = this.withPage(index, (page) => copyArea(this.mupdf, page, rect));
+    if (!c) return null;
+    let nums: number[] = [];
+    try {
+      this.journaled("Move", () => {
+        this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect]));
+        nums = pasteClip(this.mupdf, doc, to, c, topLeft);
+      }, [index, to]);
+    } finally {
+      c.doc.destroy();
+    }
+    this.forgetText(index);
+    this.forgetText(to);
+    return { from: this.listAnnots(index), to: this.listAnnots(to), index: this.annotIndex(to, nums[0]) };
+  }
+
+  /**
+   * Paste what was copied on a page. Without a position it goes where it was copied from
+   * (a little lower each time when pasted again on the same page). Returns the page's
+   * annotations and the index of the first pasted one.
+   */
+  paste(index: number, topLeft: Point | null = null): { annots: AnnotInfo[]; index: number } {
+    const c = this.clip;
+    if (!c) throw new Error("Nothing copied yet");
+    return this.pasteOn(index, c, topLeft, "Paste");
+  }
+
+  /** Copy an added item and paste it right next to itself (the clipboard stays as it was). */
+  duplicateAnnot(index: number, annot: number): { annots: AnnotInfo[]; index: number } {
+    const c = this.withPage(index, (page) => copyAnnots(this.mupdf, this.requireDoc(), page, [annot]));
+    try {
+      const off = 12;
+      return this.pasteOn(index, c, [c.rect[0] + off, c.rect[1] + off], "Duplicate");
+    } finally {
+      c.doc.destroy();
+    }
+  }
+
+  private pasteOn(index: number, c: Clip, topLeft: Point | null, name: string): { annots: AnnotInfo[]; index: number } {
+    const doc = this.requireDoc();
+    let at = topLeft;
+    if (!at) {
+      const home = this.clipFrom.file === this.fileSerial && this.clipFrom.page === index ? 1 : 0;
+      this.pasteRun = this.pasteRun.page === index ? { page: index, n: this.pasteRun.n + 1 } : { page: index, n: home };
+      const off = 12 * this.pasteRun.n;
+      const b = this.pageInfo(index);
+      const w = c.rect[2] - c.rect[0];
+      const h = c.rect[3] - c.rect[1];
+      // keep it on the page
+      at = [Math.max(b.x, Math.min(c.rect[0] + off, b.x + b.w - w)), Math.max(b.y, Math.min(c.rect[1] + off, b.y + b.h - h))];
+    }
+    let nums: number[] = [];
+    this.journaled(name, () => {
+      nums = pasteClip(this.mupdf, doc, index, c, at!);
+    }, []);
+    this.forgetText(index);
+    return { annots: this.listAnnots(index), index: this.annotIndex(index, nums[0]) };
+  }
+
+  /** Place a picture (PNG/JPEG bytes) with its top-left at `at`, `w` × `h` points. */
+  addPicture(index: number, imageBytes: Uint8Array, rect: Rect): { annots: AnnotInfo[]; index: number } {
+    const annots = this.op("Paste picture", index, (page) => {
+      const img = new this.mupdf.Image(imageBytes);
+      try {
+        const a = page.createAnnotation("Stamp");
+        a.setRect(rect);
+        a.setStampImage(img);
+        a.update();
+      } finally {
+        img.destroy();
+      }
+    });
+    return { annots, index: annots.length ? annots[annots.length - 1].index : -1 };
+  }
+
+  /** The eraser: rub out along a brush path (radius r); `everything` also erases the page's own content. */
+  erase(index: number, path: Point[], r: number, everything: boolean): AnnotInfo[] {
+    const doc = this.requireDoc();
+    let content = false;
+    this.journaled("Erase", () => {
+      const res = eraseBrush(this.mupdf, doc, index, path, r, everything);
+      content = res.content;
+      return res.changed;
+    }, everything ? [index] : []);
+    if (content || everything) this.forgetText(index);
+    return this.listAnnots(index);
+  }
+
+  private annotIndex(index: number, objNum: number | undefined): number {
+    if (objNum === undefined) return -1;
+    return this.withPage(index, (page) => page.getAnnotations().findIndex((a) => a.getObject().asIndirect() === objNum));
+  }
+
+  private forgetText(index: number): void {
+    this.stext.get(index)?.destroy();
+    this.stext.delete(index);
+    this.lines.delete(index);
   }
 
   // ---------- live text editing ----------
@@ -919,6 +1160,7 @@ export class PdfEngine {
     const out = new this.mupdf.PDFDocument(tmp);
     tmp.destroy();
     out.rearrangePages(pages);
+    bakeAreas(out);
     const buf = out.saveToBuffer("garbage=compact,compress");
     const bytes = buf.asUint8Array().slice();
     buf.destroy();
@@ -1063,6 +1305,27 @@ export class PdfEngine {
   }
 }
 
+/** RGBA ImageData-ready pixels from a MuPDF pixmap with alpha (which is premultiplied). */
+function unpremultiply(pix: MuPDF.Pixmap): RGBAImage {
+  const w = pix.getWidth();
+  const h = pix.getHeight();
+  const src = pix.getPixels();
+  const stride = pix.getStride();
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const s = y * stride + x * 4;
+      const d = (y * w + x) * 4;
+      const al = src[s + 3];
+      const k = al ? 255 / al : 0;
+      data[d] = src[s] * k;
+      data[d + 1] = src[s + 1] * k;
+      data[d + 2] = src[s + 2] * k;
+      data[d + 3] = al;
+    }
+  return { width: w, height: h, data };
+}
+
 interface UndoStep {
   name: string;
   /** The document then: saved bytes, or (for redo, and undo after redo) the document itself. */
@@ -1074,20 +1337,3 @@ interface UndoStep {
   size: number;
 }
 
-/** Translate any kind of annotation by (dx, dy) in page space. */
-function shiftAnnot(a: MuPDF.PDFAnnotation, dx: number, dy: number): void {
-  if (a.hasInkList()) {
-    a.setInkList(a.getInkList().map((s) => s.map(([x, y]) => [x + dx, y + dy] as Point)));
-  } else if (a.hasQuadPoints()) {
-    a.setQuadPoints(a.getQuadPoints().map((q) => q.map((v, i) => v + (i % 2 ? dy : dx)) as Quad));
-  } else if (a.hasLine()) {
-    const [p, q] = a.getLine();
-    a.setLine([p[0] + dx, p[1] + dy], [q[0] + dx, q[1] + dy]);
-  } else if (a.hasVertices()) {
-    a.setVertices(a.getVertices().map(([x, y]) => [x + dx, y + dy] as Point));
-  } else if (a.hasRect()) {
-    const r = a.getRect();
-    a.setRect([r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy]);
-  }
-  a.update();
-}

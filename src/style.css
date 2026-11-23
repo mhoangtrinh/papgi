@@ -3353,3 +3353,87 @@ body.side-resizing .viewer {
 .link-btn:hover {
   text-decoration: underline;
 }
+
+/* ---------- select area, eraser, paste ---------- */
+
+.pages[data-tool="area"] .page {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.pages[data-tool="eraser"] .page {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+@media (pointer: fine) {
+  .pages[data-tool="eraser"] .page {
+    cursor: none;
+  }
+}
+
+.areasel {
+  fill: var(--accent);
+  fill-opacity: 0.06;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+
+.areasel.drawing {
+  fill-opacity: 0.1;
+}
+
+.erase-trail {
+  fill: none;
+  stroke: #e5484d;
+  stroke-opacity: 0.28;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.erase-cursor {
+  fill: rgba(255, 255, 255, 0.25);
+  stroke: #1c1c1c;
+  stroke-opacity: 0.7;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* a pasted or moved area is white where it was cut: show it on dark backgrounds too */
+.area-ghost {
+  background: transparent;
+}
+
+.float-hint {
+  padding: 0 6px 0 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.floating > button.labelled {
+  display: flex;
+  gap: 6px;
+  width: auto;
+  padding: 0 12px 0 8px;
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+}
+
+.seg.text-seg button {
+  width: auto;
+  padding: 0 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.options .btn.small .ic {
+  width: 16px;
+  height: 16px;
+}

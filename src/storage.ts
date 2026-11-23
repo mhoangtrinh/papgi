@@ -3,7 +3,7 @@ import type { Point } from "./core/geometry";
 import { cleanOcrLangs, DEFAULT_OCR_LANGS } from "./core/ocrlangs";
 
 export type Theme = "auto" | "light" | "dark";
-export type Tool = "select" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign";
+export type Tool = "select" | "area" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign" | "eraser";
 export type MarkKind = "Highlight" | "Underline" | "StrikeOut";
 export type ShapeKind = "Square" | "Circle" | "Arrow";
 
@@ -42,6 +42,12 @@ export interface Settings {
   ocrLangs: string[];
   /** Write edited recognised text in a serif font. */
   ocrSerif: boolean;
+  /** Eraser size (diameter, points). */
+  eraserSize: number;
+  /** The eraser also erases what's printed on the page (not just added items). */
+  eraserAll: boolean;
+  /** The sidebar shows the table of contents instead of the pages. */
+  sideToc: boolean;
 }
 
 const KEY = "papgi.settings.v1";
@@ -52,12 +58,14 @@ export const DEFAULTS: Settings = {
   tool: "select",
   colors: {
     select: "#ffd400",
+    area: "#2f6fed",
     edit: "#1c1c1c",
     highlight: "#ffd400",
     pen: "#2f6fed",
     text: "#1c1c1c",
     shape: "#e5484d",
     sign: "#1a3a8f",
+    eraser: "#1c1c1c",
   },
   penWidth: 2,
   shapeWidth: 2,
@@ -72,6 +80,9 @@ export const DEFAULTS: Settings = {
   signatureWidth: 150,
   ocrLangs: [...DEFAULT_OCR_LANGS],
   ocrSerif: false,
+  eraserSize: 16,
+  eraserAll: false,
+  sideToc: false,
 };
 
 export function loadSettings(): Settings {
@@ -102,6 +113,9 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   if (!out.signatures.some((x) => x.id === out.activeSignature)) out.activeSignature = out.signatures[0]?.id ?? null;
   out.ocrLangs = cleanOcrLangs(out.ocrLangs);
   out.ocrSerif = out.ocrSerif === true;
+  out.eraserAll = out.eraserAll === true;
+  out.sideToc = out.sideToc === true;
+  out.eraserSize = typeof out.eraserSize === "number" && out.eraserSize >= 2 && out.eraserSize <= 80 ? out.eraserSize : DEFAULTS.eraserSize;
   out.sidebarZoom = typeof out.sidebarZoom === "number" && out.sidebarZoom > 0 && out.sidebarZoom < 4000 ? Math.round(out.sidebarZoom) : 0;
   out.sidebarWidth = typeof out.sidebarWidth === "number" && out.sidebarWidth > 0 && out.sidebarWidth < 4000 ? Math.round(out.sidebarWidth) : 0;
   return out;
