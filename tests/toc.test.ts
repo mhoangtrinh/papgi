@@ -68,6 +68,14 @@ describe("table of contents from headings", () => {
     expect(currentItem(items, 2, 100)).toBe(0);
     expect(currentItem(items, 2)).toBe(1);
     expect(currentItem(items, 5)).toBe(1);
+    // two columns: the right column's heading (higher up) isn't reached while reading the left one
+    const cols = [
+      { title: "Intro", page: 0, y: 100, level: 0 },
+      { title: "Method", page: 0, y: 400, level: 0 },
+      { title: "Results", page: 0, y: 80, level: 0 },
+    ];
+    expect(currentItem(cols, 0, 300)).toBe(0);
+    expect(currentItem(cols, 1)).toBe(2);
   });
 
   it("works on a real paper", () => {

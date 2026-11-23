@@ -27,6 +27,8 @@ export interface ViewerHost {
   recognize(): void;
   /** Something was copied (or the clipboard emptied). */
   clipChanged(info: ClipInfo | null): void;
+  /** The view scrolled. */
+  scrolled?(): void;
   saveSettings(): void;
 }
 
@@ -117,6 +119,7 @@ export class Viewer {
     this.el.addEventListener("scroll", () => {
       this.updateCurrent();
       this.schedule();
+      this.host.scrolled?.();
     }, { passive: true });
     this.el.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     this.pagesEl.addEventListener("pointerdown", (e) => this.onDown(e));
@@ -404,6 +407,14 @@ export class Viewer {
 
   currentPage(): number {
     return this.current;
+  }
+
+  /** Where the reader is: the page and height (page space) a third of the way down the view. */
+  readingPlace(): { page: number; y: number } {
+    const pv = this.pages[this.current];
+    if (!pv) return { page: 0, y: 0 };
+    const vr = this.el.getBoundingClientRect();
+    return { page: pv.index, y: this.toPagePoint(pv, { clientX: vr.left, clientY: vr.top + vr.height * 0.35 })[1] };
   }
 
   // ---------- tools ----------

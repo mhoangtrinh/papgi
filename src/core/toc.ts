@@ -124,11 +124,17 @@ export function headingsToc(all: TextLine[], pageCount: number): TocItem[] {
   return items.length >= 2 ? items : [];
 }
 
-/** Index of the item for a reading position (the last one at or before it). */
+/**
+ * Index of the item for a reading position: going through the items in reading order,
+ * the last one before the first that comes after the position (on a page with two
+ * columns, a heading at the top of the right column hasn't been reached yet).
+ */
 export function currentItem(items: TocItem[], page: number, y = Infinity): number {
   let cur = -1;
-  items.forEach((it, i) => {
-    if (it.page < page || (it.page === page && (it.y ?? 0) <= y)) cur = i;
-  });
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.page > page || (it.page === page && (it.y ?? 0) > y)) break;
+    cur = i;
+  }
   return cur;
 }

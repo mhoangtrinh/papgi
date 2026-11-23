@@ -77,6 +77,20 @@ export class App {
           this.settings.sidebarZoom = z;
           saveSettings(this.settings);
         },
+        goToPlace: (p, y) => {
+          this.viewer.scrollToPage(p, true, y);
+          // on a phone the panel covers the page: get it out of the way
+          if (window.matchMedia("(max-width: 760px)").matches) {
+            this.settings.sidebar = false;
+            this.sidebar.show(false);
+            this.updateUi();
+          }
+        },
+        tabChanged: (toc) => {
+          this.settings.sideToc = toc;
+          saveSettings(this.settings);
+        },
+        readingPlace: () => this.viewer?.readingPlace() ?? { page: 0, y: 0 },
       },
       main,
     );
@@ -92,6 +106,7 @@ export class App {
         busy: (p) => this.busy(p),
         recognize: () => void this.recognize(),
         saveSettings: () => saveSettings(this.settings),
+        scrolled: () => this.sidebar.scrolled(),
         clipChanged: () => {
           if (this.settings.tool === "select" || this.settings.tool === "area") this.renderOptions();
         },
@@ -101,6 +116,7 @@ export class App {
     this.viewer.el.append(this.$("#empty"));
     // On phones the pages panel covers the page, so start with it closed there.
     if (window.matchMedia("(max-width: 760px)").matches) this.settings.sidebar = false;
+    this.sidebar.setTab(this.settings.sideToc);
     this.sidebar.show(this.settings.sidebar);
     addEventListener("papgi-about", () => this.menuAction("about"));
     this.sidebar.setTile(this.settings.sidebarZoom);
@@ -159,7 +175,7 @@ export class App {
             ${TOOL_LIST.map((t) => `<button data-goto="${t.id}">${icon(t.icon)}${t.id === "open" ? "Open another PDF" : t.name}${FLOWS[t.id]?.takes === "pdf" ? `<span class="muted small">this PDF</span>` : ""}</button>`).join("")}
           </div>
         </div>
-        <button class="icon-btn" id="btn-sidebar" title="Pages panel">${icon("sidebar")}</button>
+        <button class="icon-btn" id="btn-sidebar" title="Pages and contents panel">${icon("sidebar")}</button>
         <div class="menu-wrap">
           <button class="menu-label" id="btn-file" aria-haspopup="menu" title="Open, save, print">${icon("open", "ml-icon")}<span>File</span></button>
           <div class="menu left" id="file-menu" role="menu" hidden>

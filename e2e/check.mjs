@@ -557,6 +557,31 @@ try {
   check("undo brings it back to page 1", (await engine("listAnnots", 0)).some((x) => x.kind === "Ink") && !(await engine("listAnnots", 1)).some((x) => x.kind === "Ink"));
   await page.screenshot({ path: shots + "desktop-pages-light.png" });
 
+  // --- table of contents in the sidebar ---
+  for (const [name, want, kind] of [["report.pdf", 2, "bookmarks"], ["paper.pdf", 8, "headings"]]) {
+    await page.evaluate(async (n) => {
+      window.papgi["dirty"] = false;
+      const r = await fetch("./samples/" + n);
+      await window.papgi.open({ name: "contents-" + n, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    }, name);
+    await waitRendered();
+    if (!(await page.locator('.side-tabs [data-tab="toc"].on').count())) await page.click('.side-tabs [data-tab="toc"]');
+    await page.waitForSelector(".toc-item", { timeout: 10000 }).catch(() => {});
+    const items = await page.locator(".toc-item").allTextContents();
+    check(`contents panel: ${kind} of ${name}`, items.length === want, items.join(" | ").slice(0, 160));
+  }
+  await page.evaluate(() => window.papgi.viewer.setZoom(1.5));
+  await page.waitForTimeout(300);
+  const top0 = await page.evaluate(() => document.querySelector(".viewer").scrollTop);
+  await page.locator(".toc-item", { hasText: "References" }).click();
+  await page.waitForTimeout(900);
+  const top1 = await page.evaluate(() => document.querySelector(".viewer").scrollTop);
+  check("clicking a heading scrolls to it", top1 > top0 + 200, `${top0} -> ${top1}`);
+  check("the section in view is marked", (await page.locator(".toc-item.current").count()) === 1);
+  await page.screenshot({ path: shots + "desktop-contents-light.png" });
+  await page.click('.side-tabs [data-tab="pages"]');
+  await page.waitForTimeout(200);
+
   // --- copy, cut, paste, duplicate · select area · eraser ---
   await ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: URL_ });
   await page.evaluate(async () => {
@@ -1200,11 +1225,11 @@ try {
     const zsaved = await page.evaluate(() => JSON.parse(localStorage.getItem("papgi.settings.v1")).sidebarZoom);
     check("pages panel: zoom out gives more columns, Ctrl+wheel zooms in, remembered", c1 > c0 && tw2 > tw1 && Math.abs(zsaved - tw2) < 2, `${c0}->${c1} cols, ${tw1}->${tw2}px, saved ${zsaved}`);
     await page.screenshot({ path: shots + "desktop-pages-panel-zoom-light.png" });
-    // drag page 5 in front of page 1 in the grid
+    // drag page 4 in front of page 1 in the grid
     const t1 = await page.locator(".thumb").nth(0).boundingBox();
-    await page.locator(".thumb").nth(4).dragTo(page.locator(".thumb").nth(0), { targetPosition: { x: 8, y: t1.height / 2 } });
+    await page.locator(".thumb").nth(3).dragTo(page.locator(".thumb").nth(0), { targetPosition: { x: 8, y: t1.height / 2 } });
     await page.waitForTimeout(600);
-    check("pages panel (wide): drag reorders left to right", (await engine("pageText", 0)).includes("page 5 of 5"));
+    check("pages panel (wide): drag reorders left to right", (await engine("pageText", 0)).includes("page 4 of 5"));
     // arrows move by rows
     await page.locator(".thumb").nth(0).click();
     await page.waitForTimeout(500);

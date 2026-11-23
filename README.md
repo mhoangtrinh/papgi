@@ -45,7 +45,11 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
 | Print | Ctrl+P or File → Print: prints the document as it is now (edits, annotations, signatures, filled forms). Chrome/Edge use their PDF print dialog (sharp vector output); iPhone, Safari and Firefox print the rendered pages (about 200 dpi). |
 | Pages | **Pages** button: all pages as a grid to drag into order, turn, remove, insert other PDFs, add blank pages (double-click a page to go to it). Also in the sidebar: reorder, rotate, delete, insert, save pages as a new PDF |
-| Edit | Move, recolour, delete annotations; full undo/redo for everything |
+| Edit | Move, recolour, copy, duplicate, delete annotations; full undo/redo for everything |
+| **Copy & paste** | Ctrl+C / Ctrl+X / Ctrl+V for anything you added (text boxes, drawings, signatures, pictures), also into another PDF; Ctrl+D duplicates. Pastes go where the mouse is (or a long press / right-click → Paste; the Paste button on phones). Screenshots and pictures from other apps paste as pictures, text as a text box |
+| **Select area** | Drag a box around any part of a page, then **Copy**, **Cut**, **Erase**, or drag it somewhere else (also onto another page). The copy is the real content (text stays text, drawings stay sharp), not a picture; letters belong where their middle is. A cut is filled with the colour around it. Moved and pasted parts can be moved again; they become ordinary page content when the file is saved |
+| **Eraser** | *Added items*: rubs out drawings where you pass (the rest of the stroke stays) and removes highlights, shapes, text boxes it touches. *Everything*: also really removes the PDF's own text, pictures and lines under the brush (not just covered up). Size slider |
+| **Contents** | Sidebar → *Contents*: the PDF's bookmarks, or, when it has none, its headings (found from their size, bold and numbering; running headers and table headers are skipped). Click to jump; the section you're reading is marked |
 | **Scans (OCR)** | Recognize text on scanned pages (Document → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 
 Planned next: bold/italic changes while editing text.
@@ -56,15 +60,16 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 
 | Key | Action |
 |---|---|
-| V / E / H / P / T / R / S | Select, Edit text, Highlight, Pen, Text box, Shapes, Sign |
+| V / A / E / H / P / T / R / X / S | Select, Select area, Edit text, Highlight, Pen, Text box, Shapes, Eraser, Sign |
 | Ctrl+P | Print |
 | Edit text: Ctrl+Enter / Esc | Finish / cancel editing a paragraph (clicking outside also finishes) |
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, Save, Download a copy |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+F | Search (Enter / Shift+Enter to step) |
-| Ctrl+C | Copy selected text |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy, cut, paste (selected text, an item, an area; pictures and text from other apps) |
+| Ctrl+D | Duplicate the selected item |
 | Ctrl + wheel, Ctrl +/−, Ctrl+0 | Zoom, fit width |
-| Delete | Delete the selected annotation (or selected pages in the sidebar) |
+| Delete | Delete the selected annotation, erase the selected area (or delete selected pages in the sidebar) |
 | Double-click a text box | Edit it (Ctrl+Enter to finish, Esc to cancel) |
 | Drag an annotation | Move it, also onto another page |
 
@@ -103,6 +108,10 @@ src/
   engine/toword.ts   PDF -> Word: text, layout and pictures (unit-tested in Node)
   core/docx.ts       small .docx writer (sections, columns, paragraphs, tabs, pictures)
   engine/tools.ts    merge, split, images <-> PDF, compress (work on copies; unit-tested in Node)
+  engine/clip.ts     copy/cut/paste of items and page areas, erasing, baking pasted areas on save
+  core/erase.ts      eraser geometry: brush coverage, rubbing strokes (pure, tested)
+  core/toc.ts        table of contents from headings (pure, tested)
+  ui/clipboard.ts    the system clipboard (text, pictures)
   hub/registry.ts    the list of tools
   hub/flows.ts       each stand-alone tool's options and what it runs
   hub/hub.ts         start screen (tools, recent files) and the tool pages
@@ -112,7 +121,7 @@ src/
   core/exif.ts       camera orientation of JPEG photos (pure, tested)
   recent.ts          recent files in IndexedDB
   ui/viewer.ts       pages, rendering, tools, form fields, search highlights
-  ui/sidebar.ts      thumbnails and page actions
+  ui/sidebar.ts      thumbnails, page actions, table of contents
   ui/dialogs.ts      toasts and modals
   ui/signature-dialog.ts  draw or picture signature
   ui/text-editor.ts  the in-page paragraph editor

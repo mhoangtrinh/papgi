@@ -3,6 +3,7 @@ import type { DocInfo } from "../engine/engine";
 import type { Engine } from "../engine/client";
 import { type PageSelection, clickPage, emptySelection, moveOrder } from "../core/pages";
 import { icon } from "./icons";
+import { currentItem, headingsToc, type TocItem } from "../core/toc";
 
 export interface SidebarHost {
   engine: Engine;
@@ -19,6 +20,12 @@ export interface SidebarHost {
   resized(width: number): void;
   /** The page size in the panel was zoomed (px). */
   zoomed(size: number): void;
+  /** Go to a place in the document (a table of contents entry). */
+  goToPlace(page: number, y: number | null): void;
+  /** Pages or table of contents was chosen. */
+  tabChanged(toc: boolean): void;
+  /** Where the reader is (page and height on it). */
+  readingPlace(): { page: number; y: number };
 }
 
 interface Thumb {
@@ -79,6 +86,11 @@ export class Sidebar {
     this.el = document.createElement("aside");
     this.el.className = "sidebar";
     this.el.innerHTML = `
+      <div class="side-tabs" role="tablist" aria-label="Show">
+        <button role="tab" data-tab="pages" class="on" aria-selected="true" title="Pages">${icon("pages")}<span>Pages</span></button>
+        <button role="tab" data-tab="toc" aria-selected="false" title="Contents: bookmarks or headings">${icon("toc")}<span>Contents</span></button>
+      </div>
+      <div class="toc" hidden><div class="toc-note muted"></div><div class="toc-list" role="list"></div></div>
       <div class="side-actions" role="toolbar" aria-label="Page actions">
         <button class="icon-btn" data-act="rotL" title="Rotate left">${icon("rotL")}</button>
         <button class="icon-btn" data-act="rotR" title="Rotate right">${icon("rotR")}</button>
@@ -91,7 +103,19 @@ export class Sidebar {
       <div class="thumbs" tabindex="0" aria-label="Pages"></div>
       <div class="side-resize" role="separator" aria-orientation="vertical" aria-label="Resize the pages panel" tabindex="0" title="Drag to resize (wider shows pages side by side). Double-click: back to normal"></div>`;
     this.list = this.el.querySelector(".thumbs")!;
+    this.tocEl = this.el.querySelector(".toc")!;
     mount.append(this.el);
+    this.el.querySelector(".side-tabs")!.addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
+      if (!b) return;
+      this.setTab(b.dataset.tab === "toc");
+      host.tabChanged(this.tocOn);
+    });
+    this.tocEl.addEventListener("click", (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>(".toc-item");
+      const it = b && this.toc?.items[Number(b.dataset.i)];
+      if (it) host.goToPlace(it.page, it.y);
+    });
     this.bindResize(this.el.querySelector(".side-resize")!);
     // (a smaller window squeezes the panel; the chosen width comes back when there's room)
     addEventListener("resize", () => this.wanted && this.setWidth(this.wanted, false));
@@ -370,6 +394,7 @@ export class Sidebar {
   setDocument(info: DocInfo | null, select: number[] = []): void {
     this.observer.disconnect();
     this.info = info;
+    this.forgetToc();
     this.list.replaceChildren();
     this.thumbs = [];
     this.sel = { selected: select, anchor: select[0] ?? -1 };
@@ -403,10 +428,17 @@ export class Sidebar {
     const list = pages === "all" ? this.thumbs : pages.map((i) => this.thumbs[i]).filter(Boolean);
     for (const t of list) t.version++;
     this.schedule();
+    // headings may have changed (bookmarks don't change with edits)
+    if (this.toc && !this.toc.bookmarks) {
+      this.toc.stale = true;
+      clearTimeout(this.tocTimer);
+      if (this.tocOn) this.tocTimer = window.setTimeout(() => void this.loadToc(), 800);
+    }
   }
 
   setCurrent(i: number): void {
     this.current = i;
+    this.paintTocCurrent();
     this.thumbs.forEach((t, k) => t.el.classList.toggle("current", k === i));
     const t = this.thumbs[i];
     if (t && !this.el.hidden) {
@@ -469,6 +501,107 @@ export class Sidebar {
     if (on) {
       this.layout();
       this.schedule();
+      if (this.tocOn) void this.loadToc();
+    }
+  }
+
+  // ---------- table of contents ----------
+
+  private tocEl: HTMLElement;
+  private tocOn = false;
+  private toc: { items: TocItem[]; bookmarks: boolean; stale: boolean } | null = null;
+  private tocJob = 0;
+  private tocTimer = 0;
+
+  /** Show the table of contents (or the pages). */
+  setTab(toc: boolean): void {
+    this.tocOn = toc;
+    this.el.classList.toggle("show-toc", toc);
+    this.el.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((b) => {
+      const on = (b.dataset.tab === "toc") === toc;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", String(on));
+    });
+    this.tocEl.hidden = !toc;
+    if (toc) void this.loadToc();
+    else {
+      this.layout();
+      this.schedule();
+    }
+  }
+
+  private forgetToc(): void {
+    this.tocJob++;
+    this.toc = null;
+    clearTimeout(this.tocTimer);
+    this.tocEl.querySelector(".toc-list")!.replaceChildren();
+    this.tocEl.querySelector(".toc-note")!.textContent = "";
+    if (this.tocOn && this.info && !this.el.hidden) void this.loadToc();
+  }
+
+  /** The PDF's bookmarks, or else entries made from its headings (read a few pages at a time). */
+  private async loadToc(): Promise<void> {
+    const info = this.info;
+    if (!info || (this.toc && !this.toc.stale)) return;
+    const job = ++this.tocJob;
+    const note = this.tocEl.querySelector(".toc-note")!;
+    try {
+      const marks = await this.host.engine.outline();
+      if (job !== this.tocJob) return;
+      if (marks && marks.length >= 2) {
+        this.toc = { items: marks, bookmarks: true, stale: false };
+        note.textContent = "";
+        return this.paintToc();
+      }
+      if (!this.toc) note.textContent = "Looking for headings…";
+      const lines = [];
+      const n = info.pageCount;
+      for (let from = 0; from < n; from += 20) {
+        const pages = Array.from({ length: Math.min(20, n - from) }, (_, k) => from + k);
+        lines.push(...(await this.host.engine.textLines(pages)));
+        if (job !== this.tocJob) return;
+        if (!this.toc && n > 40) note.textContent = `Looking for headings… page ${Math.min(n, from + 20)} of ${n}`;
+      }
+      this.toc = { items: headingsToc(lines, n), bookmarks: false, stale: false };
+      note.textContent = this.toc.items.length
+        ? "This PDF has no bookmarks: these are its headings."
+        : "No bookmarks or headings found in this PDF.";
+      this.paintToc();
+    } catch {
+      if (job === this.tocJob) note.textContent = "Couldn't read the contents of this PDF.";
+    }
+  }
+
+  private paintToc(): void {
+    const list = this.tocEl.querySelector(".toc-list")!;
+    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    list.innerHTML = (this.toc?.items ?? [])
+      .map((it, i) => `<button class="toc-item" role="listitem" data-i="${i}" style="--lv:${Math.min(it.level, 5)}" title="${esc(it.title).replace(/"/g, "&quot;")}"><span class="toc-title">${esc(it.title)}</span>${it.page >= 0 ? `<span class="toc-page">${it.page + 1}</span>` : ""}</button>`)
+      .join("");
+    this.paintTocCurrent();
+  }
+
+  /** The view scrolled: follow the section being read. */
+  scrolled(): void {
+    if (!this.tocOn || this.tocFrame) return;
+    this.tocFrame = requestAnimationFrame(() => {
+      this.tocFrame = 0;
+      this.paintTocCurrent();
+    });
+  }
+  private tocFrame = 0;
+
+  private paintTocCurrent(): void {
+    if (!this.toc || !this.tocOn) return;
+    const at = this.host.readingPlace();
+    const cur = currentItem(this.toc.items, at.page, at.y);
+    const items = this.tocEl.querySelectorAll<HTMLElement>(".toc-item");
+    items.forEach((el, i) => el.classList.toggle("current", i === cur));
+    const el = items[cur];
+    if (el && !this.el.hidden) {
+      const lr = this.tocEl.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      if (r.top < lr.top || r.bottom > lr.bottom) el.scrollIntoView({ block: "nearest" });
     }
   }
 }
