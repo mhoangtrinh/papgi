@@ -516,8 +516,15 @@ export function eraseBrush(m: M, doc: MuPDF.PDFDocument, index: number, path: Po
           a.setQuadPoints(keep);
           a.update();
         }
-      } else if (type === "Square" || type === "Circle") {
-        if (!brushTouchesOutline(path, r, b, type === "Circle", w)) continue;
+      } else if (type === "Square" || type === "Circle" || type === "Polygon") {
+        // a filled shape is touched anywhere on it, an empty one only on its outline
+        const filled = a.hasInteriorColor() && a.getInteriorColor().length > 0;
+        let hit = filled;
+        if (!filled && type === "Polygon") {
+          const v = a.getVertices();
+          hit = v.some((p, i) => brushTouchesSegment(path, r + w / 2, p, v[(i + 1) % v.length]));
+        } else if (!filled) hit = brushTouchesOutline(path, r, b, type === "Circle", w);
+        if (!hit) continue;
         changed = true;
         gone.push(a);
       } else if (a.hasLine()) {

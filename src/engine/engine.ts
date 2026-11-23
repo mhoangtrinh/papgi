@@ -18,6 +18,7 @@ export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
 export type { ClipInfo } from "./clip";
 import type { TextLine, TocItem } from "../core/toc";
+import { dashPattern, isLineKind, shapeGeometry, type LineStyle, type ShapeKind, type ShapeStyle } from "../core/shapes";
 
 type M = typeof MuPDF;
 export type RGB = [number, number, number];
@@ -39,7 +40,7 @@ export interface DocInfo {
   dirty: boolean;
 }
 
-export type AnnotKind = "Highlight" | "Underline" | "StrikeOut" | "Squiggly" | "Ink" | "FreeText" | "Square" | "Circle" | "Line" | "Text" | "Stamp" | "Other";
+export type AnnotKind = "Highlight" | "Underline" | "StrikeOut" | "Squiggly" | "Ink" | "FreeText" | "Square" | "Circle" | "Line" | "Polygon" | "Text" | "Stamp" | "Other";
 
 export interface AnnotInfo {
   index: number; // index into page.getAnnotations()
@@ -50,6 +51,8 @@ export interface AnnotInfo {
   fontSize?: number;
   /** A pasted part of a page (becomes page content when saved). */
   area?: boolean;
+  /** Shapes: what kind and how they're drawn. */
+  shape?: { kind: ShapeKind } & ShapeStyle;
 }
 
 export type WidgetKind = "text" | "checkbox" | "radio" | "combobox" | "listbox" | "button" | "signature";
@@ -465,11 +468,12 @@ export class PdfEngine {
       page.getAnnotations().forEach((a, i) => {
         const type = a.getType();
         if (SKIP_TYPES.has(type)) return;
-        const kind = (["Highlight", "Underline", "StrikeOut", "Squiggly", "Ink", "FreeText", "Square", "Circle", "Line", "Text", "Stamp"].includes(type)
+        const kind = (["Highlight", "Underline", "StrikeOut", "Squiggly", "Ink", "FreeText", "Square", "Circle", "Line", "Polygon", "Text", "Stamp"].includes(type)
           ? type
           : "Other") as AnnotKind;
         const info: AnnotInfo = { index: i, kind, rect: a.getBounds() as Rect, color: [...a.getColor()], contents: a.getContents() };
         if (kind === "Stamp" && isArea(a)) info.area = true;
+        if (kind === "Square" || kind === "Circle" || kind === "Polygon" || kind === "Line") info.shape = shapeInfo(a, kind);
         if (kind === "FreeText") {
           try {
             info.fontSize = a.getDefaultAppearance().size;
@@ -508,24 +512,36 @@ export class PdfEngine {
   }
 
   addShape(index: number, kind: "Square" | "Circle", rect: Rect, color: RGB, width: number): AnnotInfo[] {
-    return this.op("Shape", index, (page) => {
-      const a = page.createAnnotation(kind);
-      a.setRect(rect);
-      a.setColor(color);
-      a.setInteriorColor([]);
-      a.setBorderWidth(width);
-      a.update();
-    });
+    return this.drawShape(index, kind, [rect[0], rect[1]], [rect[2], rect[3]], { color, fill: null, width, line: "solid", opacity: 1 });
   }
 
   addArrow(index: number, from: Point, to: Point, color: RGB, width: number): AnnotInfo[] {
-    return this.op("Arrow", index, (page) => {
-      const a = page.createAnnotation("Line");
-      a.setLine(from, to);
-      a.setLineEndingStyles("None", "OpenArrow");
-      a.setColor(color);
-      a.setBorderWidth(width);
-      a.update();
+    return this.drawShape(index, "Arrow", from, to, { color, fill: null, width, line: "solid", opacity: 1 });
+  }
+
+  /** Draw a shape dragged from a to b (`square`: keep it square / snap the line). */
+  drawShape(index: number, kind: ShapeKind, a: Point, b: Point, style: ShapeStyle, square = false): AnnotInfo[] {
+    const g = shapeGeometry(kind, a, b, square);
+    return this.op(isLineKind(kind) ? (kind === "Line" ? "Line" : "Arrow") : "Shape", index, (page) => {
+      const type = kind === "Square" || kind === "Circle" ? kind : isLineKind(kind) ? "Line" : "Polygon";
+      const an = page.createAnnotation(type);
+      if (type === "Line") {
+        an.setLine(g.points[0], g.points[1]);
+        an.setLineEndingStyles(kind === "DoubleArrow" ? "OpenArrow" : "None", kind === "Line" ? "None" : "OpenArrow");
+      } else if (type === "Polygon") an.setVertices(g.points);
+      else an.setRect(g.rect);
+      applyShapeStyle(an, style);
+      an.update();
+    });
+  }
+
+  /** Change how a shape looks (only the parts given). */
+  styleAnnot(index: number, annot: number, style: Partial<ShapeStyle>): AnnotInfo[] {
+    return this.op("Style", index, (page) => {
+      const an = page.getAnnotations()[annot];
+      if (!an) throw new Error("No such annotation");
+      applyShapeStyle(an, style);
+      an.update();
     });
   }
 
@@ -1303,6 +1319,60 @@ export class PdfEngine {
     this.clearText();
     return this.info();
   }
+}
+
+/** Set (parts of) a shape's style on an annotation. */
+function applyShapeStyle(a: MuPDF.PDFAnnotation, st: Partial<ShapeStyle>): void {
+  const type = a.getType();
+  const fillable = type === "Square" || type === "Circle" || type === "Polygon";
+  // (read before the width changes: the dashes say dashed or dotted relative to it)
+  const lineBefore = lineStyleOf(a);
+  if (st.width !== undefined) a.setBorderWidth(st.width);
+  if (st.color !== undefined) {
+    // (a line can't be without its line)
+    const c = st.color ?? (fillable ? null : [0, 0, 0]);
+    a.setColor((c ?? []) as MuPDF.AnnotColor);
+  }
+  if (st.fill !== undefined && fillable) a.setInteriorColor((st.fill ?? []) as MuPDF.AnnotColor);
+  if (st.opacity !== undefined) a.setOpacity(Math.max(0.1, Math.min(1, st.opacity)));
+  if (st.line !== undefined || st.width !== undefined) {
+    const line = st.line ?? lineBefore;
+    const cloudy = line === "cloudy" && fillable;
+    const dash = dashPattern(line, a.getBorderWidth());
+    if (dash) {
+      a.setBorderStyle("Dashed");
+      a.setBorderDashPattern(dash);
+    } else {
+      a.setBorderStyle("Solid");
+      a.clearBorderDash();
+    }
+    if (fillable) {
+      a.setBorderEffect(cloudy ? "Cloudy" : "None");
+      if (cloudy) a.setBorderEffectIntensity(1);
+    }
+  }
+  // fill only: no outline drawn
+  if (fillable && !a.getColor().length && !a.getInteriorColor().length) a.setInteriorColor([0.5, 0.5, 0.5]);
+}
+
+function lineStyleOf(a: MuPDF.PDFAnnotation): LineStyle {
+  if (a.hasBorderEffect() && a.getBorderEffect() === "Cloudy") return "cloudy";
+  if (a.getBorderStyle() !== "Dashed") return "solid";
+  const d = a.getBorderDashPattern() as number[];
+  const w = a.getBorderWidth();
+  return d.length && d[0] <= Math.max(w, 0.5) * 1.01 ? "dotted" : "dashed";
+}
+
+function shapeInfo(a: MuPDF.PDFAnnotation, type: string): { kind: ShapeKind } & ShapeStyle {
+  let kind: ShapeKind = type as ShapeKind;
+  if (type === "Polygon") kind = a.getVertices().length === 3 ? "Triangle" : "Diamond";
+  else if (type === "Line") {
+    const e = a.getLineEndingStyles();
+    kind = e.start !== "None" && e.end !== "None" ? "DoubleArrow" : e.start !== "None" || e.end !== "None" ? "Arrow" : "Line";
+  }
+  const c = a.getColor();
+  const f = a.hasInteriorColor() ? a.getInteriorColor() : [];
+  return { kind, color: c.length ? [...c] : null, fill: f.length ? [...f] : null, width: a.getBorderWidth(), line: lineStyleOf(a), opacity: a.getOpacity() };
 }
 
 /** RGBA ImageData-ready pixels from a MuPDF pixmap with alpha (which is premultiplied). */

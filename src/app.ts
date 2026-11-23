@@ -8,6 +8,7 @@ import { toast, askPassword, confirmDialog, showShortcuts, modal } from "./ui/di
 import { signatureDialog } from "./ui/signature-dialog";
 import { ocrDialog, runOcr } from "./ui/ocr";
 import { Organize } from "./ui/organize";
+import { ShapeOptions } from "./ui/shape-options";
 import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, friendlyError, type OpenedFile } from "./files";
@@ -33,6 +34,7 @@ const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
 
 export class App {
   engine: Engine;
+  private shapeOpts!: ShapeOptions;
   settings: Settings = loadSettings();
   private viewer!: Viewer;
   private sidebar!: Sidebar;
@@ -107,6 +109,9 @@ export class App {
         recognize: () => void this.recognize(),
         saveSettings: () => saveSettings(this.settings),
         scrolled: () => this.sidebar.scrolled(),
+        selectionChanged: () => {
+          if (this.settings.tool === "select" || this.settings.tool === "area") this.renderOptions();
+        },
         clipChanged: () => {
           if (this.settings.tool === "select" || this.settings.tool === "area") this.renderOptions();
         },
@@ -114,6 +119,13 @@ export class App {
       main,
     );
     this.viewer.el.append(this.$("#empty"));
+    this.shapeOpts = new ShapeOptions({
+      settings: this.settings,
+      save: () => saveSettings(this.settings),
+      selected: () => (this.settings.tool === "select" || this.settings.tool === "area" ? (this.viewer.selectedAnnot()?.annot.shape ? this.viewer.selectedAnnot()!.annot : null) : null),
+      restyle: (st) => void this.viewer.restyleSelected(st).catch((err) => toast(err.message, "error")),
+      rerender: () => this.renderOptions(),
+    });
     // On phones the pages panel covers the page, so start with it closed there.
     if (window.matchMedia("(max-width: 760px)").matches) this.settings.sidebar = false;
     this.sidebar.setTab(this.settings.sideToc);
@@ -295,6 +307,7 @@ export class App {
     });
     this.$("#options").addEventListener("click", (e) => this.onOption(e));
     this.$("#options").addEventListener("input", (e) => this.onOption(e));
+    this.$("#options").addEventListener("change", (e) => this.onOption(e));
 
     const pageInput = this.$<HTMLInputElement>("#page-input");
     pageInput.addEventListener("change", () => {
@@ -510,10 +523,14 @@ export class App {
     let html = "";
     switch (t) {
       case "select":
-        html = pasteBtn() + `<span class="muted hint">Drag over text to select it · click an item to move, copy or delete it · drag empty space to scroll</span>`;
+        html = this.viewer?.selectedAnnot()?.annot.shape
+          ? this.shapeOpts.html(false)
+          : pasteBtn() + `<span class="muted hint">Drag over text to select it · click an item to move, copy or delete it · drag empty space to scroll</span>`;
         break;
       case "area":
-        html = pasteBtn() + `<span class="muted hint">Drag a box around part of the page, then copy, cut or erase it, or drag it somewhere else</span>`;
+        html = this.viewer?.selectedAnnot()?.annot.shape
+          ? this.shapeOpts.html(false)
+          : pasteBtn() + `<span class="muted hint">Drag a box around part of the page, then copy, cut or erase it, or drag it somewhere else</span>`;
         break;
       case "eraser":
         html =
@@ -535,7 +552,7 @@ export class App {
         html = swatches() + range("textSize", 6, 48, 1, s.textSize, "Size") + `<span class="muted hint">Click to add a text box · Ctrl+Enter to finish</span>`;
         break;
       case "shape":
-        html = seg("shape", [["Square", "square", "Rectangle"], ["Circle", "circle", "Ellipse"], ["Arrow", "arrow", "Arrow"]], s.shapeKind) + swatches() + range("shapeWidth", 0.5, 12, 0.5, s.shapeWidth, "Width");
+        html = this.shapeOpts.html(true);
         break;
       case "sign": {
         const active = this.activeSignature();
@@ -558,9 +575,12 @@ export class App {
       }
     }
     el.innerHTML = html;
+    this.shapeOpts?.place(el);
   }
 
   private onOption(e: Event): void {
+    if (this.shapeOpts.handle(e)) return;
+    if (e.type === "change") return;
     const target = e.target as HTMLElement;
     const s = this.settings;
     const t = s.tool;
@@ -582,7 +602,6 @@ export class App {
     if (!b) return;
     if (b.dataset.color) s.colors[t] = b.dataset.color;
     else if (b.dataset.mark) s.markKind = b.dataset.mark as Settings["markKind"];
-    else if (b.dataset.shape) s.shapeKind = b.dataset.shape as Settings["shapeKind"];
     else if (b.dataset.sigid) s.activeSignature = b.dataset.sigid;
     else if (b.dataset.erase) s.eraserAll = b.dataset.erase === "1";
     else if (b.dataset.act === "paste") return void this.viewer.pasteButton(null).catch((err) => toast(err.message, "error"));

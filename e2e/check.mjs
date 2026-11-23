@@ -675,6 +675,39 @@ try {
   });
   await page.waitForTimeout(600);
   check("pasting text from another app makes a text box", (await engine("listAnnots", 0)).some((x) => x.kind === "FreeText" && x.contents === "Pasted from somewhere"));
+  // shapes: a filled triangle, then restyle it from the toolbar
+  await page.keyboard.press("r");
+  await page.click('#options [data-shape="Triangle"]');
+  await page.click('#options [data-pop="fill"]');
+  check("shape fill panel opens", await page.isVisible(".opt-pop"));
+  await page.click('.opt-pop [data-sfill="#5fd068"]');
+  await page.screenshot({ path: shots + "desktop-shape-fill-panel.png" });
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.keyboard.press("r");
+  const tA = await raw(0, 100, 620);
+  await page.mouse.move(...tA);
+  await page.mouse.down();
+  await page.mouse.move(...(await raw(0, 220, 740)), { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  const tri = (await engine("listAnnots", 0)).find((x) => x.shape?.kind === "Triangle");
+  check("draws a filled triangle", !!tri && JSON.stringify(tri.shape.fill.map((v) => Math.round(v * 255))) === JSON.stringify([95, 208, 104]), JSON.stringify(tri?.shape));
+  await page.keyboard.press("v");
+  await page.mouse.click(...(await raw(0, 160, 720)));
+  await page.waitForTimeout(300);
+  check("selecting a shape shows its style in the toolbar", (await page.locator('#options [data-pop="outline"]').count()) === 1 && (await page.locator('#options [data-pop="fill"]').count()) === 1);
+  await page.click('#options [data-pop="outline"]');
+  await page.click('.opt-pop [data-sline="dashed"]');
+  await page.waitForTimeout(500);
+  const tri2 = (await engine("listAnnots", 0)).find((x) => x.shape?.kind === "Triangle");
+  check("changing the line style restyles the selected shape", tri2?.shape.line === "dashed" && !!tri2.shape.fill, JSON.stringify(tri2?.shape));
+  await page.click('.opt-pop [data-snooutline]');
+  await page.waitForTimeout(500);
+  const tri3 = (await engine("listAnnots", 0)).find((x) => x.shape?.kind === "Triangle");
+  check("No outline keeps just the fill", tri3?.shape.color === null && !!tri3.shape.fill, JSON.stringify(tri3?.shape));
+  await page.screenshot({ path: shots + "desktop-shape-selected.png" });
+  await page.mouse.click(...(await raw(0, 500, 820)));
+
   // saved: the moved part is page content again
   const savedArea = await page.evaluate(async () => Array.from(await window.papgi.engine.save(false)));
   {

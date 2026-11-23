@@ -3566,3 +3566,110 @@ body.side-resizing .viewer {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- shape options ---------- */
+
+.pop-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+}
+
+.pop-btn:hover,
+.pop-btn.on {
+  background: var(--hover);
+}
+
+.pop-btn .caret {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+
+.pop-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+.pop-dot.none,
+.swatch.none {
+  background:
+    linear-gradient(135deg, transparent calc(50% - 1px), #e5484d calc(50% - 1px), #e5484d calc(50% + 1px), transparent calc(50% + 1px)),
+    var(--panel);
+}
+
+.opt-pop {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  max-width: calc(100vw - 16px);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.opt-pop[hidden] {
+  display: none;
+}
+
+.pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.opt-pop .swatches {
+  gap: 6px;
+}
+
+.pop-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  justify-self: start;
+}
+
+.pop-check.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.pop-check .ic {
+  width: 18px;
+  height: 18px;
+}
+
+@media (max-width: 760px) {
+  /* the contents panel covers the page on a phone anyway: give titles room */
+  .sidebar.show-toc {
+    width: min(300px, 82vw) !important;
+  }
+}

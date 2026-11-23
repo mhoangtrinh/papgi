@@ -1,11 +1,12 @@
 // Settings in localStorage. Defaults are merged in, so older saved data never breaks newer versions.
 import type { Point } from "./core/geometry";
 import { cleanOcrLangs, DEFAULT_OCR_LANGS } from "./core/ocrlangs";
+import { SHAPE_KINDS, isLineKind, type LineStyle, type ShapeKind, type ShapeStyle } from "./core/shapes";
+export type { ShapeKind, LineStyle } from "./core/shapes";
 
 export type Theme = "auto" | "light" | "dark";
 export type Tool = "select" | "area" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign" | "eraser";
 export type MarkKind = "Highlight" | "Underline" | "StrikeOut";
-export type ShapeKind = "Square" | "Circle" | "Arrow";
 
 /** A signature made from a picture: transparent PNG as a data URL, with its pixel size. */
 export interface SignatureImage {
@@ -30,6 +31,13 @@ export interface Settings {
   textSize: number;
   markKind: MarkKind;
   shapeKind: ShapeKind;
+  /** Shape fill colour (hex), or null for none. */
+  shapeFill: string | null;
+  /** Draw the shape's outline (off: fill only). */
+  shapeOutline: boolean;
+  shapeLine: LineStyle;
+  /** 0.1 .. 1 */
+  shapeOpacity: number;
   sidebar: boolean;
   /** Pages panel width set by hand (px; 0 = default). */
   sidebarWidth: number;
@@ -72,6 +80,10 @@ export const DEFAULTS: Settings = {
   textSize: 12,
   markKind: "Highlight",
   shapeKind: "Square",
+  shapeFill: null,
+  shapeOutline: true,
+  shapeLine: "solid",
+  shapeOpacity: 1,
   sidebar: true,
   sidebarWidth: 0,
   sidebarZoom: 0,
@@ -114,6 +126,11 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   out.ocrLangs = cleanOcrLangs(out.ocrLangs);
   out.ocrSerif = out.ocrSerif === true;
   out.eraserAll = out.eraserAll === true;
+  if (!SHAPE_KINDS.includes(out.shapeKind)) out.shapeKind = DEFAULTS.shapeKind;
+  if (!(typeof out.shapeFill === "string" && /^#[0-9a-f]{6}$/i.test(out.shapeFill))) out.shapeFill = null;
+  out.shapeOutline = out.shapeOutline !== false;
+  if (!["solid", "dashed", "dotted", "cloudy"].includes(out.shapeLine)) out.shapeLine = "solid";
+  out.shapeOpacity = typeof out.shapeOpacity === "number" && out.shapeOpacity >= 0.1 && out.shapeOpacity <= 1 ? out.shapeOpacity : 1;
   out.sideToc = out.sideToc === true;
   out.eraserSize = typeof out.eraserSize === "number" && out.eraserSize >= 2 && out.eraserSize <= 80 ? out.eraserSize : DEFAULTS.eraserSize;
   out.sidebarZoom = typeof out.sidebarZoom === "number" && out.sidebarZoom > 0 && out.sidebarZoom < 4000 ? Math.round(out.sidebarZoom) : 0;
@@ -148,6 +165,18 @@ export function hexToRgb(hex: string): [number, number, number] {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex);
   const n = m ? parseInt(m[1], 16) : 0;
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+/** The style new shapes get. */
+export function shapeStyle(s: Settings): ShapeStyle {
+  const line = isLineKind(s.shapeKind);
+  return {
+    color: s.shapeOutline || line ? hexToRgb(s.colors.shape) : null,
+    fill: s.shapeFill && !line ? hexToRgb(s.shapeFill) : null,
+    width: s.shapeWidth,
+    line: line && s.shapeLine === "cloudy" ? "solid" : s.shapeLine,
+    opacity: s.shapeOpacity,
+  };
 }
 
 export function rgbToHex(c: number[]): string {

@@ -40,7 +40,7 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | **Edit text** | Click any paragraph and change the words right on the page. The old text is really removed; the new text is set in the closest bundled font (Latin Modern for LaTeX papers, Carlito/Caladea for Calibri/Cambria, Liberation for Arial/Helvetica/Times/Courier — same letter widths as the originals), re-wrapped and justified like before. Highlights follow their words. |
 | View | Fast, sharp rendering (MuPDF in WebAssembly), thumbnails, zoom, search |
 | Text | Select and copy text; highlight, underline, strike out |
-| Draw | Pen, rectangles, ellipses, arrows, text boxes |
+| Draw | Pen, text boxes, and shapes: rectangle, ellipse, triangle, diamond, line, arrow, double arrow. **Outline**: colour, width, solid / dashed / dotted / cloud, or none; **Fill**: any colour or none, and opacity. Shift keeps squares and circles round and lines at 45° steps. Select a shape to restyle it from the toolbar |
 | Sign | Keep up to 5 signatures, drawn or from a photo/scan (paper removed automatically, crop, recolour, or drop/paste the image); saved on this device, pick one and click to place |
 | Forms | Fill text fields, tick boxes, radios and drop-downs; flatten |
 | Print | Ctrl+P or File → Print: prints the document as it is now (edits, annotations, signatures, filled forms). Chrome/Edge use their PDF print dialog (sharp vector output); iPhone, Safari and Firefox print the rendered pages (about 200 dpi). |
@@ -62,6 +62,7 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 |---|---|
 | V / A / E / H / P / T / R / X / S | Select, Select area, Edit text, Highlight, Pen, Text box, Shapes, Eraser, Sign |
 | Ctrl+P | Print |
+| Shift while drawing a shape | Square / circle, lines at 45° steps |
 | Edit text: Ctrl+Enter / Esc | Finish / cancel editing a paragraph (clicking outside also finishes) |
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, Save, Download a copy |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
@@ -111,6 +112,8 @@ src/
   engine/clip.ts     copy/cut/paste of items and page areas, erasing, baking pasted areas on save
   core/erase.ts      eraser geometry: brush coverage, rubbing strokes (pure, tested)
   core/toc.ts        table of contents from headings (pure, tested)
+  core/shapes.ts     shape kinds, styles and geometry (pure, tested)
+  ui/shape-options.ts the shape toolbar: kinds, outline and fill panels
   ui/clipboard.ts    the system clipboard (text, pictures)
   hub/registry.ts    the list of tools
   hub/flows.ts       each stand-alone tool's options and what it runs

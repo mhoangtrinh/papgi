@@ -5,7 +5,8 @@ import { editorRaise, loadTextBoxFont } from "./textbox-metrics";
 import { ParagraphEditor } from "./text-editor";
 import type { Engine } from "../engine/client";
 import type { Settings, Tool, SavedSignature } from "../storage";
-import { hexToRgb, rgbToHex } from "../storage";
+import { hexToRgb, rgbToHex, shapeStyle } from "../storage";
+import { dashPattern, isLineKind, shapeBigEnough, shapeGeometry, type ShapeKind, type ShapeStyle } from "../core/shapes";
 import {
   type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight,
 } from "../core/geometry";
@@ -29,6 +30,8 @@ export interface ViewerHost {
   clipChanged(info: ClipInfo | null): void;
   /** The view scrolled. */
   scrolled?(): void;
+  /** An item was selected or deselected (or the selected one changed). */
+  selectionChanged?(): void;
   saveSettings(): void;
 }
 
@@ -62,7 +65,7 @@ type Drag =
   | { kind: "pan"; startX: number; startY: number; left: number; top: number }
   | { kind: "mark"; pv: PageView; start: Point; last: Point; onText: boolean }
   | { kind: "pen"; pv: PageView; points: Point[] }
-  | { kind: "shape"; pv: PageView; start: Point; last: Point }
+  | { kind: "shape"; pv: PageView; start: Point; last: Point; square: boolean }
   | { kind: "click"; pv: PageView; start: Point; x: number; y: number }
   | { kind: "area"; pv: PageView; start: Point; last: Point }
   | { kind: "areamove"; pv: PageView; rect: Rect; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null }
@@ -572,7 +575,7 @@ export class Viewer {
         e.preventDefault();
         break;
       case "shape":
-        this.drag = { kind: "shape", pv, start: p, last: p };
+        this.drag = { kind: "shape", pv, start: p, last: p, square: e.shiftKey };
         capture();
         e.preventDefault();
         break;
@@ -632,7 +635,8 @@ export class Viewer {
       }
       case "shape":
         d.last = p;
-        this.previewShape(d.pv, d.start, p);
+        d.square = e.shiftKey;
+        this.previewShape(d.pv, d.start, p, d.square);
         break;
       case "area":
         d.last = p;
@@ -753,19 +757,14 @@ export class Viewer {
           break;
         }
         case "shape": {
-          const r = normRect(d.start[0], d.start[1], d.last[0], d.last[1]);
-          const tiny = Math.hypot(rectWidth(r), rectHeight(r)) * this.zoom < 6;
-          if (tiny) {
+          const g = shapeGeometry(s.shapeKind, d.start, d.last, d.square);
+          if (!shapeBigEnough(s.shapeKind, g.rect, this.zoom)) {
             this.clearPreview(d.pv);
             return;
           }
-          const color = hexToRgb(s.colors.shape);
           const held = this.holdPreview(d.pv);
           try {
-            const annots =
-              s.shapeKind === "Arrow"
-                ? await eng.addArrow(d.pv.index, d.start, d.last, color, s.shapeWidth)
-                : await eng.addShape(d.pv.index, s.shapeKind, r, color, s.shapeWidth);
+            const annots = await eng.drawShape(d.pv.index, s.shapeKind, d.start, d.last, shapeStyle(s), d.square);
             this.afterAnnotEdit(d.pv, annots);
             held.release(true);
           } catch (err) {
@@ -929,7 +928,10 @@ export class Viewer {
     pv.dataVersion = pv.version;
     pv.blocks = null;
     this.host.engine.lineBoxes(pv.index).then((l) => (pv.lines = l)).catch(() => {});
-    if (this.selected?.page === pv.index) this.drawAnnotSelection();
+    if (this.selected?.page === pv.index) {
+      this.drawAnnotSelection();
+      this.host.selectionChanged?.();
+    }
     this.schedule();
     this.host.edited(null, [pv.index]);
   }
@@ -1075,22 +1077,9 @@ export class Viewer {
     pv.svg.querySelector(".g-preview")!.innerHTML = `<polyline points="${pts.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${s.colors.pen}" stroke-width="${s.penWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
   }
 
-  private previewShape(pv: PageView, a: Point, b: Point): void {
+  private previewShape(pv: PageView, a: Point, b: Point, square = false): void {
     const s = this.host.settings;
-    const r = normRect(a[0], a[1], b[0], b[1]);
-    const st = `fill="none" stroke="${s.colors.shape}" stroke-width="${s.shapeWidth}"`;
-    let svg = "";
-    if (s.shapeKind === "Square") svg = `<rect x="${r[0]}" y="${r[1]}" width="${rectWidth(r)}" height="${rectHeight(r)}" ${st}/>`;
-    else if (s.shapeKind === "Circle")
-      svg = `<ellipse cx="${(r[0] + r[2]) / 2}" cy="${(r[1] + r[3]) / 2}" rx="${rectWidth(r) / 2}" ry="${rectHeight(r) / 2}" ${st}/>`;
-    else {
-      const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
-      const L = Math.max(6, s.shapeWidth * 4);
-      const h1: Point = [b[0] - L * Math.cos(ang - 0.45), b[1] - L * Math.sin(ang - 0.45)];
-      const h2: Point = [b[0] - L * Math.cos(ang + 0.45), b[1] - L * Math.sin(ang + 0.45)];
-      svg = `<path d="M${a.join(",")} L${b.join(",")} M${h1.join(",")} L${b.join(",")} L${h2.join(",")}" ${st} stroke-linecap="round" stroke-linejoin="round"/>`;
-    }
-    pv.svg.querySelector(".g-preview")!.innerHTML = svg;
+    pv.svg.querySelector(".g-preview")!.innerHTML = shapeSvg(s.shapeKind, a, b, shapeStyle(s), square);
   }
 
   // ---------- signature ----------
@@ -1177,9 +1166,11 @@ export class Viewer {
   selectAnnot(sel: { page: number; index: number } | null): void {
     if (this.selected) this.pages[this.selected.page]?.svg.querySelector(".g-annsel")?.replaceChildren();
     if (sel) this.setArea(null);
+    const was = this.selected;
     this.selected = sel;
     if (this.floating.dataset.kind === "annot") this.hideFloating();
     if (sel) this.drawAnnotSelection();
+    if (was?.page !== sel?.page || was?.index !== sel?.index) this.host.selectionChanged?.();
   }
 
   private drawAnnotSelection(): void {
@@ -1193,6 +1184,13 @@ export class Viewer {
     const pad = 3 / this.zoom;
     pv.svg.querySelector(".g-annsel")!.innerHTML = `<rect x="${r[0] - pad}" y="${r[1] - pad}" width="${rectWidth(r) + 2 * pad}" height="${rectHeight(r) + 2 * pad}" class="annsel"/>`;
     this.showAnnotMenu(pv, cur.annot);
+  }
+
+  /** Change how the selected shape looks. */
+  async restyleSelected(style: Partial<ShapeStyle>): Promise<void> {
+    const cur = this.selectedAnnot();
+    if (!cur?.annot.shape) return;
+    this.afterAnnotEdit(this.pages[cur.page], await this.host.engine.styleAnnot(cur.page, cur.annot.index, style));
   }
 
   async deleteSelectedAnnot(): Promise<boolean> {
@@ -1267,7 +1265,7 @@ export class Viewer {
       pv,
       a.rect,
       "annot",
-      `${a.kind === "Stamp" || a.area ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
+      `${a.kind === "Stamp" || a.area || a.shape ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
        ${a.kind === "FreeText" ? `<button data-act="edit" title="Edit text">${icon("edit")}</button>` : ""}
        <button data-act="copy" title="Copy (Ctrl+C)">${icon("copy")}</button>
        <button data-act="duplicate" title="Duplicate (Ctrl+D)">${icon("duplicate")}</button>
@@ -1901,4 +1899,29 @@ export class Viewer {
     if (y < vr.top + 40 || y > vr.bottom - 60) this.el.scrollTo({ top: y - this.el.clientHeight / 3 });
     if (x < this.el.scrollLeft || x > this.el.scrollLeft + this.el.clientWidth - 40) this.el.scrollLeft = x - 40;
   }
+}
+
+const css = (c: number[] | null) => (c ? rgbToHex(c) : "none");
+
+/** A shape as SVG (page space), for the preview while drawing. */
+export function shapeSvg(kind: ShapeKind, a: Point, b: Point, st: ShapeStyle, square = false): string {
+  const g = shapeGeometry(kind, a, b, square);
+  const dash = dashPattern(st.line, st.width);
+  const line = isLineKind(kind);
+  const stroke = line ? css(st.color ?? [0, 0, 0]) : css(st.color);
+  const attrs = `fill="${line ? "none" : css(st.fill)}" stroke="${stroke}" stroke-width="${st.width}" ${dash ? `stroke-dasharray="${dash.join(" ")}"` : ""} opacity="${st.opacity}" stroke-linejoin="round"`;
+  const [x0, y0, x1, y1] = g.rect;
+  if (kind === "Square") return `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" ${attrs}/>`;
+  if (kind === "Circle") return `<ellipse cx="${(x0 + x1) / 2}" cy="${(y0 + y1) / 2}" rx="${(x1 - x0) / 2}" ry="${(y1 - y0) / 2}" ${attrs}/>`;
+  if (!line) return `<polygon points="${g.points.map((p) => p.join(",")).join(" ")}" ${attrs}/>`;
+  const [p, q] = g.points;
+  const head = (from: Point, to: Point) => {
+    const ang = Math.atan2(to[1] - from[1], to[0] - from[0]);
+    const L = Math.max(6, st.width * 4);
+    const h1: Point = [to[0] - L * Math.cos(ang - 0.45), to[1] - L * Math.sin(ang - 0.45)];
+    const h2: Point = [to[0] - L * Math.cos(ang + 0.45), to[1] - L * Math.sin(ang + 0.45)];
+    return ` M${h1.join(",")} L${to.join(",")} L${h2.join(",")}`;
+  };
+  const d = `M${p.join(",")} L${q.join(",")}` + (kind !== "Line" ? head(p, q) : "") + (kind === "DoubleArrow" ? head(q, p) : "");
+  return `<path d="${d}" ${attrs} stroke-linecap="round"/>`;
 }
