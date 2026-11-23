@@ -98,6 +98,6 @@ export function baseName(name: string): string {
 /** MuPDF's messages in plain words. */
 export function friendlyError(msg: string): string {
   if (/no objects found|cannot recognize version|not a pdf|unknown keyword|syntax error|cannot find startxref|no pages/i.test(msg)) return "it isn't a PDF, or it is too damaged to open.";
-  if (/out of memory|memory/i.test(msg)) return "it's too big for this device's memory.";
+  if (/out of memory|memory|alloc.*failed/i.test(msg)) return "it's too big for this device's memory.";
   return msg;
 }

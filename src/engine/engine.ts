@@ -109,6 +109,10 @@ export class PdfEngine {
   private docSize = 0;
   static readonly MAX_UNDO = 60;
   static readonly MAX_UNDO_BYTES = 400 * 1024 * 1024;
+  /** From this size (bytes) a file is handled with its memory in mind. */
+  static readonly BIG_FILE = 100e6;
+  /** Something the person should know after a save (e.g. undo steps given up for memory). */
+  private note: string | null = null;
 
   constructor(protected mupdf: M) {}
 
@@ -204,12 +208,59 @@ export class PdfEngine {
     // pasted parts of pages become page content in the file (they stay movable here)
     const baked = hasAreas(doc) ? this.copyOfDoc() : null;
     if (baked) bakeAreas(baked);
-    const buf = (baked ?? doc).saveToBuffer("garbage=deduplicate,compress");
-    const out = buf.asUint8Array().slice();
-    buf.destroy();
-    baked?.destroy();
+    let out: Uint8Array;
+    try {
+      out = this.writeOut(baked ?? doc);
+    } finally {
+      baked?.destroy();
+    }
     if (markSaved) this.markSaved();
     return out;
+  }
+
+  /**
+   * The document as file bytes. Tidied up (unused and duplicate objects dropped) when memory
+   * allows; a big file can run out of the engine's memory (2 GB at most) while being tidied,
+   * so then the cache is emptied and it's written more plainly.
+   */
+  private writeOut(doc: MuPDF.PDFDocument): Uint8Array {
+    // (big files: start without the cache of decoded pictures)
+    if (this.docSize > PdfEngine.BIG_FILE) this.mupdf.emptyStore();
+    const tries = ["garbage=deduplicate,compress", "garbage,compress", "", ""];
+    let last: unknown;
+    for (const [k, opt] of tries.entries()) {
+      if (k === 3) {
+        // last try: give up the undo steps that keep whole documents in the engine's memory
+        // (undo steps go oldest first, so undo still goes back one step at a time)
+        const lastDoc = this.undoStack.map((st) => !!st.doc).lastIndexOf(true);
+        if (lastDoc < 0 && !this.redoStack.some((st) => st.doc)) break;
+        this.dropSteps(this.undoStack.splice(0, lastDoc + 1));
+        this.dropSteps(this.redoStack);
+        this.redoStack = [];
+        this.mupdf.emptyStore();
+        this.note = "This file is very big: to save it, some undo steps had to be given up.";
+      }
+      try {
+        const buf = doc.saveToBuffer(opt);
+        try {
+          return buf.asUint8Array().slice();
+        } finally {
+          buf.destroy();
+        }
+      } catch (e) {
+        last = e;
+        if (!/alloc|memory/i.test(String((e as Error)?.message ?? e))) throw e;
+        this.mupdf.emptyStore();
+      }
+    }
+    throw last;
+  }
+
+  /** Something to tell the person after the last save, once. */
+  takeNote(): string | null {
+    const n = this.note;
+    this.note = null;
+    return n;
   }
 
   /** A separate copy of the open document. */
@@ -272,9 +323,19 @@ export class PdfEngine {
     return name === undefined ? null : { info: this.redo(), name };
   }
 
-  /** The open document as an undo/redo step (handed over as is, not copied). */
+  /**
+   * The open document as an undo/redo step: handed over as is (no copy needed), except a
+   * big file, which is kept as bytes, so the engine's memory (2 GB at most) doesn't hold
+   * two big documents at once.
+   */
   private currentStep(name: string, content: number[] | "all"): UndoStep {
     const doc = this.requireDoc();
+    if (this.docSize > PdfEngine.BIG_FILE) {
+      const bytes = this.snapshot();
+      this.doc = null;
+      doc.destroy();
+      return { name, id: this.stateId, content, bytes, size: this.docSize };
+    }
     this.doc = null;
     return { name, id: this.stateId, content, doc, size: this.docSize };
   }

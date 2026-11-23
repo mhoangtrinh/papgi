@@ -900,8 +900,10 @@ export class App {
         void this.remember(bytes);
       }
       this.updateUi(await this.engine.state());
+      const note = await this.engine.takeNote();
+      if (note) toast(note, "info");
     } catch (e) {
-      toast(`Couldn't save: ${(e as Error).message}`, "error");
+      toast(`Couldn't save: ${friendlyError((e as Error).message)}`, "error");
     }
   }
 
@@ -914,8 +916,11 @@ export class App {
       const name = `${baseName(this.file.name)} (copy).pdf`;
       await saveAs(bytes, name);
       toast(`Downloaded ${name}`);
+      const note = await this.engine.takeNote();
+      if (note) toast(note, "info");
+      this.updateUi(await this.engine.state());
     } catch (e) {
-      toast(`Couldn't save: ${(e as Error).message}`, "error");
+      toast(`Couldn't save: ${friendlyError((e as Error).message)}`, "error");
     }
   }
 

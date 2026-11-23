@@ -428,3 +428,28 @@ describe("eraser coverage (fast version)", () => {
     }
   });
 });
+
+describe("big files", () => {
+  it("undo and redo work the same when versions are kept as bytes (big files)", () => {
+    const saved = PdfEngine.BIG_FILE;
+    (PdfEngine as unknown as { BIG_FILE: number }).BIG_FILE = 0; // treat this small file as big
+    try {
+      const e = new PdfEngine(mupdf);
+      e.open(sample("pages.pdf"));
+      for (let k = 0; k < 3; k++) e.addInk(0, [[[50, 50 + k * 20], [200, 60 + k * 20]]], [1, 0, 0], 2);
+      e.undo();
+      e.undo();
+      expect(e.listAnnots(0).length).toBe(1);
+      e.redo();
+      expect(e.listAnnots(0).length).toBe(2);
+      e.cutArea(0, HEADING);
+      expect(e.state().canRedo).toBe(false);
+      e.undo();
+      expect(e.pageText(0)).toContain("Page 1");
+      const out = new mupdf.PDFDocument(e.save());
+      expect(out.loadPage(0).getAnnotations().length).toBe(2);
+    } finally {
+      (PdfEngine as unknown as { BIG_FILE: number }).BIG_FILE = saved;
+    }
+  });
+});
