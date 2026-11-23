@@ -89,17 +89,18 @@ describe("PDF to Word", () => {
     expect(xml).toContain('w:ascii="Times New Roman"');
   });
 
-  it("editable: bullets, bold, colours, tables as tabs, lines behind the text", () => {
+  it("editable: bullets, bold, colours, a table with lines as a Word table", () => {
     const r = pdfToWord(mupdf, { name: "report.pdf", bytes: sample("report.pdf") }, [0], { mode: "editable" });
     const xml = docXml(r.bytes);
     const text = plain(xml);
     expect(text).toContain("•\tFirst bullet item with some text");
     expect(xml).toMatch(/<w:ind w:left="\d+" w:hanging="\d+"\/>/);
-    expect(text).toMatch(/Cell 00\tCell 01\tCell 02/);
+    // the table with lines: a Word table, one cell each
+    expect(xml).toMatch(/<w:tbl>.*?<w:tc>.*?Cell 00.*?<\/w:tc><w:tc>.*?Cell 01.*?<\/w:tc><w:tc>.*?Cell 02/);
     expect(xml).toMatch(/<w:b\/><w:bCs\/>.*?measurement campaign/);
     expect(xml).toMatch(/<w:color w:val="[0-9A-F]{6}"\/>/);
-    // the table's lines: a see-through picture placed on the page, behind the text
-    expect(xml).toMatch(/behindDoc="1"/);
+    // the table's lines are the Word table's borders
+    expect(xml).toMatch(/<w:tcBorders><w:top w:val="single"/);
     expect(text).toContain("results are preliminary and will be checked");
   });
 
@@ -108,8 +109,19 @@ describe("PDF to Word", () => {
     const text = plain(docXml(r.bytes));
     expect(text).toContain("Tiếng Việt: Kết quả đo được kiểm tra lại trước buổi họp cuối cùng.");
     expect(text).toContain("Größe der");
-    expect(text).toMatch(/Probe\tRauschen \(dB\)\tLeistung \(mW\)/);
+    expect(docXml(r.bytes)).toMatch(/<w:tc>.*?Probe.*?<\/w:tc><w:tc>.*?Rauschen \(dB\).*?<\/w:tc><w:tc>.*?Leistung \(mW\)/);
     expect(text).toMatch(/2\.\tZweiter Punkt, der etwas länger ist und deshalb in die nächste Zeile umbricht, damit man den hängenden Einzug sieht\n3\.\tDritter Punkt/);
+  });
+
+  it("editable: underlines and highlights belong to the text, page footers go into Word's footer", () => {
+    const r = pdfToWord(mupdf, { name: "bericht.pdf", bytes: read("./fixtures/bericht.pdf") }, [0], { mode: "editable" });
+    const files = unzip(r.bytes);
+    // (the Word-made test file has no footer; the paper sample's page number is one)
+    const p = pdfToWord(mupdf, { name: "paper.pdf", bytes: sample("paper.pdf") }, [0], { mode: "editable" });
+    const pf = unzip(p.bytes);
+    expect([...pf.keys()].some((n) => /^word\/footer\d+\.xml$/.test(n))).toBe(true);
+    expect(new TextDecoder().decode([...pf.entries()].find(([n]) => n.startsWith("word/footer"))![1])).toContain(">1<");
+    expect(files.has("word/document.xml")).toBe(true);
   });
 
   it("editable: a scan without text comes out as a picture and is reported", () => {
