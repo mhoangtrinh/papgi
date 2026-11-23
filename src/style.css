@@ -1834,7 +1834,8 @@ body:not(.has-doc) .options {
   cursor: text;
 }
 
-.pages[data-tool="select"] .page.over-annot {
+.pages[data-tool="select"] .page.over-annot,
+.pages[data-tool="area"] .page.over-annot {
   cursor: move;
 }
 

@@ -438,8 +438,8 @@ export class Viewer {
     this.pagesEl.dataset.tool = tool;
   }
 
-  private pageFromEvent(e: Event): PageView | null {
-    const el = (e.target as Element).closest?.(".page") as HTMLElement | null;
+  private pageFromEvent(e: { target: EventTarget | null }): PageView | null {
+    const el = (e.target as Element | null)?.closest?.(".page") as HTMLElement | null;
     return el ? this.pages[Number(el.dataset.index)] ?? null : null;
   }
 
@@ -464,15 +464,16 @@ export class Viewer {
   }
 
   /** Select tool: I-beam over text, move cursor over annotations, arrow elsewhere. */
-  private hoverCursor(e: PointerEvent): void {
+  private hoverCursor(e: { target: EventTarget | null; clientX: number; clientY: number }): void {
     const pv = this.pageFromEvent(e);
     let kind = "";
     if (pv && !(e.target as Element).closest(".page-forms > *, .floating")) {
       const p = this.toPagePoint(pv, e);
       const h = this.handleAt(pv, p);
       if (h >= 0) kind = h % 2 ? "over-nesw" : "over-nwse";
+      else if (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1])) kind = "over-annot";
       else if (this.annotAt(pv, p)) kind = "over-annot";
-      else if (this.onText(pv, p)) kind = "over-text";
+      else if (this.tool === "select" && this.onText(pv, p)) kind = "over-text";
     }
     if (this.cursorPage && (this.cursorPage !== pv || this.cursorKind !== kind)) this.cursorPage.el.classList.remove("over-text", "over-annot", "over-nwse", "over-nesw");
     if (pv && kind) pv.el.classList.add(kind);
@@ -602,7 +603,7 @@ export class Viewer {
     if (!d) {
       if (this.tool === "sign") this.moveGhost(e);
       else if (this.tool === "edit") this.hoverBlock(e);
-      else if (this.tool === "select") this.hoverCursor(e);
+      else if (this.tool === "select" || this.tool === "area") this.hoverCursor(e);
       else if (this.tool === "eraser" && e.pointerType === "mouse") this.hoverEraser(e);
       return;
     }
@@ -670,6 +671,16 @@ export class Viewer {
 
   private async onUp(e: PointerEvent): Promise<void> {
     this.cancelLongPress();
+    try {
+      await this.finishDrag(e);
+    } finally {
+      // the pointer shows what's under it now (the moved part can be dragged again)
+      if (e.pointerType === "mouse" && (this.tool === "select" || this.tool === "area"))
+        this.hoverCursor({ target: document.elementFromPoint(e.clientX, e.clientY), clientX: e.clientX, clientY: e.clientY });
+    }
+  }
+
+  private async finishDrag(e: PointerEvent): Promise<void> {
     const d = this.drag;
     this.drag = null;
     this.pagesEl.classList.remove("panning");
@@ -816,8 +827,10 @@ export class Viewer {
           if (target !== d.pv) this.afterAnnotEdit(d.pv, res.from);
           this.afterAnnotEdit(target, res.to);
           this.refreshFields(d.pv);
+          if (target !== d.pv) this.refreshFields(target);
           if (ghost) this.keepUntilRendered(target, ghost);
-          this.selectAnnot({ page: target.index, index: res.index });
+          // the box stays selected where it landed: dragging again moves all of it again
+          this.setArea({ page: target.index, rect: [topLeft[0], topLeft[1], topLeft[0] + rectWidth(d.rect), topLeft[1] + rectHeight(d.rect)] });
           break;
         }
         case "resize": {
@@ -1259,8 +1272,8 @@ export class Viewer {
     const corner = this.handleAt(pv, p);
     if (corner < 0) return false;
     const annot = this.selectedAnnot()!.annot;
-    // pictures keep their proportions (Shift to stretch); shapes and drawings stretch (Shift keeps them)
-    const d: Drag = { kind: "resize", pv, annot, corner, rect: [...annot.rect] as Rect, next: [...annot.rect] as Rect, keep: annot.kind === "Stamp", ghost: null };
+    // free stretching; Shift keeps the proportions
+    const d: Drag = { kind: "resize", pv, annot, corner, rect: [...annot.rect] as Rect, next: [...annot.rect] as Rect, keep: false, ghost: null };
     this.drag = d;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     e.preventDefault();

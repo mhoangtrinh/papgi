@@ -526,6 +526,16 @@ try {
     await page.waitForTimeout(900);
     const movedField = (await engine("listWidgets", 0)).find((w) => w.name === f.name);
     check("select area moves form fields too", !!movedField && Math.abs(movedField.rect[1] - f.rect[1] - 300) < 4 && (await engine("listWidgets", 0)).length === ws.length, JSON.stringify(movedField?.rect));
+    // and again: the box stays selected where it landed, so it all moves together again
+    await page.mouse.move(...at(f.rect[0] + 20, cy + 300));
+    await page.mouse.down();
+    await page.mouse.move(...at(f.rect[0] + 20, cy + 400), { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(900);
+    const again = (await engine("listWidgets", 0)).find((w) => w.name === f.name);
+    const label = (await engine("listAnnots", 0)).find((a) => a.area);
+    check("dragging the box a second time moves the field and its label again", !!again && Math.abs(again.rect[1] - f.rect[1] - 400) < 4 && !!label && Math.abs(label.rect[1] - (f.rect[1] - 4 + 400)) < 8, `${JSON.stringify(again?.rect)} ${JSON.stringify(label?.rect)}`);
+    await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+z");
     await page.waitForTimeout(600);
     await page.keyboard.press("v");
@@ -678,6 +688,13 @@ try {
   const moved = (await engine("listAnnots", 0)).find((x) => x.area);
   check("dragging the area moves that part of the page (a picture follows the mouse)", areaGhost && !!moved && Math.abs(moved.rect[0] - 295) < 12 && !(await engine("pageText", 0)).includes("Page 1"), JSON.stringify(moved?.rect));
   await page.screenshot({ path: shots + "desktop-area-moved.png" });
+  const cursor0 = () => page.evaluate(() => getComputedStyle(document.querySelectorAll(".page")[0]).cursor);
+  const afterDrop = await cursor0();
+  await page.mouse.move(...(await raw(0, moved.rect[0] + 20, moved.rect[1] + 20)));
+  const overMoved = await cursor0();
+  await page.mouse.move(...(await raw(0, 450, 760)));
+  const elsewhere = await cursor0();
+  check("after a move the pointer says it can be dragged again", afterDrop === "move" && overMoved === "move" && elsewhere === "crosshair", `${afterDrop} / ${overMoved} / ${elsewhere}`);
   const leftovers = () => page.evaluate(() => document.querySelectorAll(".page .g-annsel > *, .page .g-area > *").length + (document.querySelector('.floating:not([hidden])[data-kind="annot"]') ? 1 : 0));
   await page.keyboard.press("Control+z");
   await page.waitForTimeout(600);
@@ -728,11 +745,24 @@ try {
     await page.waitForTimeout(600);
     const pic2 = (await engine("listAnnots", 0)).find((x) => x.kind === "Stamp" && !x.area);
     const ratio = (r) => (r[2] - r[0]) / (r[3] - r[1]);
-    check("dragging a corner resizes the picture, keeping its proportions", pic2.rect[2] - pic.rect[2] > 40 && Math.abs(ratio(pic2.rect) - ratio(pic.rect)) < 0.03 && Math.abs(pic2.rect[0] - pic.rect[0]) < 0.5, `${JSON.stringify(pic.rect)} -> ${JSON.stringify(pic2.rect)}`);
+    check("dragging a corner stretches the picture freely", pic2.rect[2] - pic.rect[2] > 40 && Math.abs(ratio(pic2.rect) - ratio(pic.rect)) > 0.15 && Math.abs(pic2.rect[0] - pic.rect[0]) < 0.5, `${JSON.stringify(pic.rect)} -> ${JSON.stringify(pic2.rect)}`);
+    // with Shift it keeps its proportions
+    const se2 = await raw(0, pic2.rect[2] + 3 / zoom, pic2.rect[3] + 3 / zoom);
+    await page.mouse.move(...se2);
+    await page.keyboard.down("Shift");
+    await page.mouse.down();
+    await page.mouse.move(se2[0] + 50, se2[1] - 20, { steps: 6 });
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    await page.waitForTimeout(600);
+    const pic3 = (await engine("listAnnots", 0)).find((x) => x.kind === "Stamp" && !x.area);
+    check("Shift + corner keeps the proportions", Math.abs(ratio(pic3.rect) - ratio(pic2.rect)) < 0.03 && pic3.rect[2] > pic2.rect[2] + 30, `${JSON.stringify(pic2.rect)} -> ${JSON.stringify(pic3.rect)}`);
+    await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+z");
     await page.waitForTimeout(700);
     check("undoing the paste leaves no selection box behind", (await stamps()) === 0 && (await leftovers()) === 0);
+    await page.keyboard.press("Control+y");
     await page.keyboard.press("Control+y");
     await page.keyboard.press("Control+y");
     await page.waitForTimeout(600);
