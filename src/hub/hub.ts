@@ -3,7 +3,7 @@
 import type { Engine } from "../engine/client";
 import type { OutFile } from "../engine/tools";
 import type { OpenedFile } from "../files";
-import { saveFile } from "../files";
+import { saveFile, friendlyError } from "../files";
 import { icon } from "../ui/icons";
 import { askPassword, confirmDialog, toast } from "../ui/dialogs";
 import { zip } from "../core/zip";
@@ -189,6 +189,8 @@ export class Hub {
       this.go("images-to-pdf");
       return this.addFiles(images);
     }
+    if (files.length === 1)
+      return toast(`${files[0].name} isn't a PDF, or it is too damaged to open.`, "error");
     toast("Drop PDFs (to edit or merge) or pictures (to make a PDF)", "error");
   }
 
@@ -280,7 +282,7 @@ export class Hub {
         <p class="samples"><span class="muted small">Try a sample:</span>
           ${SAMPLES.map((s) => `<button class="chip" data-sample="${s.file}">${s.label}</button>`).join("")}
         </p>
-        <p class="hub-foot muted small">Works offline · your files stay on this device, nothing is uploaded</p>
+        <p class="hub-foot muted small">Works offline · your files stay on this device, nothing is uploaded · <button class="link-btn" data-act="about">About &amp; feedback</button></p>
       </main>`;
   }
 
@@ -830,6 +832,7 @@ export class Hub {
     }
     if (d.act === "run") return this.run();
     if (d.act === "view") return this.view(0);
+    if (d.act === "about") return void window.dispatchEvent(new CustomEvent("papgi-about"));
     if (d.scut || d.sjoin || d.sturn || d.sdel) return this.editParts(d);
     if (d.act === "reset-order") {
       this.order = this.items.flatMap((it) =>
@@ -978,7 +981,7 @@ export class Hub {
           if (f.splitView) this.buildParts();
         }
       } catch (err) {
-        skipped.push(`${file.name}: ${(err as Error).message}`);
+        skipped.push(`${file.name}: ${friendlyError((err as Error).message)}`);
       }
       this.renderFiles();
     }
@@ -1150,7 +1153,7 @@ export class Hub {
       this.results = res.files;
       this.renderResult(res.note, this.cancel, performance.now() - t0);
     } catch (err) {
-      toast(`${f.title} didn't work: ${(err as Error).message}`, "error");
+      toast(`${f.title} didn't work: ${friendlyError((err as Error).message)}`, "error");
     } finally {
       this.running = false;
       prog.hidden = true;

@@ -43,30 +43,57 @@ function open(mupdf: M, f: PdfInput): MuPDF.PDFDocument {
 }
 
 export function pdfToWord(mupdf: M, f: PdfInput, pages: number[], opts: WordOptions, turns: number[] = []): WordResult {
-  const doc = open(mupdf, f);
-  const title = f.name.replace(/\.[^.]+$/, "");
+  const job = new WordJob(mupdf, f, opts);
   try {
+    job.add(pages, turns);
+    return job.finish();
+  } finally {
+    job.close();
+  }
+}
+
+/** A conversion done a few pages at a time (so the app can show progress). */
+export class WordJob {
+  private doc: MuPDF.PDFDocument;
+  private conv: Converter;
+  private pages: { index: number; turn: number; data?: PageData }[] = [];
+
+  constructor(
+    private mupdf: M,
+    private f: PdfInput,
+    private opts: WordOptions,
+  ) {
+    this.doc = open(mupdf, f);
+    this.conv = new Converter(mupdf);
+  }
+
+  /** Reads these pages (0-based; turns only count for pictures). */
+  add(pages: number[], turns: number[] = []): void {
+    pages.forEach((p, k) => this.pages.push({ index: p, turn: turns[k] ?? 0, data: this.opts.mode === "pictures" ? undefined : this.conv.extract(this.doc, p) }));
+  }
+
+  finish(): WordResult {
+    const { mupdf, doc, conv } = this;
+    const title = this.f.name.replace(/\.[^.]+$/, "");
     const sections: DocxSection[] = [];
     const scanned: number[] = [];
-    if (opts.mode === "pictures") {
-      pages.forEach((p, k) => sections.push(picturePage(mupdf, doc, p, opts.dpi ?? 150, turns[k] ?? 0)));
+    if (this.opts.mode === "pictures") {
+      for (const p of this.pages) sections.push(picturePage(mupdf, doc, p.index, this.opts.dpi ?? 150, p.turn));
       return { bytes: buildDocx(sections, { title }), scanned };
     }
-    const conv = new Converter(mupdf);
-    const extracted = pages.map((p) => conv.extract(doc, p));
+    const extracted = this.pages.map((p) => p.data!);
     conv.finishStyles(extracted);
     extracted.forEach((pg, k) => {
       if (pg.scan) {
-        scanned.push(pages[k]);
-        sections.push(picturePage(mupdf, doc, pages[k], 150, 0));
+        scanned.push(this.pages[k].index);
+        sections.push(picturePage(mupdf, doc, this.pages[k].index, 150, 0));
       } else sections.push(...conv.layout(pg));
     });
-    return {
-      bytes: buildDocx(sections, { title, font: conv.mainFont, size: conv.bodySize, lang: conv.lang, hyphenate: conv.hyphenJoins >= 2 }),
-      scanned,
-    };
-  } finally {
-    doc.destroy();
+    return { bytes: buildDocx(sections, { title, font: conv.mainFont, size: conv.bodySize, lang: conv.lang, hyphenate: conv.hyphenJoins >= 2 }), scanned };
+  }
+
+  close(): void {
+    this.doc.destroy();
   }
 }
 

@@ -48,6 +48,22 @@ try {
   await page.screenshot({ path: shots + "desktop-home-light.png" });
   check("start screen shows the tools", (await page.locator(".tool-card").count()) === 7 && (await page.isVisible("#hub")));
   check("Open PDF comes first and lists what the editor does", (await page.locator(".tool-card").first().getAttribute("data-tool")) === "open" && /Sign/.test(await page.textContent(".tool-card.main")) && /OCR/.test(await page.textContent(".tool-card.main")));
+  // About & feedback from the start screen: version, privacy, where to report problems, source
+  await page.click('.hub-foot [data-act="about"]');
+  await page.waitForSelector(".modal");
+  const about = await page.textContent(".modal");
+  check("About: version, no uploads, feedback and source links", /Version \d+\.\d+\.\d+/.test(about) && /never uploaded/.test(about) && (await page.locator('.modal a[href*="/issues"]').count()) === 1 && (await page.locator('.modal a[href="https://github.com/mhoangtrinh/papgi"]').count()) === 1, about.slice(0, 120));
+  await page.keyboard.press("Escape");
+  // a file that isn't a PDF: said in plain words
+  await page.evaluate(async () => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["hello, I am not a PDF"], "notes.pdf", { type: "application/pdf" }));
+    for (const type of ["dragenter", "dragover", "drop"]) window.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  const notPdf = await page.waitForSelector(".toast", { timeout: 10000 }).then((t) => t.textContent());
+  check("a file that isn't a PDF: plain-words message", /isn't a PDF, or it is too damaged/.test(notPdf), notPdf);
+  await page.goto(URL_);
+  await page.waitForSelector(".hub-home");
   // Open PDF: its own page to drop or browse
   await page.click('[data-tool="open"]');
   await page.waitForSelector(".open-page .drop-area");

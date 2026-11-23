@@ -486,21 +486,24 @@ export const FLOWS: Record<string, FlowDef> = {
       items.length && order && !order.length
         ? "All pages were removed. Use Reset to start again."
         : null,
-    async run({ engine, items, opts, order, progress }) {
+    async run({ engine, items, opts, order, progress, cancelled }) {
       const it = items[0];
-      progress(
-        0,
-        1,
-        opts.mode === "pictures"
-          ? "Making pictures of the pages…"
-          : "Reading text, fonts and layout…",
-      );
-      const r = await engine.toolPdfToWord(
-        src(it),
-        order.map((s) => s.page),
-        { mode: opts.mode === "pictures" ? "pictures" : "editable" },
-        order.map((s) => s.rotate),
-      );
+      const mode = opts.mode === "pictures" ? "pictures" : "editable";
+      const pages = order.map((s) => s.page);
+      const turns = order.map((s) => s.rotate);
+      const verb = mode === "pictures" ? "Picturing" : "Reading";
+      await engine.toolWordStart(src(it), { mode });
+      const step = mode === "pictures" ? 20 : 8;
+      for (let k = 0; k < pages.length; k += step) {
+        if (cancelled()) {
+          await engine.toolWordCancel();
+          return { files: [], note: "" };
+        }
+        progress(k, pages.length + 1, `${verb} page ${k + 1} of ${pages.length}…`);
+        await engine.toolWordAdd(pages.slice(k, k + step), turns.slice(k, k + step));
+      }
+      progress(pages.length, pages.length + 1, "Writing the Word file…");
+      const r = await engine.toolWordFinish();
       progress(1, 1);
       const scans = r.scanned.map((p) => p + 1);
       const turned =

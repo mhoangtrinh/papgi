@@ -10,7 +10,7 @@ import { ocrDialog, runOcr } from "./ui/ocr";
 import { Organize } from "./ui/organize";
 import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
-import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, type OpenedFile } from "./files";
+import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, friendlyError, type OpenedFile } from "./files";
 import { nextZoom, strokesBounds, ZOOM_STEPS } from "./core/geometry";
 import { afterDelete, formatRange, movedSelection } from "./core/pages";
 import { Hub } from "./hub/hub";
@@ -97,6 +97,7 @@ export class App {
     // On phones the pages panel covers the page, so start with it closed there.
     if (window.matchMedia("(max-width: 760px)").matches) this.settings.sidebar = false;
     this.sidebar.show(this.settings.sidebar);
+    addEventListener("papgi-about", () => this.menuAction("about"));
     this.sidebar.setTile(this.settings.sidebarZoom);
     this.sidebar.setWidth(this.settings.sidebarWidth);
     this.bind();
@@ -731,8 +732,9 @@ export class App {
       case "about":
         return void modal({
           title: "About papgi",
-          body: `<p>papgi is a PDF editor that runs entirely in your browser. Files never leave your device.</p>
-                 <p class="muted">Rendering and editing by <a href="https://mupdf.com" target="_blank" rel="noopener">MuPDF</a> (AGPL). Source: <a href="https://github.com/mhoangtrinh/papgi" target="_blank" rel="noopener">github.com/mhoangtrinh/papgi</a></p>`,
+          body: `<p>papgi is a PDF editor and toolbox that runs entirely in your browser. Your files are never uploaded: opening, editing, converting and text recognition all happen on this device, and it works offline once loaded.</p>
+                 <p>Found a problem or have an idea? <a href="https://github.com/mhoangtrinh/papgi/issues" target="_blank" rel="noopener">Tell us on GitHub</a>.</p>
+                 <p class="muted small">Version ${__APP_VERSION__} · ${__BUILD_DATE__}<br>Free software under the AGPL-3.0. Built on <a href="https://mupdf.com" target="_blank" rel="noopener">MuPDF</a> (AGPL) and <a href="https://github.com/naptha/tesseract.js" target="_blank" rel="noopener">Tesseract</a> (Apache-2.0). Source and licenses: <a href="https://github.com/mhoangtrinh/papgi" target="_blank" rel="noopener">github.com/mhoangtrinh/papgi</a></p>`,
           actions: [{ label: "Close", value: "", primary: true }],
         });
     }
@@ -785,7 +787,7 @@ export class App {
         if (scanned) toast("This looks like a scan: there's no text to select yet.", "info", { label: "Recognize text", run: () => void this.recognize() });
       }
     } catch (e) {
-      toast(`Couldn't open ${f.name}: ${(e as Error).message}`, "error");
+      toast(`Couldn't open ${f.name}: ${friendlyError((e as Error).message)}`, "error");
     }
   }
 
@@ -1087,3 +1089,4 @@ export class App {
 }
 
 export { ZOOM_STEPS };
+

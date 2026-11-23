@@ -3340,3 +3340,16 @@ body.side-resizing .viewer {
     background: var(--border);
   }
 }
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}

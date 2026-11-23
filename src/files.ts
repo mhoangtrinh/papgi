@@ -94,3 +94,10 @@ export function onLaunchFiles(cb: (f: OpenedFile) => void): void {
 export function baseName(name: string): string {
   return name.replace(/\.pdf$/i, "");
 }
+
+/** MuPDF's messages in plain words. */
+export function friendlyError(msg: string): string {
+  if (/no objects found|cannot recognize version|not a pdf|unknown keyword|syntax error|cannot find startxref|no pages/i.test(msg)) return "it isn't a PDF, or it is too damaged to open.";
+  if (/out of memory|memory/i.test(msg)) return "it's too big for this device's memory.";
+  return msg;
+}

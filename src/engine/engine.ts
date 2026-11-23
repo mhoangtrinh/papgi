@@ -11,7 +11,7 @@ import {
   compressPdf, graftPages, imagesToPdf, mergePages, mergePdfs, pageToImage, pagesToImages, pdfPageCount, splitPdf,
   type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions, type SplitPage,
 } from "./tools";
-import { pdfToWord, type WordOptions, type WordResult } from "./toword";
+import { pdfToWord, WordJob, type WordOptions, type WordResult } from "./toword";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
@@ -958,6 +958,31 @@ export class PdfEngine {
 
   toolPdfToWord(f: PdfInput, pages: number[], opts: WordOptions, turns?: number[]): WordResult {
     return pdfToWord(this.mupdf, f, pages, opts, turns);
+  }
+
+  // PDF -> Word a few pages at a time (progress): start, add pages, finish
+  private wordJob: WordJob | null = null;
+  toolWordStart(f: PdfInput, opts: WordOptions): void {
+    this.wordJob?.close();
+    this.wordJob = new WordJob(this.mupdf, f, opts);
+  }
+  toolWordAdd(pages: number[], turns?: number[]): void {
+    if (!this.wordJob) throw new Error("No conversion running");
+    this.wordJob.add(pages, turns);
+  }
+  toolWordFinish(): WordResult {
+    const job = this.wordJob;
+    if (!job) throw new Error("No conversion running");
+    try {
+      return job.finish();
+    } finally {
+      job.close();
+      this.wordJob = null;
+    }
+  }
+  toolWordCancel(): void {
+    this.wordJob?.close();
+    this.wordJob = null;
   }
 
   toolCompress(f: PdfInput, opts: CompressOptions): CompressResult {

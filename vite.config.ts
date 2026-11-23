@@ -1,7 +1,13 @@
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
+import pkg from "./package.json" with { type: "json" };
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
+  },
   base: "./",
   build: { target: "es2022", chunkSizeWarningLimit: 2000 },
   worker: { format: "es" },
