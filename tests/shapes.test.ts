@@ -101,3 +101,28 @@ describe("shapes in the PDF", () => {
     expect([s.kind, s.line, s.fill, Math.round(s.opacity * 10)]).toEqual(["Diamond", "cloudy", [1, 0, 1], 6]);
   });
 });
+
+describe("resizing items", () => {
+  it("resizes a picture, a shape and a drawing; one undo step each", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    const png = new Uint8Array(fs.readFileSync(new URL("../public/pwa-192.png", import.meta.url)));
+    let a = e.addPicture(0, png, [100, 300, 196, 396]).annots;
+    expect(a[0].resizable).toBe(true);
+    a = e.resizeAnnot(0, a[0].index, [100, 300, 292, 492]);
+    expect(a[0].rect).toEqual([100, 300, 292, 492].map((v) => expect.closeTo(v, 0)));
+    // still the picture (not redrawn as a "Draft" stamp)
+    expect(px(e, 120, 396)[2]).toBeGreaterThan(px(e, 120, 396)[0] + 60); // the icon's blue, now this far out
+    expect(e.state().undoName).toBe("Resize");
+    a = e.drawShape(0, "Circle", [300, 300], [400, 400], style({ fill: [0, 0, 1] }));
+    a = e.resizeAnnot(0, a[1].index, [300, 300, 500, 350]);
+    const c = a[1].rect;
+    expect(Math.abs(c[2] - c[0] - 200)).toBeLessThan(2);
+    expect(Math.abs(c[3] - c[1] - 50)).toBeLessThan(2);
+    a = e.addInk(0, [[[100, 600], [200, 650]]], [0, 0, 0], 2);
+    a = e.resizeAnnot(0, a[2].index, [100, 600, 300, 700]);
+    expect(a[2].rect[2]).toBeCloseTo(300, 0);
+    e.undo();
+    expect(e.listAnnots(0)[2].rect[2]).toBeLessThan(210);
+  });
+});

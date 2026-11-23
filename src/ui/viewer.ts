@@ -69,7 +69,8 @@ type Drag =
   | { kind: "click"; pv: PageView; start: Point; x: number; y: number }
   | { kind: "area"; pv: PageView; start: Point; last: Point }
   | { kind: "areamove"; pv: PageView; rect: Rect; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null }
-  | { kind: "erase"; pv: PageView; points: Point[] };
+  | { kind: "erase"; pv: PageView; points: Point[] }
+  | { kind: "resize"; pv: PageView; annot: AnnotInfo; corner: number; rect: Rect; next: Rect; keep: boolean; ghost: HTMLCanvasElement | null };
 
 export class Viewer {
   readonly el: HTMLDivElement;
@@ -189,8 +190,9 @@ export class Viewer {
     this.info = info;
     const list = pages === "all" ? this.pages : pages.map((i) => this.pages[i]).filter(Boolean);
     for (const pv of list) this.invalidate(pv);
-    if (this.selected && !this.pages[this.selected.page]) this.selectAnnot(null);
-    if (this.area && !this.pages[this.area.page]) this.setArea(null);
+    // after undo/redo an item number may mean another item (or none): start fresh
+    this.selectAnnot(null);
+    this.setArea(null);
     this.schedule();
   }
 
@@ -467,10 +469,12 @@ export class Viewer {
     let kind = "";
     if (pv && !(e.target as Element).closest(".page-forms > *, .floating")) {
       const p = this.toPagePoint(pv, e);
-      if (this.annotAt(pv, p)) kind = "over-annot";
+      const h = this.handleAt(pv, p);
+      if (h >= 0) kind = h % 2 ? "over-nesw" : "over-nwse";
+      else if (this.annotAt(pv, p)) kind = "over-annot";
       else if (this.onText(pv, p)) kind = "over-text";
     }
-    if (this.cursorPage && (this.cursorPage !== pv || this.cursorKind !== kind)) this.cursorPage.el.classList.remove("over-text", "over-annot");
+    if (this.cursorPage && (this.cursorPage !== pv || this.cursorKind !== kind)) this.cursorPage.el.classList.remove("over-text", "over-annot", "over-nwse", "over-nesw");
     if (pv && kind) pv.el.classList.add(kind);
     this.cursorPage = pv;
     this.cursorKind = kind;
@@ -502,6 +506,7 @@ export class Viewer {
     const p = this.toPagePoint(pv, e);
     const capture = () => (e.target as Element).setPointerCapture?.(e.pointerId);
 
+    if ((this.tool === "select" || this.tool === "area") && this.startResize(pv, p, e)) return;
     const grabAnnot = (a: AnnotInfo) => {
       this.clearSelection();
       this.selectAnnot({ page: pv.index, index: a.index });
@@ -650,6 +655,9 @@ export class Viewer {
         this.positionAreaGhost(d, e);
         break;
       }
+      case "resize":
+        this.moveResize(d, p, e.shiftKey);
+        break;
       case "erase": {
         const pts = (e.getCoalescedEvents?.() ?? [e]).map((ce) => this.toPagePoint(d.pv, ce));
         d.points.push(...pts);
@@ -807,8 +815,25 @@ export class Viewer {
           }
           if (target !== d.pv) this.afterAnnotEdit(d.pv, res.from);
           this.afterAnnotEdit(target, res.to);
+          this.refreshFields(d.pv);
           if (ghost) this.keepUntilRendered(target, ghost);
           this.selectAnnot({ page: target.index, index: res.index });
+          break;
+        }
+        case "resize": {
+          const r = d.next;
+          const same = r.every((v, i) => Math.abs(v - d.rect[i]) < 0.5);
+          if (same) {
+            d.ghost?.remove();
+            this.drawAnnotSelection();
+            return;
+          }
+          d.ghost?.classList.add("dropped");
+          try {
+            this.afterAnnotEdit(d.pv, await eng.resizeAnnot(d.pv.index, d.annot.index, r));
+          } finally {
+            if (d.ghost) this.keepUntilRendered(d.pv, d.ghost);
+          }
           break;
         }
         case "erase": {
@@ -816,6 +841,7 @@ export class Viewer {
           const path = d.points.length > 2 ? simplifyStroke(d.points, 0.4 / this.zoom + 0.1) : d.points;
           try {
             this.afterAnnotEdit(d.pv, await eng.erase(d.pv.index, path, s.eraserSize / 2, s.eraserAll));
+            if (s.eraserAll) this.refreshFields(d.pv);
             held.release(true);
           } catch (err) {
             held.release(false);
@@ -851,7 +877,8 @@ export class Viewer {
     if (d && "pv" in d) {
       this.clearPreview(d.pv);
       d.pv.el.classList.remove("moving");
-      if (d.kind === "move" || d.kind === "areamove") d.ghost?.remove();
+      if (d.kind === "move" || d.kind === "areamove" || d.kind === "resize") d.ghost?.remove();
+      if (d.kind === "resize") this.drawAnnotSelection();
       if (d.kind === "area") this.drawArea(d.pv, null);
     }
   }
@@ -1164,7 +1191,11 @@ export class Viewer {
   }
 
   selectAnnot(sel: { page: number; index: number } | null): void {
-    if (this.selected) this.pages[this.selected.page]?.svg.querySelector(".g-annsel")?.replaceChildren();
+    if (this.selected) {
+      const old = this.pages[this.selected.page];
+      old?.svg.querySelector(".g-annsel")?.replaceChildren();
+      old?.el.classList.remove("has-sel");
+    }
     if (sel) this.setArea(null);
     const was = this.selected;
     this.selected = sel;
@@ -1176,14 +1207,111 @@ export class Viewer {
   private drawAnnotSelection(): void {
     const cur = this.selectedAnnot();
     if (!cur) {
-      if (this.selected && this.pages[this.selected.page]?.annots) this.selected = null;
+      // the item is gone (undo, another change): its outline and menu go too
+      const pv = this.selected ? this.pages[this.selected.page] : null;
+      if (this.selected && pv?.annots) {
+        pv.svg.querySelector(".g-annsel")?.replaceChildren();
+        pv.el.classList.remove("has-sel");
+        if (this.floating.dataset.kind === "annot") this.hideFloating();
+        this.selected = null;
+        this.host.selectionChanged?.();
+      }
       return;
     }
     const pv = this.pages[cur.page];
-    const r = cur.annot.rect;
-    const pad = 3 / this.zoom;
-    pv.svg.querySelector(".g-annsel")!.innerHTML = `<rect x="${r[0] - pad}" y="${r[1] - pad}" width="${rectWidth(r) + 2 * pad}" height="${rectHeight(r) + 2 * pad}" class="annsel"/>`;
+    pv.el.classList.add("has-sel");
+    this.drawSelectionBox(pv, cur.annot.rect, !!cur.annot.resizable);
     this.showAnnotMenu(pv, cur.annot);
+  }
+
+  /** Form fields may have gone (erased): show what's left. */
+  private refreshFields(pv: PageView): void {
+    this.host.engine.listWidgets(pv.index).then((w) => this.pages[pv.index] === pv && this.setWidgets(pv, w)).catch(() => {});
+  }
+
+  // ---------- resizing ----------
+
+  private drawSelectionBox(pv: PageView, r: Rect, handles: boolean): void {
+    const pad = 3 / this.zoom;
+    const h = 8 / this.zoom;
+    const box: Rect = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+    pv.svg.querySelector(".g-annsel")!.innerHTML =
+      `<rect x="${box[0]}" y="${box[1]}" width="${rectWidth(box)}" height="${rectHeight(box)}" class="annsel"/>` +
+      (handles ? this.corners(box).map(([x, y]) => `<rect x="${x - h / 2}" y="${y - h / 2}" width="${h}" height="${h}" class="handle"/>`).join("") : "");
+  }
+
+  /** Corners: top-left, top-right, bottom-right, bottom-left. */
+  private corners(r: Rect): Point[] {
+    return [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]];
+  }
+
+  /** The resize handle of the selected item under p (0..3), or -1. */
+  private handleAt(pv: PageView, p: Point): number {
+    const cur = this.selectedAnnot();
+    if (!cur || cur.page !== pv.index || !cur.annot.resizable) return -1;
+    const pad = 3 / this.zoom;
+    const r = cur.annot.rect;
+    const reach = (navigator.maxTouchPoints > 0 ? 16 : 8) / this.zoom;
+    return this.corners([r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]).findIndex(([x, y]) => Math.abs(p[0] - x) <= reach && Math.abs(p[1] - y) <= reach);
+  }
+
+  private startResize(pv: PageView, p: Point, e: PointerEvent): boolean {
+    const corner = this.handleAt(pv, p);
+    if (corner < 0) return false;
+    const annot = this.selectedAnnot()!.annot;
+    // pictures keep their proportions (Shift to stretch); shapes and drawings stretch (Shift keeps them)
+    const d: Drag = { kind: "resize", pv, annot, corner, rect: [...annot.rect] as Rect, next: [...annot.rect] as Rect, keep: annot.kind === "Stamp", ghost: null };
+    this.drag = d;
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+    this.hideFloating();
+    void this.host.engine
+      .renderAnnotBitmap(pv.index, annot.index, this.zoom * (window.devicePixelRatio || 1))
+      .then((bmp) => {
+        if (!bmp) return;
+        if (this.drag !== d) return bmp.close();
+        const c = document.createElement("canvas");
+        c.className = "drag-ghost resize-ghost";
+        c.width = bmp.width;
+        c.height = bmp.height;
+        c.getContext("2d")!.drawImage(bmp, 0, 0);
+        bmp.close();
+        d.ghost = c;
+        this.pagesEl.append(c);
+        this.placeResizeGhost(d);
+      })
+      .catch(() => {});
+    return true;
+  }
+
+  private moveResize(d: Extract<Drag, { kind: "resize" }>, p: Point, shift: boolean): void {
+    const r = d.rect;
+    const opp = this.corners(r)[(d.corner + 2) % 4];
+    const min = 4;
+    let w = Math.max(min, Math.abs(p[0] - opp[0]));
+    let h = Math.max(min, Math.abs(p[1] - opp[1]));
+    if (d.keep !== shift) {
+      const ratio = rectWidth(r) / Math.max(rectHeight(r), 0.01);
+      if (w / h > ratio) h = w / ratio;
+      else w = h * ratio;
+    }
+    const sx = p[0] >= opp[0] ? 1 : -1;
+    const sy = p[1] >= opp[1] ? 1 : -1;
+    d.next = normRect(opp[0], opp[1], opp[0] + sx * w, opp[1] + sy * h);
+    this.drawSelectionBox(d.pv, d.next, true);
+    this.placeResizeGhost(d);
+  }
+
+  private placeResizeGhost(d: Extract<Drag, { kind: "resize" }>): void {
+    const g = d.ghost;
+    if (!g) return;
+    const host = this.pagesEl.getBoundingClientRect();
+    const pr = d.pv.el.getBoundingClientRect();
+    const r = d.next;
+    g.style.left = `${pr.left - host.left + (r[0] - d.pv.info.x) * this.zoom}px`;
+    g.style.top = `${pr.top - host.top + (r[1] - d.pv.info.y) * this.zoom}px`;
+    g.style.width = `${rectWidth(r) * this.zoom}px`;
+    g.style.height = `${rectHeight(r) * this.zoom}px`;
   }
 
   /** Change how the selected shape looks. */
@@ -1346,6 +1474,7 @@ export class Viewer {
     const pv = this.pages[a.page];
     this.setArea(null);
     this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.eraseArea(a.page, a.rect)));
+    this.refreshFields(pv);
     return true;
   }
 
@@ -1460,6 +1589,7 @@ export class Viewer {
             if (!r) return null;
             this.setArea(null);
             this.afterAnnotEdit(pv, r.annots);
+            this.refreshFields(pv);
             return r.clip;
           })
         : eng.copyArea(a.page, a.rect);

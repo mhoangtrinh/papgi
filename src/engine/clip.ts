@@ -17,6 +17,8 @@ export interface ClipItem {
   obj: MuPDF.PDFObject; // annotation dictionary in the clip document
   rect: Rect; // where it was, in the source page's space
   area: boolean;
+  /** A form field's box: the field's name, and the field it belongs to when it's one of several boxes (radio buttons). */
+  field?: { name: string; group: number | null };
 }
 
 export interface Clip {
@@ -26,6 +28,10 @@ export interface Clip {
   rect: Rect; // bounds of all items
   ctm: MuPDF.Matrix; // source page: PDF space -> page space
   label: string;
+  /** Fields that own several copied boxes (radio groups), by their number in the source. */
+  parents?: Map<number, MuPDF.PDFObject>;
+  /** The source form's fonts (/DR), for fields. */
+  dr?: MuPDF.PDFObject | null;
 }
 
 export interface ClipInfo {
@@ -115,10 +121,14 @@ function clearGraphics(m: M, page: MuPDF.PDFPage, rects: Rect[], text = false): 
  * drawings inside are removed, then the areas are painted white (so parts of lines and
  * letters reaching in are rubbed out too).
  */
-export function eraseRects(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rects: Rect[]): void {
+export function eraseRects(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rects: Rect[], opts: { fields?: boolean; annots?: boolean } = {}): void {
   if (!rects.length) return;
   // the colour around the erased part (paper, or a coloured band it sits in)
   const [r, g, b] = surroundColor(m, page, rects);
+  const mid = (f: Rect) => inRects(rects, (f[0] + f[2]) / 2, (f[1] + f[3]) / 2);
+  // form fields (and added items) whose middle is in the erased part go too
+  if (opts.fields !== false) removeFields(page, mid);
+  if (opts.annots) for (const a of itemsIn(page, rects[0]).annots) page.deleteAnnotation(a);
   clearGraphics(m, page, rects);
   removeGlyphs(m, page, (c) => inRects(rects, c[0], c[1]));
   const inv = m.Matrix.invert(page.getTransform());
@@ -188,6 +198,85 @@ export function surroundColor(m: M, page: MuPDF.PDFPage, rects: Rect[]): [number
   }
 }
 
+/** Remove form fields (their boxes on this page) that pass the test. Returns how many. */
+export function removeFields(page: MuPDF.PDFPage, test: (r: Rect) => boolean): number {
+  const gone = page.getWidgets().filter((w) => {
+    try {
+      return test(w.getBounds() as Rect);
+    } catch {
+      return false; // (already removed)
+    }
+  });
+  // (MuPDF also takes them off the form's list of fields)
+  for (const w of gone) page.deleteAnnotation(w);
+  return gone.length;
+}
+
+/** Added items and form field boxes whose middle is inside `rect`. */
+export function itemsIn(page: MuPDF.PDFPage, rect: Rect): { annots: MuPDF.PDFAnnotation[]; widgets: MuPDF.PDFWidget[] } {
+  const mid = (b: Rect) => inRects([rect], (b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
+  const annots = page.getAnnotations().filter((a) => {
+    const t = a.getType();
+    return t !== "Widget" && t !== "Link" && t !== "Popup" && mid(a.getBounds() as Rect);
+  });
+  const widgets = page.getWidgets().filter((w) => {
+    try {
+      return mid(w.getBounds() as Rect);
+    } catch {
+      return false;
+    }
+  });
+  return { annots, widgets };
+}
+
+/** An annotation as a clip item: its dictionary without the ties to its page. */
+function annotItem(doc: MuPDF.PDFDocument, map: MuPDF.PDFGraftMap, cd: MuPDF.PDFDocument, a: MuPDF.PDFAnnotation): ClipItem {
+  const o = a.getObject();
+  const d = doc.newDictionary();
+  o.forEach((v, k) => {
+    if (!DROP_KEYS.has(String(k))) d.put(String(k), v);
+  });
+  return { obj: cd.addObject(map.graftObject(d)), rect: a.getBounds() as Rect, area: isArea(o) };
+}
+
+/** Field settings that a box can inherit from the fields above it. */
+const INHERITED = ["FT", "Ff", "V", "DV", "DA", "Q", "Opt", "MaxLen", "TU"];
+
+/**
+ * Form field boxes as clip items. A box that is a field of its own is copied with what it
+ * inherits; boxes of a field with several (radio buttons) keep a copy of that field.
+ */
+function fieldItems(doc: MuPDF.PDFDocument, map: MuPDF.PDFGraftMap, cd: MuPDF.PDFDocument, widgets: MuPDF.PDFWidget[], parents: Map<number, MuPDF.PDFObject>): ClipItem[] {
+  const items: ClipItem[] = [];
+  const own = (o: MuPDF.PDFObject, skip: string[]) => {
+    const d = doc.newDictionary();
+    o.forEach((v, k) => {
+      if (!skip.includes(String(k))) d.put(String(k), v);
+    });
+    for (const k of INHERITED) if (d.get(k).isNull()) {
+      const v = o.getInheritable(k);
+      if (!v.isNull()) d.put(k, v);
+    }
+    return d;
+  };
+  for (const w of widgets) {
+    const o = w.getObject();
+    const parent = o.get("Parent");
+    const name = w.getName().replace(/\./g, "_") || "Field";
+    const rect = w.getBounds() as Rect;
+    if (o.get("T").isNull() && parent.isDictionary() && parent.isIndirect()) {
+      // one box of a field with several
+      const key = parent.asIndirect();
+      if (!parents.has(key)) parents.set(key, cd.addObject(map.graftObject(own(parent, ["Kids", "Parent", "P"]))));
+      items.push({ obj: cd.addObject(map.graftObject(own(o, [...DROP_KEYS, "Parent"]))), rect, area: false, field: { name, group: key } });
+    } else {
+      const d = own(o, [...DROP_KEYS, "Parent", "Kids"]);
+      items.push({ obj: cd.addObject(map.graftObject(d)), rect, area: false, field: { name, group: null } });
+    }
+  }
+  return items;
+}
+
 /** Copy added items (annotations) of a page. */
 export function copyAnnots(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, indices: number[]): Clip {
   const cd = new m.PDFDocument();
@@ -196,13 +285,7 @@ export function copyAnnots(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, in
   const items: ClipItem[] = [];
   for (const i of indices) {
     const a = list[i];
-    if (!a) continue;
-    const o = a.getObject();
-    const d = doc.newDictionary();
-    o.forEach((v, k) => {
-      if (!DROP_KEYS.has(String(k))) d.put(String(k), v);
-    });
-    items.push({ obj: cd.addObject(map.graftObject(d)), rect: a.getBounds() as Rect, area: isArea(o) });
+    if (a) items.push(annotItem(doc, map, cd, a));
   }
   if (!items.length) {
     cd.destroy();
@@ -219,11 +302,30 @@ export function copyAnnots(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, in
  * count as inside when their centre is; the copy grows to hold them whole.
  * Returns null if there's nothing there.
  */
-export function copyArea(m: M, page: MuPDF.PDFPage, rect: Rect): Clip | null {
+export function copyArea(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, rect: Rect, withItems = true): Clip | null {
   const src = page.getObject();
   const cd = new m.PDFDocument();
   try {
     const map = cd.newGraftMap();
+    // added items and form fields in the area come along (not when they're moved as they are)
+    const items: ClipItem[] = [];
+    const parents = new Map<number, MuPDF.PDFObject>();
+    let dr: MuPDF.PDFObject | null = null;
+    if (withItems) {
+      const inside = itemsIn(page, rect);
+      for (const a of inside.annots) items.push(annotItem(doc, map, cd, a));
+      items.push(...fieldItems(doc, map, cd, inside.widgets, parents));
+      const d = doc.getTrailer().get("Root", "AcroForm", "DR");
+      if (inside.widgets.length && d.isDictionary()) dr = cd.addObject(map.graftObject(d));
+    }
+    const pageCtm = page.getTransform();
+    const itemsOnly = (): Clip | null => {
+      if (!items.length) {
+        cd.destroy();
+        return null;
+      }
+      return { doc: cd, text: "", items, rect: bounds(items.map((x) => x.rect)), ctm: pageCtm, label: "part of the page", parents, dr };
+    };
     const res = src.getInheritable("Resources");
     const box = (k: string) => {
       const v = src.getInheritable(k);
@@ -267,10 +369,7 @@ export function copyArea(m: M, page: MuPDF.PDFPage, rect: Rect): Clip | null {
         [keep[2], keep[1], b[2] + big, keep[3]],
       ];
       clearGraphics(m, cp, out.filter((r) => r[2] > r[0] && r[3] > r[1]), true);
-      if (isBlank(m, cp, keep)) {
-        cd.destroy();
-        return null;
-      }
+      if (isBlank(m, cp, keep)) return itemsOnly();
       const ctm = cp.getTransform();
       const cpo = cp.getObject();
       const form = cd.addStream(contentBytes(cpo), {});
@@ -290,7 +389,8 @@ export function copyArea(m: M, page: MuPDF.PDFPage, rect: Rect): Clip | null {
       annot.put("Rect", pdfRect(m, keep, ctm));
       const t = text.replace(/\s+\n/g, "\n").trim();
       if (t) annot.put("Contents", cd.newString(t));
-      return { doc: cd, text: t, items: [{ obj: annot, rect: keep, area: true }], rect: keep, ctm, label: "part of the page" };
+      const all = [{ obj: annot, rect: keep, area: true }, ...items];
+      return { doc: cd, text: t, items: all, rect: bounds(all.map((x) => x.rect)), ctm, label: "part of the page", parents, dr };
     } finally {
       cp.destroy();
     }
@@ -341,6 +441,17 @@ export function pasteClip(m: M, doc: MuPDF.PDFDocument, index: number, clip: Cli
   const dy = topLeft[1] - clip.rect[1];
   const placed: { num: number; it: ClipItem }[] = [];
   const page = doc.loadPage(index);
+  const hasFields = clip.items.some((it) => it.field);
+  const form = hasFields ? acroForm(doc, clip.dr ?? null, map) : null;
+  const names = hasFields ? fieldNames(doc) : new Set<string>();
+  // a pasted field is a new field: its own name, so it doesn't share its value with the original
+  const unique = (name: string) => {
+    let n = name;
+    for (let k = 2; names.has(n); k++) n = `${name} (${k})`;
+    names.add(n);
+    return n;
+  };
+  const groups = new Map<number, MuPDF.PDFObject>();
   try {
     const ctm = page.getTransform();
     for (const it of clip.items) {
@@ -348,6 +459,25 @@ export function pasteClip(m: M, doc: MuPDF.PDFDocument, index: number, clip: Cli
       g.put("P", pobj);
       annots.push(g);
       placed.push({ num: g.asIndirect(), it });
+      if (it.field && form) {
+        g.put("Rect", pdfRect(m, translate(it.rect, dx, dy), ctm));
+        const fields = form.get("Fields");
+        if (it.field.group !== null && clip.parents?.has(it.field.group)) {
+          let par = groups.get(it.field.group);
+          if (!par) {
+            par = map.graftObject(clip.parents.get(it.field.group)!);
+            par.put("T", doc.newString(unique(it.field.name)));
+            par.put("Kids", doc.newArray());
+            fields.push(par);
+            groups.set(it.field.group, par);
+          }
+          g.put("Parent", par);
+          par.get("Kids").push(g);
+        } else {
+          g.put("T", doc.newString(unique(it.field.name)));
+          fields.push(g);
+        }
+      }
       if (it.area) {
         g.put("Rect", pdfRect(m, [it.rect[0] + dx, it.rect[1] + dy, it.rect[2] + dx, it.rect[3] + dy], ctm));
         // turn the content as needed when the pages are turned differently
@@ -363,7 +493,7 @@ export function pasteClip(m: M, doc: MuPDF.PDFDocument, index: number, clip: Cli
   try {
     const list = fresh.getAnnotations();
     for (const { num: n, it } of placed) {
-      if (it.area) continue;
+      if (it.area || it.field) continue;
       const a = list.find((x) => x.getObject().asIndirect() === n);
       if (!a) continue;
       const b = a.getBounds();
@@ -375,9 +505,158 @@ export function pasteClip(m: M, doc: MuPDF.PDFDocument, index: number, clip: Cli
   return placed.map((p) => p.num);
 }
 
+/**
+ * Move annotations and form field boxes (by object number) by (dx, dy) in page space,
+ * onto page `to` if that's another page. Fields stay the same fields.
+ */
+export function moveObjects(m: M, doc: MuPDF.PDFDocument, from: number, to: number, nums: number[], dx: number, dy: number): void {
+  if (!nums.length) return;
+  const want = new Set(nums);
+  const targets = new Map<number, Rect>();
+  const src = doc.loadPage(from);
+  try {
+    for (const a of [...src.getAnnotations(), ...src.getWidgets()]) {
+      const n = a.getObject().asIndirect();
+      if (want.has(n)) targets.set(n, translate(a.getBounds() as Rect, dx, dy));
+    }
+  } finally {
+    src.destroy();
+  }
+  if (from !== to) {
+    const sObj = doc.findPage(from);
+    const dObj = doc.findPage(to);
+    const sAnn = sObj.get("Annots");
+    let dAnn = dObj.get("Annots");
+    if (!dAnn.isArray()) {
+      dAnn = doc.newArray();
+      dObj.put("Annots", dAnn);
+      dAnn = dObj.get("Annots");
+    }
+    if (sAnn.isArray())
+      for (let i = sAnn.length - 1; i >= 0; i--) {
+        const o = sAnn.get(i);
+        if (!o.isIndirect() || !(want.has(o.asIndirect()) || (o.get("Parent").isIndirect() && want.has(o.get("Parent").asIndirect()) && o.get("Subtype").asName() === "Popup"))) continue;
+        sAnn.delete(i);
+        o.put("P", dObj);
+        dAnn.push(o);
+      }
+  }
+  const dst = doc.loadPage(to);
+  try {
+    const ctm = dst.getTransform();
+    for (const a of dst.getAnnotations()) {
+      const t = targets.get(a.getObject().asIndirect());
+      if (!t) continue;
+      const b = a.getBounds();
+      shiftAnnot(m, dst, a, t[0] - b[0], t[1] - b[1]);
+    }
+    // field boxes keep their own look: just their place changes
+    for (const w of dst.getWidgets()) {
+      const t = targets.get(w.getObject().asIndirect());
+      if (t) w.getObject().put("Rect", pdfRect(m, t, ctm));
+    }
+  } finally {
+    dst.destroy();
+  }
+}
+
+const translate = (r: Rect, dx: number, dy: number): Rect => [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy];
+
+/** All field names in a document (full names). */
+function fieldNames(doc: MuPDF.PDFDocument): Set<string> {
+  const out = new Set<string>();
+  const walk = (list: MuPDF.PDFObject, prefix: string, depth: number) => {
+    if (!list.isArray() || depth > 20) return;
+    list.forEach((f) => {
+      const t = f.get("T");
+      const name = t.isString() ? (prefix ? `${prefix}.${t.asString()}` : t.asString()) : prefix;
+      if (name) out.add(name);
+      walk(f.get("Kids"), name, depth + 1);
+    });
+  };
+  walk(doc.getTrailer().get("Root", "AcroForm", "Fields"), "", 0);
+  return out;
+}
+
+/** The document's form (made if there's none yet), with the fonts fields need. */
+function acroForm(doc: MuPDF.PDFDocument, dr: MuPDF.PDFObject | null, map: MuPDF.PDFGraftMap): MuPDF.PDFObject {
+  const root = doc.getTrailer().get("Root");
+  let form = root.get("AcroForm");
+  if (!form.isDictionary()) {
+    root.put("AcroForm", doc.addObject(doc.newDictionary()));
+    form = root.get("AcroForm");
+  }
+  if (!form.get("Fields").isArray()) form.put("Fields", doc.newArray());
+  if (dr?.isDictionary()) {
+    const g = map.graftObject(dr);
+    let own = form.get("DR");
+    if (!own.isDictionary()) form.put("DR", g);
+    else {
+      // add the fonts (and other resources) this form doesn't have yet
+      g.forEach((sub, kind) => {
+        if (!sub.isDictionary()) return;
+        let mine = own.get(String(kind));
+        if (!mine.isDictionary()) {
+          own.put(String(kind), sub);
+          return;
+        }
+        sub.forEach((v, k) => {
+          if (mine.get(String(k)).isNull()) mine.put(String(k), v);
+        });
+      });
+      own = form.get("DR");
+    }
+  }
+  return form;
+}
+
+/** Can this kind of item be resized by its corners? */
+export function resizable(type: string): boolean {
+  return ["Stamp", "Square", "Circle", "Polygon", "Ink", "Line"].includes(type);
+}
+
+/** Fit an item into `r` (page space): its outline box is stretched onto r. */
+export function resizeAnnot(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation, r: Rect): void {
+  const b = a.getBounds() as Rect;
+  const type = a.getType();
+  if (type === "Stamp") {
+    // a picture keeps its look: only its box changes
+    a.getObject().put("Rect", pdfRect(m, r, page.getTransform()));
+    return;
+  }
+  // the margin around the geometry (line width, arrow heads) stays as it is: only the geometry stretches
+  const pts: Point[] = a.hasInkList()
+    ? a.getInkList().flat().map((p) => p as Point)
+    : a.hasVertices()
+      ? a.getVertices().map((p) => p as Point)
+      : a.hasLine()
+        ? a.getLine().map((p) => p as Point)
+        : (() => {
+            const rr = a.getRect();
+            return [[rr[0], rr[1]], [rr[2], rr[3]]] as Point[];
+          })();
+  const inner: Rect = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+  const target: Rect = [r[0] + (inner[0] - b[0]), r[1] + (inner[1] - b[1]), r[2] - (b[2] - inner[2]), r[3] - (b[3] - inner[3])];
+  const sx = (target[2] - target[0]) / Math.max(inner[2] - inner[0], 0.01);
+  const sy = (target[3] - target[1]) / Math.max(inner[3] - inner[1], 0.01);
+  const map = ([x, y]: Point): Point => [target[0] + (x - inner[0]) * sx, target[1] + (y - inner[1]) * sy];
+  if (a.hasInkList()) a.setInkList(a.getInkList().map((st) => st.map((p) => map(p as Point))));
+  else if (a.hasVertices()) a.setVertices(a.getVertices().map((p) => map(p as Point)));
+  else if (a.hasLine()) {
+    const [p, q] = a.getLine();
+    a.setLine(map(p as Point), map(q as Point));
+  } else {
+    const rr = a.getRect();
+    const p0 = map([rr[0], rr[1]]);
+    const p1 = map([rr[2], rr[3]]);
+    a.setRect([p0[0], p0[1], p1[0], p1[1]]);
+  }
+  a.update();
+}
+
 /** Translate any kind of annotation by (dx, dy) in page space. */
 export function shiftAnnot(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation, dx: number, dy: number): void {
-  if (a.getType() === "Stamp") {
+  if (a.getType() === "Stamp" || a.getType() === "Widget") {
     // stamps keep their own appearance: move the box only (an update would redraw it as "Draft")
     const r = a.getBounds() as Rect;
     a.getObject().put("Rect", pdfRect(m, [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy], page.getTransform()));
@@ -540,6 +819,8 @@ export function eraseBrush(m: M, doc: MuPDF.PDFDocument, index: number, path: Po
     for (const a of gone) page.deleteAnnotation(a);
     let content = false;
     if (everything) {
+      // form fields the brush touches
+      if (removeFields(page, (f) => brushTouchesRect(path, r, f))) changed = true;
       const rects = brushRects(path, r);
       if (rects.length) {
         eraseRects(m, doc, page, rects);

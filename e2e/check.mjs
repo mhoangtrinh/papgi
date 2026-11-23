@@ -489,6 +489,47 @@ try {
   await page.waitForTimeout(400);
   check("edit a bold heading in a form (with Vietnamese letters)", (await engine("pageText", 0)).includes("Lab Access Request — Đăng ký"));
   check("form fields still work after editing text", (await engine("listWidgets", 0)).length > 5);
+  {
+    // the eraser on Everything takes form fields too (and Ctrl+Z brings them back)
+    const ws = await engine("listWidgets", 0);
+    const f = ws.find((w) => w.kind === "text");
+    const b = await pageBox(0);
+    const pi = await page.evaluate(() => window.papgi.info.pages[0]);
+    const at = (x, y) => [b.x + ((x - pi.x) / pi.w) * b.width, b.y + ((y - pi.y) / pi.h) * b.height];
+    const fieldsShown = () => page.locator(".page").nth(0).locator(".page-forms > *").count();
+    const shownBefore = await fieldsShown();
+    await page.keyboard.press("x");
+    if (!(await page.locator('#options [data-erase="1"].on').count())) await page.click('#options [data-erase="1"]');
+    const cy = (f.rect[1] + f.rect[3]) / 2;
+    await page.mouse.move(...at(f.rect[0] + 10, cy));
+    await page.mouse.down();
+    await page.mouse.move(...at(f.rect[0] + 40, cy), { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(700);
+    const left = await engine("listWidgets", 0);
+    check("the eraser (Everything) removes a form field it touches", left.length === ws.length - 1 && !left.some((w) => w.name === f.name) && (await fieldsShown()) === shownBefore - 1, `${ws.length} -> ${left.length}`);
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(600);
+    check("undo brings the field back", (await engine("listWidgets", 0)).length === ws.length);
+    await page.click('#options [data-erase="0"]');
+    // select area: a field moves with its label
+    await page.keyboard.press("a");
+    await page.mouse.move(...at(40, f.rect[1] - 4));
+    await page.mouse.down();
+    await page.mouse.move(...at(f.rect[2] + 4, f.rect[3] + 4), { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    await page.mouse.move(...at(f.rect[0] + 20, cy));
+    await page.mouse.down();
+    await page.mouse.move(...at(f.rect[0] + 20, cy + 300), { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(900);
+    const movedField = (await engine("listWidgets", 0)).find((w) => w.name === f.name);
+    check("select area moves form fields too", !!movedField && Math.abs(movedField.rect[1] - f.rect[1] - 300) < 4 && (await engine("listWidgets", 0)).length === ws.length, JSON.stringify(movedField?.rect));
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(600);
+    await page.keyboard.press("v");
+  }
   await page.screenshot({ path: shots + "desktop-form-edited-light.png" });
   await page.keyboard.press("v");
 
@@ -637,6 +678,12 @@ try {
   const moved = (await engine("listAnnots", 0)).find((x) => x.area);
   check("dragging the area moves that part of the page (a picture follows the mouse)", areaGhost && !!moved && Math.abs(moved.rect[0] - 295) < 12 && !(await engine("pageText", 0)).includes("Page 1"), JSON.stringify(moved?.rect));
   await page.screenshot({ path: shots + "desktop-area-moved.png" });
+  const leftovers = () => page.evaluate(() => document.querySelectorAll(".page .g-annsel > *, .page .g-area > *").length + (document.querySelector('.floating:not([hidden])[data-kind="annot"]') ? 1 : 0));
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(600);
+  check("undoing a move leaves no selection box behind", (await leftovers()) === 0 && (await engine("pageText", 0)).includes("Page 1"));
+  await page.keyboard.press("Control+y");
+  await page.waitForTimeout(600);
   // the eraser: rub through the first drawing, then (Everything) through the sentence
   await page.keyboard.press("x");
   check("eraser options: added items or everything, and a size", (await page.locator('#options [data-erase="1"]').count()) === 1 && (await page.locator('#options [data-range="eraserSize"]').count()) === 1);
@@ -668,6 +715,28 @@ try {
   });
   await page.waitForTimeout(800);
   check("pasting a picture from another app puts it on the page", (await stamps()) === 1);
+  {
+    // resize it by its corner: it keeps its proportions
+    const pic = (await engine("listAnnots", 0)).find((x) => x.kind === "Stamp" && !x.area);
+    check("a pasted picture is selected with resize handles", (await page.locator(".page .handle").count()) === 4);
+    const zoom = await page.evaluate(() => window.papgi.viewer.zoom);
+    const se = await raw(0, pic.rect[2] + 3 / zoom, pic.rect[3] + 3 / zoom);
+    await page.mouse.move(...se);
+    await page.mouse.down();
+    await page.mouse.move(se[0] + 60, se[1] + 10, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    const pic2 = (await engine("listAnnots", 0)).find((x) => x.kind === "Stamp" && !x.area);
+    const ratio = (r) => (r[2] - r[0]) / (r[3] - r[1]);
+    check("dragging a corner resizes the picture, keeping its proportions", pic2.rect[2] - pic.rect[2] > 40 && Math.abs(ratio(pic2.rect) - ratio(pic.rect)) < 0.03 && Math.abs(pic2.rect[0] - pic.rect[0]) < 0.5, `${JSON.stringify(pic.rect)} -> ${JSON.stringify(pic2.rect)}`);
+    await page.keyboard.press("Control+z");
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(700);
+    check("undoing the paste leaves no selection box behind", (await stamps()) === 0 && (await leftovers()) === 0);
+    await page.keyboard.press("Control+y");
+    await page.keyboard.press("Control+y");
+    await page.waitForTimeout(600);
+  }
   await page.evaluate(() => {
     const dt = new DataTransfer();
     dt.setData("text/plain", "Pasted from somewhere");

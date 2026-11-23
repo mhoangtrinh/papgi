@@ -272,3 +272,98 @@ describe("eraser geometry", () => {
     expect(brushTouchesOutline([[50, 1]], 5, [0, 0, 100, 100], true)).toBe(true);
   });
 });
+
+describe("erasing form fields", () => {
+  it("the eraser (Everything) removes the fields it touches, and only with Everything", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("form.pdf"));
+    const before = e.listWidgets(0);
+    const name = before.find((w) => w.name === "name")!;
+    const c: Point = [(name.rect[0] + name.rect[2]) / 2, (name.rect[1] + name.rect[3]) / 2];
+    e.erase(0, [c], 4, false);
+    expect(e.listWidgets(0).length).toBe(before.length);
+    e.erase(0, [c], 4, true);
+    const after = e.listWidgets(0);
+    expect(after.length).toBe(before.length - 1);
+    expect(after.some((w) => w.name === "name")).toBe(false);
+    // gone from the saved file's form too
+    const d = new mupdf.PDFDocument(e.save());
+    const names: string[] = [];
+    d.loadPage(0).getWidgets().forEach((w) => names.push(w.getName()));
+    expect(names).not.toContain("name");
+    e.undo();
+    expect(e.listWidgets(0).length).toBe(before.length);
+  });
+
+  it("erasing or cutting an area removes the fields in it", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("form.pdf"));
+    const ws = e.listWidgets(0);
+    const email = ws.find((w) => w.name === "email")!;
+    const inst = ws.find((w) => w.name === "institute")!;
+    e.eraseArea(0, [email.rect[0] - 5, email.rect[1] - 3, email.rect[2] + 5, email.rect[3] + 3]);
+    expect(e.listWidgets(0).map((w) => w.name)).not.toContain("email");
+    expect(e.cutArea(0, [40, inst.rect[1] - 3, inst.rect[2] + 5, inst.rect[3] + 3])).not.toBeNull(); // label and field
+    expect(e.listWidgets(0).map((w) => w.name)).not.toContain("institute");
+    expect(e.listWidgets(0).length).toBe(ws.length - 2);
+  });
+});
+
+describe("form fields and added items in an area", () => {
+  const box = (r: Rect, pad = 4): Rect => [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+
+  it("moving an area moves the fields in it (same fields, same values)", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("form.pdf"));
+    const before = e.listWidgets(0);
+    const nameW = before.find((w) => w.name === "name")!;
+    e.setFieldText(0, nameW.index, "Hoang");
+    const m = e.moveArea(0, [40, nameW.rect[1] - 4, nameW.rect[2] + 4, nameW.rect[3] + 4], 0, [40, 700]);
+    expect(m).not.toBeNull();
+    const after = e.listWidgets(0);
+    expect(after.length).toBe(before.length);
+    const moved = after.find((w) => w.name === "name")!;
+    expect(moved.rect[1]).toBeCloseTo(700 + 4, 0);
+    expect(moved.value).toBe("Hoang");
+    e.undo();
+    expect(e.listWidgets(0).find((w) => w.name === "name")!.rect[1]).toBeCloseTo(nameW.rect[1], 0);
+  });
+
+  it("copying an area copies its fields as new fields; radio buttons stay one group", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("form.pdf"));
+    const ws = e.listWidgets(0);
+    const radios = ws.filter((w) => w.kind === "radio");
+    const email = ws.find((w) => w.name === "email")!;
+    const r: Rect = [40, Math.min(email.rect[1], ...radios.map((w) => w.rect[1])) - 4, 560, Math.max(email.rect[3], ...radios.map((w) => w.rect[3])) + 4];
+    // (rows between email and the radios come along too)
+    expect(e.copyArea(0, r)).not.toBeNull();
+    e.insertBlankPage(1);
+    e.paste(1, [40, 100]);
+    const pasted = e.listWidgets(1);
+    expect(pasted.some((w) => w.name === "email (2)")).toBe(true);
+    const newRadios = pasted.filter((w) => w.kind === "radio");
+    expect(newRadios.length).toBe(radios.length);
+    expect(new Set(newRadios.map((w) => w.name)).size).toBe(1);
+    expect(newRadios[0].name).not.toBe(radios[0].name);
+    // a new field: typing in it doesn't change the original
+    const copy = pasted.find((w) => w.name === "email (2)")!;
+    e.setFieldText(1, copy.index, "x@y.z");
+    expect(e.listWidgets(0).find((w) => w.name === "email")!.value).toBe("");
+    // the file keeps them as real fields
+    const d = new mupdf.PDFDocument(e.save());
+    const names: string[] = [];
+    d.loadPage(1).getWidgets().forEach((w) => names.push(w.getName()));
+    expect(names).toContain("email (2)");
+  });
+
+  it("moving an area takes added items along", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.addInk(0, [[[80, 60], [140, 80]]], [0, 0, 1], 2);
+    const m = e.moveArea(0, box(HEADING), 1, [100, 500])!;
+    expect(m.from.length).toBe(0);
+    expect(m.to.filter((a) => a.kind === "Ink").length).toBe(1);
+    expect(m.to.some((a) => a.area)).toBe(true);
+  });
+});

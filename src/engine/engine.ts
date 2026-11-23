@@ -12,7 +12,7 @@ import {
   type CompressOptions, type CompressResult, type ImageInput, type ImagesToPdfOptions, type OutFile, type PageRef, type PdfInput, type RenderOptions, type SplitPage,
 } from "./tools";
 import { pdfToWord, WordJob, type WordOptions, type WordResult } from "./toword";
-import { bakeAreas, copyAnnots, copyArea, eraseBrush, eraseRects, hasAreas, isArea, pasteClip, shiftAnnot, type Clip, type ClipInfo } from "./clip";
+import { bakeAreas, copyAnnots, copyArea, eraseBrush, eraseRects, hasAreas, isArea, itemsIn, moveObjects, pasteClip, resizable, resizeAnnot, shiftAnnot, type Clip, type ClipInfo } from "./clip";
 
 export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
@@ -53,6 +53,8 @@ export interface AnnotInfo {
   area?: boolean;
   /** Shapes: what kind and how they're drawn. */
   shape?: { kind: ShapeKind } & ShapeStyle;
+  /** Can be resized by its corners. */
+  resizable?: boolean;
 }
 
 export type WidgetKind = "text" | "checkbox" | "radio" | "combobox" | "listbox" | "button" | "signature";
@@ -473,6 +475,7 @@ export class PdfEngine {
           : "Other") as AnnotKind;
         const info: AnnotInfo = { index: i, kind, rect: a.getBounds() as Rect, color: [...a.getColor()], contents: a.getContents() };
         if (kind === "Stamp" && isArea(a)) info.area = true;
+        if (resizable(type)) info.resizable = true;
         if (kind === "Square" || kind === "Circle" || kind === "Polygon" || kind === "Line") info.shape = shapeInfo(a, kind);
         if (kind === "FreeText") {
           try {
@@ -532,6 +535,15 @@ export class PdfEngine {
       else an.setRect(g.rect);
       applyShapeStyle(an, style);
       an.update();
+    });
+  }
+
+  /** Resize an item so its box becomes `rect` (page space). */
+  resizeAnnot(index: number, annot: number, rect: Rect): AnnotInfo[] {
+    return this.op("Resize", index, (page) => {
+      const a = page.getAnnotations()[annot];
+      if (!a) throw new Error("No such annotation");
+      resizeAnnot(this.mupdf, page, a, rect);
     });
   }
 
@@ -690,7 +702,10 @@ export class PdfEngine {
       try {
         pix.clear();
         const dev = new m.DrawDevice(m.Matrix.identity, pix);
-        page.runPageContents(dev, m.Matrix.concat(m.Matrix.translate(-rect[0], -rect[1]), m.Matrix.scale(scale, scale)));
+        const mat = m.Matrix.concat(m.Matrix.translate(-rect[0], -rect[1]), m.Matrix.scale(scale, scale));
+        page.runPageContents(dev, mat);
+        page.runPageAnnots(dev, mat);
+        page.runPageWidgets(dev, mat);
         dev.close();
         dev.destroy();
         return unpremultiply(pix);
@@ -811,7 +826,7 @@ export class PdfEngine {
 
   /** Copy what's printed in a part of a page; null if there's nothing there. */
   copyArea(index: number, rect: Rect): ClipInfo | null {
-    const c = this.withPage(index, (page) => copyArea(this.mupdf, page, rect));
+    const c = this.withPage(index, (page) => copyArea(this.mupdf, this.requireDoc(), page, rect));
     return c ? this.setClip(c, index) : null;
   }
 
@@ -825,7 +840,7 @@ export class PdfEngine {
   /** Erase what's printed in a part of a page. */
   eraseArea(index: number, rect: Rect, name = "Erase"): AnnotInfo[] {
     const doc = this.requireDoc();
-    this.journaled(name, () => this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect])), [index]);
+    this.journaled(name, () => this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect], { fields: true, annots: true })), [index]);
     this.forgetText(index);
     return this.listAnnots(index);
   }
@@ -836,20 +851,31 @@ export class PdfEngine {
    */
   moveArea(index: number, rect: Rect, to: number, topLeft: Point): { from: AnnotInfo[]; to: AnnotInfo[]; index: number } | null {
     const doc = this.requireDoc();
-    const c = this.withPage(index, (page) => copyArea(this.mupdf, page, rect));
-    if (!c) return null;
-    let nums: number[] = [];
+    // what's printed is copied and erased; added items and form fields move as they are
+    const c = this.withPage(index, (page) => copyArea(this.mupdf, doc, page, rect, false));
+    const nums = this.withPage(index, (page) => {
+      const inside = itemsIn(page, rect);
+      return [...inside.annots, ...inside.widgets].map((a) => a.getObject().asIndirect());
+    });
+    if (!c && !nums.length) return null;
+    const dx = topLeft[0] - rect[0];
+    const dy = topLeft[1] - rect[1];
+    let pasted: number[] = [];
     try {
       this.journaled("Move", () => {
-        this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect]));
-        nums = pasteClip(this.mupdf, doc, to, c, topLeft);
-      }, [index, to]);
+        if (c) {
+          this.withPage(index, (page) => eraseRects(this.mupdf, doc, page, [rect], { fields: false, annots: false }));
+          pasted = pasteClip(this.mupdf, doc, to, c, [c.rect[0] + dx, c.rect[1] + dy]);
+        }
+        moveObjects(this.mupdf, doc, index, to, nums, dx, dy);
+      }, c ? [index, to] : []);
     } finally {
-      c.doc.destroy();
+      c?.doc.destroy();
     }
     this.forgetText(index);
     this.forgetText(to);
-    return { from: this.listAnnots(index), to: this.listAnnots(to), index: this.annotIndex(to, nums[0]) };
+    const first = pasted[0] ?? nums.find((n) => this.annotIndex(to, n) >= 0);
+    return { from: this.listAnnots(index), to: this.listAnnots(to), index: this.annotIndex(to, first) };
   }
 
   /**

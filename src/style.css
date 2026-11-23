@@ -3673,3 +3673,29 @@ body.side-resizing .viewer {
     width: min(300px, 82vw) !important;
   }
 }
+
+/* resize handles of the selected item */
+.handle {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.pages .page.over-nwse {
+  cursor: nwse-resize;
+}
+
+.pages .page.over-nesw {
+  cursor: nesw-resize;
+}
+
+.resize-ghost {
+  outline: none;
+  opacity: 0.9;
+}
+
+/* touch: with an item selected, a drag on its page moves or resizes it (tap elsewhere to scroll again) */
+.pages[data-tool="select"] .page.has-sel {
+  touch-action: none;
+}
