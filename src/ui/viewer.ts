@@ -109,10 +109,6 @@ export class Viewer {
     this.floating = document.createElement("div");
     this.floating.className = "floating";
     this.floating.hidden = true;
-    this.noteCard = document.createElement("div");
-    this.noteCard.className = "floating";
-    this.noteCard.dataset.kind = "note";
-    this.noteCard.hidden = true;
     mount.append(this.el);
 
     this.observer = new IntersectionObserver(
@@ -160,7 +156,7 @@ export class Viewer {
   setDocument(info: DocInfo | null, keepPosition = false): void {
     const keep = keepPosition ? this.current : 0;
     this.closeEditor(false);
-    this.closeNote();
+    this.closeNotes();
     if (this.para) {
       this.para.ed.destroy();
       this.para = null;
@@ -384,7 +380,7 @@ export class Viewer {
     el.scrollLeft = fx * el.scrollWidth - ax;
     el.scrollTop = fy * el.scrollHeight - ay;
     this.positionFloating();
-    this.placeFloat(this.noteCard);
+    for (const n of this.notes.values()) this.placeFloat(n.el);
     this.host.zoomChanged(z);
     this.schedule();
   }
@@ -527,7 +523,7 @@ export class Viewer {
     if ((this.tool === "select" || this.tool === "area") && this.startResize(pv, p, e)) return;
     const grabAnnot = (a: AnnotInfo) => {
       // (a click on the note whose card is open closes it again)
-      const again = a.kind === "Text" && this.openNote?.page === pv.index && this.openNote.num === a.num;
+      const again = a.kind === "Text" && this.notes.has(noteKey(pv.index, a.num));
       this.clearSelection();
       this.selectAnnot({ page: pv.index, index: a.index });
       const drag: Drag = { kind: "move", pv, annot: a, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null, again };
@@ -642,7 +638,8 @@ export class Viewer {
         d.moved = true;
         d.pv.el.classList.add("moving");
         this.hideFloating();
-        if (this.openNote?.num === d.annot.num) this.noteCard.hidden = true;
+        const moving = this.notes.get(noteKey(d.pv.index, d.annot.num));
+        if (moving) moving.el.hidden = true;
         this.positionGhost(d, e);
         break;
       }
@@ -727,7 +724,7 @@ export class Viewer {
             d.ghost?.remove();
             if (d.again) {
               this.selectAnnot(null);
-              this.closeNote();
+              this.closeNote(noteKey(d.pv.index, d.annot.num));
             } else if (this.selected) this.drawAnnotSelection();
             return;
           }
@@ -1583,37 +1580,57 @@ export class Viewer {
     };
   }
 
-  /** The note whose card is open: it stays open until closed (×, Esc, or a click on the note). */
-  private openNote: { page: number; num: number } | null = null;
-  private noteCard: HTMLDivElement;
+  /** The notes whose cards are open: each stays open until closed (its ×, Esc, or a click on the note). */
+  private notes = new Map<string, { page: number; num: number; el: HTMLDivElement }>();
+  private noteZ = 10;
 
   /**
    * A chosen note opens like a sticky note: its text on paper of its colour, and just
    * three small buttons (colour, change, delete). Copy / duplicate stay on the keyboard.
    */
   private showNoteCard(pv: PageView, a: AnnotInfo): void {
-    this.openNote = { page: pv.index, num: a.num };
-    this.renderNoteCard(pv, a);
+    const key = noteKey(pv.index, a.num);
+    let n = this.notes.get(key);
+    if (!n) {
+      const el = document.createElement("div");
+      el.className = "floating";
+      el.dataset.kind = "note";
+      n = { page: pv.index, num: a.num, el };
+      this.notes.set(key, n);
+    }
+    // (the one just opened on top)
+    n.el.style.zIndex = String(++this.noteZ);
+    this.renderNoteCard(pv, a, n.el);
   }
 
-  closeNote(): void {
-    this.openNote = null;
-    this.noteCard.hidden = true;
-    this.noteCard.remove();
+  /** Close one note's card, or (no key) all of them. */
+  closeNote(key?: string): void {
+    for (const [k, n] of [...this.notes]) {
+      if (key !== undefined && k !== key) continue;
+      n.el.remove();
+      this.notes.delete(k);
+    }
   }
 
-  /** The open note's card follows its note (moved, recoloured, changed) or goes with it. */
+  closeNotes(): void {
+    this.closeNote();
+  }
+
+  /** Open cards follow their notes (moved, recoloured, changed) or go with them. */
   private syncNote(pv: PageView): void {
-    if (!this.openNote || this.openNote.page !== pv.index || !pv.annots) return;
-    const a = pv.annots.find((x) => x.num === this.openNote!.num && x.kind === "Text");
-    if (a) this.renderNoteCard(pv, a);
-    else this.closeNote();
+    if (!pv.annots) return;
+    for (const [k, n] of [...this.notes]) {
+      if (n.page !== pv.index) continue;
+      const a = pv.annots.find((x) => x.num === n.num && x.kind === "Text");
+      if (a) this.renderNoteCard(pv, a, n.el);
+      else this.closeNote(k);
+    }
   }
 
-  private renderNoteCard(pv: PageView, a: AnnotInfo): void {
-    const card = this.noteCard;
+  private renderNoteCard(pv: PageView, a: AnnotInfo, card: HTMLDivElement): void {
+    const key = noteKey(pv.index, a.num);
     const current = rgbToHex(a.color);
-    const colorsOpen = !card.hidden && card.dataset.colors === "1" && card.dataset.num === String(a.num);
+    const colorsOpen = card.dataset.colors === "1";
     card.innerHTML = `<button class="note-close" data-act="close" title="Close (Esc)">${icon("close")}</button>
        <div class="note-text-shown" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="note-empty">Empty note</span>`}</div>
        <div class="note-colors" ${colorsOpen ? "" : "hidden"}>${PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("")}</div>
@@ -1626,22 +1643,23 @@ export class Viewer {
     card.style.setProperty("--note", current);
     card.dataset.page = String(pv.index);
     card.dataset.rect = a.rect.join(",");
-    card.dataset.num = String(a.num);
-    card.dataset.colors = colorsOpen ? "1" : "";
     card.hidden = false;
-    pv.el.append(card);
+    if (card.parentElement !== pv.el) pv.el.append(card);
     this.placeFloat(card);
-    card.onpointerdown = (e) => e.stopPropagation();
+    card.onpointerdown = (e) => {
+      e.stopPropagation();
+      card.style.zIndex = String(++this.noteZ);
+    };
     card.onclick = async (e) => {
       const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-act]");
       if (!b) return;
       // (the note as it is now)
       const cur = pv.annots?.find((x) => x.num === a.num);
-      if (!cur) return this.closeNote();
+      if (!cur) return this.closeNote(key);
       try {
         if (b.dataset.act === "close") {
           if (this.selected?.page === pv.index && this.selected.index === cur.index) this.selectAnnot(null);
-          this.closeNote();
+          this.closeNote(key);
         } else if (b.dataset.act === "colors") {
           const row = card.querySelector<HTMLElement>(".note-colors")!;
           row.hidden = !row.hidden;
@@ -2694,3 +2712,5 @@ const FIELD_BASE: Record<string, string> = { text: "Text", multiline: "Text", ch
 
 /** The pointer over each resize handle: corners (tl, tr, br, bl), then edges (t, r, b, l). */
 const RESIZE_CURSOR = ["over-nwse", "over-nesw", "over-nwse", "over-nesw", "over-ns", "over-ew", "over-ns", "over-ew"];
+
+const noteKey = (page: number, num: number) => `${page}:${num}`;

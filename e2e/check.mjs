@@ -1527,11 +1527,27 @@ try {
     await page.mouse.click(...nc);
     await page.waitForTimeout(300);
     check("a note's card stays open while you work elsewhere; Esc or a click on the note closes it", afterEsc === 0 && openNow === 1 && stays === 1 && (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0);
+    // several notes can be open at once; Esc closes them all
+    await page.evaluate(async () => {
+      const e = window.papgi.engine;
+      await e.addNote(0, [80, 380], "Second note", [0.37, 0.82, 0.41]);
+      window.papgi.viewer.refresh(await e.info());
+    });
+    await page.waitForTimeout(700);
+    const n2 = (await engine("listAnnots", 0)).find((x) => x.kind === "Text" && x.contents === "Second note").rect;
+    await page.mouse.click(...nc);
+    await page.waitForTimeout(250);
+    await page.mouse.click(...(await raw(0, (n2[0] + n2[2]) / 2, (n2[1] + n2[3]) / 2)));
+    await page.waitForTimeout(300);
+    const both = await page.locator('.floating[data-kind="note"]').count();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    check("several notes open at once; Esc closes them all", both === 2 && (await page.locator('.floating[data-kind="note"]').count()) === 0, String(both));
     await page.mouse.click(...nc);
     await page.waitForTimeout(300);
     await page.keyboard.press("Delete");
     await page.waitForTimeout(500);
-    check("deleting a note removes its card too", (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0 && !(await engine("listAnnots", 0)).some((x) => x.kind === "Text"));
+    check("deleting a note removes its card too", (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0 && (await engine("listAnnots", 0)).filter((x) => x.kind === "Text").length === 1);
     await page.keyboard.press("Control+z");
     await page.waitForTimeout(500);
     // a picture from a file
