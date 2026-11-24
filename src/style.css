@@ -5122,36 +5122,3 @@ textarea.note-text {
   font-size: 11px;
 }
 
-.ctx-find {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  margin-bottom: 4px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  cursor: text;
-}
-
-.ctx-find:focus-within {
-  border-color: var(--accent);
-}
-
-.ctx-find > .ic {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  color: var(--accent);
-}
-
-.ctx-find input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-}

@@ -35,8 +35,6 @@ export interface ViewerHost {
   scrolled?(): void;
   /** An item was selected or deselected (or the selected one changed). */
   selectionChanged?(): void;
-  /** Search papgi's functions (from the right-click menu), starting with `query`. */
-  findFunction?(query: string): void;
   saveSettings(): void;
 }
 
@@ -2444,8 +2442,7 @@ export class Viewer {
     if (last) this.selectAnnot({ page: place.page, index: last.index });
   }
 
-  /** Right click: Paste here (and the usual menu for an item). */
-  /** Right-click (or a long press): the menu at that spot, like in Word: find a function, copy, paste. */
+  /** Right-click (or a long press): the menu at that spot: copy, paste. */
   private onContextMenu(e: MouseEvent): void {
     const pv = this.pageFromEvent(e);
     if (!pv || (e.target as Element).closest(".page-forms > *, .floating, .text-editor, .para-editor")) return;
@@ -2460,14 +2457,14 @@ export class Viewer {
     }
     if (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1])) return;
     e.preventDefault();
-    this.showPasteMenu(pv, p, true);
+    this.showPasteMenu(pv, p);
   }
 
   /** Stops listening for a click or key that closes the right-click menu. */
   private dismissPaste: (() => void) | null = null;
 
-  /** The right-click menu; `typeHere`: put the cursor in its search field (not with a finger: no keyboard popping up). */
-  private showPasteMenu(pv: PageView, p: Point, typeHere = false): void {
+  /** The right-click menu. */
+  private showPasteMenu(pv: PageView, p: Point): void {
     // (selected text stays selected when right-clicked: it can be copied)
     const s = this.selection;
     const onText = !!s && s.page === pv.index && s.quads.some((q) => inRect([Math.min(q[0], q[4]), Math.min(q[1], q[3]), Math.max(q[2], q[6]), Math.max(q[5], q[7])], p[0], p[1]));
@@ -2478,34 +2475,9 @@ export class Viewer {
       pv,
       [p[0], p[1], p[0], p[1]],
       "paste",
-      `${this.host.findFunction ? `<label class="ctx-find">${icon("findFn")}<input type="text" placeholder="${t("Find a function…")}" aria-label="${t("Find a function")}" autocomplete="off" spellcheck="false"></label>` : ""}
-       ${onText ? `<button data-act="copy" class="labelled">${icon("copy")}<span>Copy</span><kbd>Ctrl C</kbd></button>` : ""}
+      `${onText ? `<button data-act="copy" class="labelled">${icon("copy")}<span>Copy</span><kbd>Ctrl C</kbd></button>` : ""}
        <button data-act="paste" class="labelled">${icon("paste")}<span>Paste</span><kbd>Ctrl V</kbd></button>`,
     );
-    // typing in the search field opens Find a function with what was typed
-    const input = this.floating.querySelector<HTMLInputElement>(".ctx-find input");
-    if (input) {
-      const go = () => {
-        const q = input.value;
-        this.hideFloating();
-        this.host.findFunction?.(q);
-      };
-      input.addEventListener("input", go);
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          go();
-        }
-      });
-      // (with a finger: straight to the search, with its own keyboard)
-      input.addEventListener("pointerdown", (e) => {
-        if (e.pointerType !== "mouse") {
-          e.preventDefault();
-          go();
-        }
-      });
-      if (typeHere) input.focus({ preventScroll: true });
-    }
     // a click or tap anywhere else (or Esc) closes it
     this.dismissPaste?.();
     const away = (e: Event) => {

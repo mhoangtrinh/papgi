@@ -2228,7 +2228,7 @@ try {
     check("no errors in the console during the sweep", errs.length === 0, errs.slice(0, 5).join(" | "));
   }
 
-  // ---- Find a function: a field in the top bar, and in the right-click menu ----
+  // ---- Find a function: a field in the top bar; the right-click menu stays short (copy, paste) ----
   {
     await page.evaluate(async () => { for (const t of [...window.papgi.tabs]) { if (t === window.papgi.tab) await window.papgi.engine.markSaved(); t.dirty = false; await window.papgi.closeTab(t); } });
     await page.evaluate(async () => { const r = await fetch("./samples/pages.pdf"); await window.papgi.openInEditor({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null }); });
@@ -2240,13 +2240,9 @@ try {
     const at = [box.x + box.width * 0.5, box.y + 420];
     await page.mouse.click(...at, { button: "right" });
     await page.waitForTimeout(200);
-    const focused = await page.evaluate(() => document.activeElement?.closest(".ctx-find") !== null);
     await page.screenshot({ path: shots + "desktop-right-click.png" });
-    await page.keyboard.type("ocr");
-    await page.waitForSelector(".cmd input");
-    const q = await page.inputValue(".cmd input");
-    const first = await page.textContent(".cmd-item.on .cmd-label");
-    check("right-click: type straight away to find a function", focused && q === "ocr" && /Recognize text/.test(first), JSON.stringify([focused, q, first]));
+    const menu = await page.evaluate(() => { const f = document.querySelector('.floating[data-kind="paste"]:not([hidden])'); return f ? [f.querySelectorAll("input").length, [...f.querySelectorAll("button")].map((b) => b.dataset.act)] : null; });
+    check("right-click: just the menu, no search field", !!menu && menu[0] === 0 && menu[1].includes("paste"), JSON.stringify(menu));
     await page.keyboard.press("Escape");
     // with the pen tool too
     await page.keyboard.press("p");

@@ -143,7 +143,6 @@ export class App {
         recognize: () => void this.recognize(),
         saveSettings: () => saveSettings(this.settings),
         scrolled: () => this.sidebar.scrolled(),
-        findFunction: (q) => this.findFunction(q),
         selectionChanged: () => {
           if (this.settings.tool === "select" || this.settings.tool === "area") this.renderOptions();
         },
@@ -1721,9 +1720,8 @@ export class App {
 
   // ---------- find a function ----------
 
-  /** (at once: typing into the right-click menu's field goes on in the search without a gap) */
-  private findFunction(query = ""): void {
-    showCommands(this.commands(), !!this.info, query);
+  private findFunction(): void {
+    showCommands(this.commands(), !!this.info);
   }
 
   /** Everything papgi can do, for "Find a function". */
