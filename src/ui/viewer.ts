@@ -63,7 +63,7 @@ const MAX_PIXELS = 24e6;
 export const PALETTE = ["#ffd400", "#5fd068", "#2f6fed", "#e5484d", "#8e4ec6", "#1c1c1c"];
 
 type Drag =
-  | { kind: "move"; pv: PageView; annot: AnnotInfo; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null }
+  | { kind: "move"; pv: PageView; annot: AnnotInfo; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null ; again?: boolean }
   | { kind: "select"; pv: PageView; start: Point; last: Point }
   | { kind: "pan"; startX: number; startY: number; left: number; top: number }
   | { kind: "mark"; pv: PageView; start: Point; last: Point; onText: boolean }
@@ -479,12 +479,12 @@ export class Viewer {
     if (pv && !(e.target as Element).closest(".page-forms > *, .floating")) {
       const p = this.toPagePoint(pv, e);
       const h = this.handleAt(pv, p);
-      if (h >= 0) kind = h % 2 ? "over-nesw" : "over-nwse";
+      if (h >= 0) kind = RESIZE_CURSOR[h];
       else if (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1])) kind = "over-annot";
       else if (this.annotAt(pv, p)) kind = "over-annot";
       else if (this.tool === "select" && this.onText(pv, p)) kind = "over-text";
     }
-    if (this.cursorPage && (this.cursorPage !== pv || this.cursorKind !== kind)) this.cursorPage.el.classList.remove("over-text", "over-annot", "over-nwse", "over-nesw");
+    if (this.cursorPage && (this.cursorPage !== pv || this.cursorKind !== kind)) this.cursorPage.el.classList.remove("over-text", "over-annot", "over-nwse", "over-nesw", "over-ns", "over-ew");
     if (pv && kind) pv.el.classList.add(kind);
     this.cursorPage = pv;
     this.cursorKind = kind;
@@ -519,9 +519,11 @@ export class Viewer {
     if (this.tool === "form") return this.fieldDown(pv, p, e);
     if ((this.tool === "select" || this.tool === "area") && this.startResize(pv, p, e)) return;
     const grabAnnot = (a: AnnotInfo) => {
+      // (a click on the note that's already open closes it again)
+      const again = a.kind === "Text" && this.selected?.page === pv.index && this.selected.index === a.index;
       this.clearSelection();
       this.selectAnnot({ page: pv.index, index: a.index });
-      const drag: Drag = { kind: "move", pv, annot: a, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null };
+      const drag: Drag = { kind: "move", pv, annot: a, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null, again };
       this.drag = drag;
       capture();
       e.preventDefault();
@@ -715,7 +717,8 @@ export class Viewer {
           d.pv.el.classList.remove("moving");
           if (!d.moved) {
             d.ghost?.remove();
-            if (this.selected) this.drawAnnotSelection();
+            if (d.again) this.selectAnnot(null);
+            else if (this.selected) this.drawAnnotSelection();
             return;
           }
           const target = this.pageAt(e.clientX, e.clientY) ?? d.pv;
@@ -1251,7 +1254,7 @@ export class Viewer {
     if (sel) this.setArea(null);
     const was = this.selected;
     this.selected = sel;
-    if (this.floating.dataset.kind === "annot") this.hideFloating();
+    if (this.floating.dataset.kind === "annot" || this.floating.dataset.kind === "note") this.hideFloating();
     if (sel) this.drawAnnotSelection();
     if (was?.page !== sel?.page || was?.index !== sel?.index) this.host.selectionChanged?.();
   }
@@ -1264,7 +1267,7 @@ export class Viewer {
       if (this.selected && pv?.annots) {
         pv.svg.querySelector(".g-annsel")?.replaceChildren();
         pv.el.classList.remove("has-sel");
-        if (this.floating.dataset.kind === "annot") this.hideFloating();
+        if (this.floating.dataset.kind === "annot" || this.floating.dataset.kind === "note") this.hideFloating();
         this.selected = null;
         this.host.selectionChanged?.();
       }
@@ -1287,9 +1290,42 @@ export class Viewer {
     const pad = 3 / this.zoom;
     const h = 8 / this.zoom;
     const box: Rect = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+    // corners, and the middles of the edges when the box is big enough to hold them
+    const pts = handles ? this.boxHandles(r).slice(0, rectWidth(r) * this.zoom > 40 || rectHeight(r) * this.zoom > 40 ? 8 : 4) : [];
     pv.svg.querySelector(".g-annsel")!.innerHTML =
       `<rect x="${box[0]}" y="${box[1]}" width="${rectWidth(box)}" height="${rectHeight(box)}" class="annsel"/>` +
-      (handles ? this.corners(box).map(([x, y]) => `<rect x="${x - h / 2}" y="${y - h / 2}" width="${h}" height="${h}" class="handle"/>`).join("") : "");
+      pts.map(([x, y]) => `<rect x="${x - h / 2}" y="${y - h / 2}" width="${h}" height="${h}" class="handle"/>`).join("");
+  }
+
+  /** The 8 handles of a selection box: corners (tl, tr, br, bl), then edge middles (t, r, b, l). */
+  private boxHandles(r: Rect): Point[] {
+    const pad = 3 / this.zoom;
+    const b: Rect = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+    const mx = (b[0] + b[2]) / 2;
+    const my = (b[1] + b[3]) / 2;
+    return [...this.corners(b), [mx, b[1]], [b[2], my], [mx, b[3]], [b[0], my]];
+  }
+
+  /**
+   * Which part of a selection box is at p: 0-3 a corner, 4-7 an edge (top, right, bottom,
+   * left: anywhere along it), -1 none.
+   */
+  private handleIn(r: Rect, p: Point): number {
+    const touch = navigator.maxTouchPoints > 0;
+    const reach = (touch ? 16 : 9) / this.zoom;
+    const hs = this.boxHandles(r);
+    const corner = hs.slice(0, 4).findIndex(([x, y]) => Math.abs(p[0] - x) <= reach && Math.abs(p[1] - y) <= reach);
+    if (corner >= 0) return corner;
+    const [x0, y0] = hs[0];
+    const [x1, y1] = hs[2];
+    const near = (touch ? 10 : 5) / this.zoom;
+    const inX = p[0] > x0 && p[0] < x1;
+    const inY = p[1] > y0 && p[1] < y1;
+    if (inX && Math.abs(p[1] - y0) <= near) return 4;
+    if (inY && Math.abs(p[0] - x1) <= near) return 5;
+    if (inX && Math.abs(p[1] - y1) <= near) return 6;
+    if (inY && Math.abs(p[0] - x0) <= near) return 7;
+    return -1;
   }
 
   /** Corners: top-left, top-right, bottom-right, bottom-left. */
@@ -1297,14 +1333,11 @@ export class Viewer {
     return [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]];
   }
 
-  /** The resize handle of the selected item under p (0..3), or -1. */
+  /** The resize handle of the selected item under p (0-3 corners, 4-7 edges), or -1. */
   private handleAt(pv: PageView, p: Point): number {
     const cur = this.selectedAnnot();
     if (!cur || cur.page !== pv.index || !cur.annot.resizable) return -1;
-    const pad = 3 / this.zoom;
-    const r = cur.annot.rect;
-    const reach = (navigator.maxTouchPoints > 0 ? 16 : 8) / this.zoom;
-    return this.corners([r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]).findIndex(([x, y]) => Math.abs(p[0] - x) <= reach && Math.abs(p[1] - y) <= reach);
+    return this.handleIn(cur.annot.rect, p);
   }
 
   private startResize(pv: PageView, p: Point, e: PointerEvent): boolean {
@@ -1338,6 +1371,19 @@ export class Viewer {
 
   private moveResize(d: Extract<Drag, { kind: "resize" }>, p: Point, shift: boolean): void {
     const r = d.rect;
+    if (d.corner >= 4) {
+      // an edge: only that side moves (not past the other side)
+      const min = 4;
+      const n: Rect = [...r] as Rect;
+      if (d.corner === 4) n[1] = Math.min(p[1], r[3] - min);
+      if (d.corner === 5) n[2] = Math.max(p[0], r[0] + min);
+      if (d.corner === 6) n[3] = Math.max(p[1], r[1] + min);
+      if (d.corner === 7) n[0] = Math.min(p[0], r[2] - min);
+      d.next = n;
+      this.drawSelectionBox(d.pv, d.next, true);
+      this.placeResizeGhost(d);
+      return;
+    }
     const opp = this.corners(r)[(d.corner + 2) % 4];
     const min = 4;
     let w = Math.max(min, Math.abs(p[0] - opp[0]));
@@ -1488,7 +1534,8 @@ export class Viewer {
       pv,
       a.rect,
       "note",
-      `<div class="note-text-shown" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="note-empty">Empty note</span>`}</div>
+      `<button class="note-close" data-act="close" title="Close (Esc)">${icon("close")}</button>
+       <div class="note-text-shown" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="note-empty">Empty note</span>`}</div>
        <div class="note-colors" hidden>${PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("")}</div>
        <div class="note-bar">
          <button data-act="colors" class="note-dot" style="--c:${current}" title="Colour"></button>
@@ -1502,7 +1549,8 @@ export class Viewer {
       const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-act]");
       if (!b) return;
       try {
-        if (b.dataset.act === "colors") {
+        if (b.dataset.act === "close") this.selectAnnot(null);
+        else if (b.dataset.act === "colors") {
           const row = this.floating.querySelector<HTMLElement>(".note-colors")!;
           row.hidden = !row.hidden;
           this.positionFloating();
@@ -1587,24 +1635,8 @@ export class Viewer {
     return best;
   }
 
-  /** The 8 handles of a field's box: corners (tl, tr, br, bl), then edge middles (t, r, b, l). */
-  private fieldHandles(r: Rect): Point[] {
-    const pad = 3 / this.zoom;
-    const b: Rect = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
-    const mx = (b[0] + b[2]) / 2;
-    const my = (b[1] + b[3]) / 2;
-    return [...this.corners(b), [mx, b[1]], [b[2], my], [mx, b[3]], [b[0], my]];
-  }
-
   private drawFieldBox(pv: PageView, r: Rect): void {
-    const pad = 3 / this.zoom;
-    const h = 8 / this.zoom;
-    const box: Rect = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
-    // (a small field only gets its corners)
-    const pts = this.fieldHandles(r).slice(0, rectWidth(r) * this.zoom > 40 || rectHeight(r) * this.zoom > 40 ? 8 : 4);
-    pv.svg.querySelector(".g-annsel")!.innerHTML =
-      `<rect x="${box[0]}" y="${box[1]}" width="${rectWidth(box)}" height="${rectHeight(box)}" class="annsel"/>` +
-      pts.map(([x, y]) => `<rect x="${x - h / 2}" y="${y - h / 2}" width="${h}" height="${h}" class="handle"/>`).join("");
+    this.drawSelectionBox(pv, r, true);
   }
 
   /**
@@ -1613,22 +1645,7 @@ export class Viewer {
    */
   private fieldHandleAt(pv: PageView, p: Point): number {
     const cur = this.selectedField();
-    if (!cur || cur.page !== pv.index) return -1;
-    const touch = navigator.maxTouchPoints > 0;
-    const reach = (touch ? 16 : 9) / this.zoom;
-    const hs = this.fieldHandles(cur.w.rect);
-    const corner = hs.slice(0, 4).findIndex(([x, y]) => Math.abs(p[0] - x) <= reach && Math.abs(p[1] - y) <= reach);
-    if (corner >= 0) return corner;
-    const [x0, y0] = hs[0];
-    const [x1, y1] = hs[2];
-    const near = (touch ? 10 : 5) / this.zoom;
-    const inX = p[0] > x0 && p[0] < x1;
-    const inY = p[1] > y0 && p[1] < y1;
-    if (inX && Math.abs(p[1] - y0) <= near) return 4;
-    if (inY && Math.abs(p[0] - x1) <= near) return 5;
-    if (inX && Math.abs(p[1] - y1) <= near) return 6;
-    if (inY && Math.abs(p[0] - x0) <= near) return 7;
-    return -1;
+    return cur && cur.page === pv.index ? this.handleIn(cur.w.rect, p) : -1;
   }
 
   /** The Form tool's pointer: arrows on the handles and edges, a hand to move over a field. */
@@ -1638,7 +1655,7 @@ export class Viewer {
     if (pv && !(e.target as Element).closest(".floating")) {
       const p = this.toPagePoint(pv, e);
       const h = this.fieldHandleAt(pv, p);
-      if (h >= 0) kind = ["over-nwse", "over-nesw", "over-nwse", "over-nesw", "over-ns", "over-ew", "over-ns", "over-ew"][h];
+      if (h >= 0) kind = RESIZE_CURSOR[h];
       else if (this.fieldAt(pv, p)) kind = "over-move";
     }
     const all = ["over-nwse", "over-nesw", "over-ns", "over-ew", "over-move"];
@@ -2578,3 +2595,6 @@ export function formatDate(iso: string, fmt: string): string {
 }
 
 const FIELD_BASE: Record<string, string> = { text: "Text", multiline: "Text", checkbox: "Check box", radio: "Choice", combobox: "Drop-down", date: "Date", signature: "Signature" };
+
+/** The pointer over each resize handle: corners (tl, tr, br, bl), then edges (t, r, b, l). */
+const RESIZE_CURSOR = ["over-nwse", "over-nesw", "over-nwse", "over-nesw", "over-ns", "over-ew", "over-ns", "over-ew"];

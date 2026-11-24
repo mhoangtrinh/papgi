@@ -746,7 +746,7 @@ try {
   {
     // resize it by its corner: it keeps its proportions
     const pic = (await engine("listAnnots", 0)).find((x) => x.kind === "Stamp" && !x.area);
-    check("a pasted picture is selected with resize handles", (await page.locator(".page .handle").count()) === 4);
+    check("a pasted picture is selected with resize handles (corners and edges)", (await page.locator(".page .handle").count()) === 8);
     const zoom = await page.evaluate(() => window.papgi.viewer.zoom);
     const se = await raw(0, pic.rect[2] + 3 / zoom, pic.rect[3] + 3 / zoom);
     await page.mouse.move(...se);
@@ -768,6 +768,18 @@ try {
     await page.waitForTimeout(600);
     const pic3 = (await engine("listAnnots", 0)).find((x) => x.kind === "Stamp" && !x.area);
     check("Shift + corner keeps the proportions", Math.abs(ratio(pic3.rect) - ratio(pic2.rect)) < 0.03 && pic3.rect[2] > pic2.rect[2] + 30, `${JSON.stringify(pic2.rect)} -> ${JSON.stringify(pic3.rect)}`);
+    // an edge stretches one side only, with a ↔ pointer
+    const re = await raw(0, pic3.rect[0] - 3 / zoom, (pic3.rect[1] + pic3.rect[3]) / 2 + 6 / zoom);
+    await page.mouse.move(...re);
+    await page.waitForTimeout(60);
+    const edgeCursor = await page.evaluate(([x, y]) => { const el = document.elementFromPoint(x, y); return `${getComputedStyle(el).cursor}|${el.tagName}.${el.getAttribute("class")}|${el.closest(".page")?.className}|${document.querySelector(".pages").dataset.tool}`; }, re);
+    await page.mouse.down();
+    await page.mouse.move(re[0] - 40, re[1] + 25, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    const pic4 = (await engine("listAnnots", 0)).find((x) => x.kind === "Stamp" && !x.area);
+    check("dragging an edge stretches only that side", edgeCursor.startsWith("ew-resize") && pic3.rect[0] - pic4.rect[0] > 25 && Math.abs(pic4.rect[2] - pic3.rect[2]) < 0.5 && Math.abs(pic4.rect[3] - pic3.rect[3]) < 0.5 && Math.abs(pic4.rect[1] - pic3.rect[1]) < 0.5, `${edgeCursor} ${JSON.stringify(pic3.rect)} -> ${JSON.stringify(pic4.rect)}`);
+    await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+z");
     await page.keyboard.press("Control+z");
@@ -1478,6 +1490,25 @@ try {
     await page.click('.modal [data-v="ok"]');
     await page.waitForTimeout(600);
     check("a note's text can be changed", (await engine("listAnnots", 0)).find((x) => x.kind === "Text")?.contents === "Changed");
+    // clicking the open note again closes it; Delete takes the note and its card away
+    const nr = (await engine("listAnnots", 0)).find((x) => x.kind === "Text").rect;
+    const nc = await raw(0, (nr[0] + nr[2]) / 2, (nr[1] + nr[3]) / 2);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    const afterEsc = await page.locator('.floating[data-kind="note"]:not([hidden])').count();
+    await page.mouse.click(...nc);
+    await page.waitForTimeout(300);
+    const openNow = await page.locator('.floating[data-kind="note"]:not([hidden])').count();
+    await page.mouse.click(...nc);
+    await page.waitForTimeout(300);
+    check("Esc closes a note; clicking it opens it, clicking again closes it", afterEsc === 0 && openNow === 1 && (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0);
+    await page.mouse.click(...nc);
+    await page.waitForTimeout(300);
+    await page.keyboard.press("Delete");
+    await page.waitForTimeout(500);
+    check("deleting a note removes its card too", (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0 && !(await engine("listAnnots", 0)).some((x) => x.kind === "Text"));
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(500);
     // a picture from a file
     const pics = async () => (await engine("listAnnots", 0)).filter((x) => x.kind === "Stamp" && !x.area).length;
     const p0 = await pics();
@@ -1485,7 +1516,7 @@ try {
     const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.click('#doc-menu [data-menu="picture"]')]);
     await fc.setFiles([new URL("../public/pwa-192.png", import.meta.url).pathname]);
     await page.waitForTimeout(900);
-    check("Add a picture… puts the file's picture on the page, ready to resize", (await pics()) === p0 + 1 && (await page.locator(".page .handle").count()) === 4);
+    check("Add a picture… puts the file's picture on the page, ready to resize", (await pics()) === p0 + 1 && (await page.locator(".page .handle").count()) === 8);
     // password: set it, save, the file needs it to open
     await docMenu("password");
     await page.fill('.modal [data-k="p1"]', "s3cret");
