@@ -144,6 +144,26 @@ try {
     await page.waitForTimeout(400);
     const toastText = (await page.locator(".toast").last().textContent().catch(() => "")) ?? "";
     check(`${label}: toasts in German`, /Rückgängig/.test(toastText), toastText);
+    // the document's own words are never translated: "Page 1" stays "Page 1" when edited
+    where = "edit text";
+    await page.evaluate(async () => {
+      window.papgi["dirty"] = false;
+      const r = await fetch("./samples/pages.pdf");
+      await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    });
+    await page.waitForSelector(".page.rendered");
+    await page.evaluate(() => (document.querySelector(".viewer").scrollTop = 0));
+    await page.waitForTimeout(400);
+    await page.evaluate(() => document.querySelector('.tools [data-tool="edit"]')?.click());
+    const pb = await page.locator(".page").first().boundingBox();
+    const pi = await page.evaluate(() => window.papgi.info.pages[0]);
+    await page.mouse.click(pb.x + (100 / pi.w) * pb.width, pb.y + (70 / pi.h) * pb.height);
+    await page.waitForSelector(".para-editor", { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(200);
+    const para = (await page.locator(".para-editor").textContent().catch(() => "")) ?? "";
+    check(`${label}: the document's own text isn't translated`, para.trim() === "Page 1", JSON.stringify(para));
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => (window.papgi["dirty"] = true));
     // switching back to English
     where = "language";
     await tap("#btn-file");

@@ -864,12 +864,16 @@ export class PdfEngine {
   addNote(index: number, at: Point, text: string, color: RGB): AnnotInfo[] {
     return this.op("Note", index, (page) => {
       const a = page.createAnnotation("Text");
-      // (the icon's box: 18 pt, its top-left corner where it was put)
-      a.setRect([at[0], at[1], at[0] + 18, at[1] + 18]);
+      // (the icon's box: 22 pt, its top-left corner where it was put)
+      a.setRect([at[0], at[1], at[0] + 22, at[1] + 22]);
       a.setIcon("Comment");
       a.setColor(color);
       a.setContents(text);
       a.update();
+      arrowAppearance(this.mupdf, page, a);
+      // (on a turned page the viewer draws an upright icon from another corner: put it where asked)
+      const b = a.getBounds();
+      if (Math.abs(b[0] - at[0]) > 0.5 || Math.abs(b[1] - at[1]) > 0.5) shiftAnnot(this.mupdf, page, a, at[0] - b[0], at[1] - b[1]);
     });
   }
 
@@ -881,6 +885,7 @@ export class PdfEngine {
       if (a.getContents() === text) return false;
       a.setContents(text);
       a.update();
+      arrowAppearance(this.mupdf, page, a);
     });
   }
 
@@ -893,6 +898,7 @@ export class PdfEngine {
         a.setDefaultAppearance("Helv", da.size || 12, color);
       } else a.setColor(color);
       a.update();
+      arrowAppearance(this.mupdf, page, a);
     });
   }
 
@@ -1438,7 +1444,7 @@ export class PdfEngine {
   // ---------- making form fields ----------
 
   /** Add a form field (rect in page space). Returns the page's fields and the new one's index. */
-  addField(index: number, kind: NewFieldKind, rect: Rect, opts: FieldProps & { group?: string | null; baseName?: string; signLabel?: string } = {}): { widgets: WidgetInfo[]; index: number; name: string } {
+  addField(index: number, kind: NewFieldKind, rect: Rect, opts: FieldProps & { group?: string | null; baseName?: string } = {}): { widgets: WidgetInfo[]; index: number; name: string } {
     const doc = this.requireDoc();
     let made = { num: 0, name: "" };
     this.journaled("Add field", () => {

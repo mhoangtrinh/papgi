@@ -4090,7 +4090,32 @@ textarea.note-text {
 /* Form tool: making fields */
 .pages[data-tool="form"] .page {
   cursor: crosshair;
+  /* (a finger scrolls, a tap adds a field; with a field chosen, drags move or resize it) */
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.pages[data-tool="form"] .page.has-sel {
   touch-action: none;
+}
+
+.pages[data-tool="form"] .page.over-move {
+  cursor: move;
+}
+
+.pages[data-tool="form"] .page.over-nwse {
+  cursor: nwse-resize;
+}
+
+.pages[data-tool="form"] .page.over-nesw {
+  cursor: nesw-resize;
+}
+
+.pages[data-tool="form"] .page.over-ns {
+  cursor: ns-resize;
+}
+
+.pages[data-tool="form"] .page.over-ew {
+  cursor: ew-resize;
 }
 
 .pages[data-tool="form"] .page-forms {
@@ -4262,4 +4287,101 @@ textarea.note-text {
 
 .scroll-arrow:hover .ic {
   color: var(--accent);
+}
+
+/* a chosen note: a sticky note of its colour hanging from its icon */
+.floating[data-kind="note"] {
+  --note: #ffd400;
+  display: block;
+  width: min(260px, 78vw);
+  padding: 12px 12px 6px 14px;
+  border: none;
+  border-radius: 3px 3px 3px 14px;
+  background: color-mix(in srgb, var(--note) 30%, #fffdf6);
+  color: #23221f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 24px rgba(0, 0, 0, 0.22);
+  white-space: normal;
+  /* a strip of the note's own colour on top, like the glued edge of a sticky note */
+  border-top: 5px solid var(--note);
+}
+
+.floating[data-kind="note"]::before {
+  /* the little tip pointing at the icon */
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -11px;
+  border: 6px solid transparent;
+  border-bottom-color: var(--note);
+  transform: translateX(-50%);
+}
+
+.floating[data-kind="note"]:not(.below)::before {
+  top: auto;
+  bottom: -12px;
+  border-bottom-color: transparent;
+  border-top-color: color-mix(in srgb, var(--note) 30%, #fffdf6);
+}
+
+.note-text-shown {
+  max-height: 168px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+}
+
+.note-empty {
+  color: rgba(35, 34, 31, 0.5);
+  font-style: italic;
+}
+
+.note-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.note-colors[hidden] {
+  display: none;
+}
+
+.note-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.note-gap {
+  flex: 1;
+}
+
+.note-bar button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(35, 34, 31, 0.7);
+}
+
+.note-bar button:hover {
+  background: rgba(0, 0, 0, 0.07);
+  color: #23221f;
+}
+
+.note-bar .note-dot::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1.5px rgba(0, 0, 0, 0.25);
 }

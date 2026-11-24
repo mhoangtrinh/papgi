@@ -1470,9 +1470,9 @@ try {
     await page.keyboard.press("v");
     await page.mouse.click(...(await raw(0, (note.rect[0] + note.rect[2]) / 2, (note.rect[1] + note.rect[3]) / 2)));
     await page.waitForTimeout(300);
-    check("clicking a note shows its text", (await page.textContent(".floating .note-peek").catch(() => "")) === "Check this figure");
+    check("clicking a note shows its text", (await page.textContent(".floating .note-text-shown").catch(() => "")) === "Check this figure");
     await page.screenshot({ path: shots + "desktop-note.png" });
-    await page.click(".floating .note-peek");
+    await page.click(".floating .note-text-shown");
     await page.waitForSelector(".modal textarea");
     await page.fill(".modal textarea", "Changed");
     await page.click('.modal [data-v="ok"]');
@@ -1616,6 +1616,18 @@ try {
     await page.waitForTimeout(500);
     const t2 = (await engine("listWidgets", 0))[0].rect;
     check("Form tool: a corner resizes a field", t2[2] - t1[2] > 50 / zoom * 0.9 && t2[3] - t1[3] > 10, JSON.stringify(t2));
+    // the pointer shows what a drag will do; an edge stretches one side only
+    const fh = await page.locator(".g-annsel .handle").evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }));
+    const cursorAt = async (x, y) => { await page.mouse.move(x, y); await page.waitForTimeout(60); return page.evaluate(([x, y]) => getComputedStyle(document.elementFromPoint(x, y)).cursor, [x, y]); };
+    const curs = [await cursorAt(...fh[2]), await cursorAt(fh[5][0], fh[5][1]), await cursorAt(fh[4][0] - 20, fh[4][1]), await cursorAt((fh[0][0] + fh[2][0]) / 2 + 15, (fh[0][1] + fh[2][1]) / 2)];
+    check("Form tool: resize arrows on corners and edges, move inside", curs.join() === "nwse-resize,ew-resize,ns-resize,move", curs.join());
+    await page.mouse.move(fh[5][0], fh[5][1]);
+    await page.mouse.down();
+    await page.mouse.move(fh[5][0] + 60, fh[5][1] + 30, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    const t3 = (await engine("listWidgets", 0))[0].rect;
+    check("Form tool: dragging an edge stretches only that side", t3[2] - t2[2] > 50 / zoom * 0.9 && Math.abs(t3[1] - t2[1]) < 0.5 && Math.abs(t3[3] - t2[3]) < 0.5, JSON.stringify(t3));
     // settings: rename the drop-down and give it choices
     const dd = ws[5].rect;
     await page.mouse.click(...(await raw(0, (dd[0] + dd[2]) / 2, (dd[1] + dd[3]) / 2)));

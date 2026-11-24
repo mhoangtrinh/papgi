@@ -75,7 +75,7 @@ type Drag =
   | { kind: "erase"; pv: PageView; points: Point[] }
   | { kind: "resize"; pv: PageView; annot: AnnotInfo; corner: number; rect: Rect; next: Rect; keep: boolean; ghost: HTMLCanvasElement | null }
   | { kind: "fieldnew"; pv: PageView; start: Point; last: Point; x: number; y: number }
-  | { kind: "fieldmove"; pv: PageView; w: WidgetInfo; corner: number; start: Point; next: Rect; moved: boolean; x: number; y: number };
+  | { kind: "fieldmove"; pv: PageView; w: WidgetInfo; handle: number; start: Point; next: Rect; moved: boolean; x: number; y: number };
 
 export class Viewer {
   readonly el: HTMLDivElement;
@@ -615,6 +615,7 @@ export class Viewer {
       if (this.tool === "sign") this.moveGhost(e);
       else if (this.tool === "edit") this.hoverBlock(e);
       else if (this.tool === "select" || this.tool === "area") this.hoverCursor(e);
+      else if (this.tool === "form") this.fieldCursor(e);
       else if (this.tool === "eraser" && e.pointerType === "mouse") this.hoverEraser(e);
       return;
     }
@@ -1389,8 +1390,9 @@ export class Viewer {
     this.floating.remove();
   }
 
-  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot" | "edit" | "area" | "paste" | "field", html: string): void {
+  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot" | "edit" | "area" | "paste" | "field" | "note", html: string): void {
     this.floating.innerHTML = html;
+    this.floating.style.removeProperty("--note");
     this.floating.onpointerdown = null;
     this.floating.dataset.kind = kind;
     this.floating.dataset.page = String(pv.index);
@@ -1416,7 +1418,9 @@ export class Viewer {
     const hi = vr.right - pr.left - 6 - half;
     x = lo > hi ? lo : Math.min(hi, Math.max(lo, x));
     this.floating.style.left = `${x}px`;
-    const above = top > 52;
+    // (a note's card hangs under its icon unless there's no room there)
+    const h = this.floating.offsetHeight;
+    const above = this.floating.dataset.kind === "note" ? bottom + 10 + h > pv.el.clientHeight && top > h + 10 : top > 52;
     this.floating.style.top = above ? `${top - 8}px` : `${bottom + 8}px`;
     this.floating.classList.toggle("below", !above);
   }
@@ -1446,14 +1450,14 @@ export class Viewer {
   }
 
   private showAnnotMenu(pv: PageView, a: AnnotInfo): void {
+    if (a.kind === "Text") return this.showNoteCard(pv, a);
     const current = rgbToHex(a.color);
     this.showFloatingAt(
       pv,
       a.rect,
       "annot",
       `${a.kind === "Stamp" || a.area || a.shape ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
-       ${a.kind === "Text" ? `<span class="note-peek" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="muted">Empty note</span>`}</span>` : ""}
-       ${a.kind === "FreeText" || a.kind === "Text" ? `<button data-act="edit" title="${a.kind === "Text" ? "Edit note" : "Edit text"}">${icon("edit")}</button>` : ""}
+       ${a.kind === "FreeText" ? `<button data-act="edit" title="Edit text">${icon("edit")}</button>` : ""}
        <button data-act="copy" title="Copy (Ctrl+C)">${icon("copy")}</button>
        <button data-act="duplicate" title="Duplicate (Ctrl+D)">${icon("duplicate")}</button>
        <button data-act="delete" title="Delete (Del)">${icon("trash")}</button>`,
@@ -1462,13 +1466,49 @@ export class Viewer {
       const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-act]");
       if (!b) return;
       try {
-        if (b.dataset.act === "edit" && a.kind === "Text") await this.editNote(pv, a);
-        else if (b.dataset.color) {
+        if (b.dataset.color) {
           this.afterAnnotEdit(pv, await this.host.engine.setAnnotColor(pv.index, a.index, hexToRgb(b.dataset.color)));
         } else if (b.dataset.act === "delete") await this.deleteSelectedAnnot();
         else if (b.dataset.act === "edit") this.openEditor(pv, a);
         else if (b.dataset.act === "copy") await this.copy(false);
         else if (b.dataset.act === "duplicate") await this.duplicate();
+      } catch (err) {
+        toast((err as Error).message, "error");
+      }
+    };
+  }
+
+  /**
+   * A chosen note opens like a sticky note: its text on paper of its colour, and just
+   * three small buttons (colour, change, delete). Copy / duplicate stay on the keyboard.
+   */
+  private showNoteCard(pv: PageView, a: AnnotInfo): void {
+    const current = rgbToHex(a.color);
+    this.showFloatingAt(
+      pv,
+      a.rect,
+      "note",
+      `<div class="note-text-shown" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="note-empty">Empty note</span>`}</div>
+       <div class="note-colors" hidden>${PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("")}</div>
+       <div class="note-bar">
+         <button data-act="colors" class="note-dot" style="--c:${current}" title="Colour"></button>
+         <span class="note-gap"></span>
+         <button data-act="edit" title="Edit note">${icon("edit")}</button>
+         <button data-act="delete" title="Delete (Del)">${icon("trash")}</button>
+       </div>`,
+    );
+    this.floating.style.setProperty("--note", current);
+    this.floating.onclick = async (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-act]");
+      if (!b) return;
+      try {
+        if (b.dataset.act === "colors") {
+          const row = this.floating.querySelector<HTMLElement>(".note-colors")!;
+          row.hidden = !row.hidden;
+          this.positionFloating();
+        } else if (b.dataset.color) this.afterAnnotEdit(pv, await this.host.engine.setAnnotColor(pv.index, a.index, hexToRgb(b.dataset.color)));
+        else if (b.dataset.act === "edit") await this.editNote(pv, a);
+        else if (b.dataset.act === "delete") await this.deleteSelectedAnnot();
       } catch (err) {
         toast((err as Error).message, "error");
       }
@@ -1492,7 +1532,11 @@ export class Viewer {
   }
 
   selectField(sel: { page: number; index: number } | null): void {
-    if (this.fieldSel) this.pages[this.fieldSel.page]?.svg.querySelector(".g-annsel")?.replaceChildren();
+    if (this.fieldSel) {
+      const old = this.pages[this.fieldSel.page];
+      old?.svg.querySelector(".g-annsel")?.replaceChildren();
+      old?.el.classList.remove("has-sel");
+    }
     this.fieldSel = sel;
     if (this.floating.dataset.kind === "field") this.hideFloating();
     if (sel) {
@@ -1512,7 +1556,8 @@ export class Viewer {
       return;
     }
     const pv = this.pages[cur.page];
-    this.drawSelectionBox(pv, cur.w.rect, true);
+    this.drawFieldBox(pv, cur.w.rect);
+    pv.el.classList.add("has-sel");
     this.showFieldMenu(pv, cur.w);
   }
 
@@ -1542,21 +1587,79 @@ export class Viewer {
     return best;
   }
 
+  /** The 8 handles of a field's box: corners (tl, tr, br, bl), then edge middles (t, r, b, l). */
+  private fieldHandles(r: Rect): Point[] {
+    const pad = 3 / this.zoom;
+    const b: Rect = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+    const mx = (b[0] + b[2]) / 2;
+    const my = (b[1] + b[3]) / 2;
+    return [...this.corners(b), [mx, b[1]], [b[2], my], [mx, b[3]], [b[0], my]];
+  }
+
+  private drawFieldBox(pv: PageView, r: Rect): void {
+    const pad = 3 / this.zoom;
+    const h = 8 / this.zoom;
+    const box: Rect = [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+    // (a small field only gets its corners)
+    const pts = this.fieldHandles(r).slice(0, rectWidth(r) * this.zoom > 40 || rectHeight(r) * this.zoom > 40 ? 8 : 4);
+    pv.svg.querySelector(".g-annsel")!.innerHTML =
+      `<rect x="${box[0]}" y="${box[1]}" width="${rectWidth(box)}" height="${rectHeight(box)}" class="annsel"/>` +
+      pts.map(([x, y]) => `<rect x="${x - h / 2}" y="${y - h / 2}" width="${h}" height="${h}" class="handle"/>`).join("");
+  }
+
+  /**
+   * Which part of the selected field is at p: 0-3 a corner, 4-7 an edge (top, right,
+   * bottom, left: anywhere along it), -1 none.
+   */
+  private fieldHandleAt(pv: PageView, p: Point): number {
+    const cur = this.selectedField();
+    if (!cur || cur.page !== pv.index) return -1;
+    const touch = navigator.maxTouchPoints > 0;
+    const reach = (touch ? 16 : 9) / this.zoom;
+    const hs = this.fieldHandles(cur.w.rect);
+    const corner = hs.slice(0, 4).findIndex(([x, y]) => Math.abs(p[0] - x) <= reach && Math.abs(p[1] - y) <= reach);
+    if (corner >= 0) return corner;
+    const [x0, y0] = hs[0];
+    const [x1, y1] = hs[2];
+    const near = (touch ? 10 : 5) / this.zoom;
+    const inX = p[0] > x0 && p[0] < x1;
+    const inY = p[1] > y0 && p[1] < y1;
+    if (inX && Math.abs(p[1] - y0) <= near) return 4;
+    if (inY && Math.abs(p[0] - x1) <= near) return 5;
+    if (inX && Math.abs(p[1] - y1) <= near) return 6;
+    if (inY && Math.abs(p[0] - x0) <= near) return 7;
+    return -1;
+  }
+
+  /** The Form tool's pointer: arrows on the handles and edges, a hand to move over a field. */
+  private fieldCursor(e: PointerEvent): void {
+    const pv = this.pageFromEvent(e);
+    let kind = "";
+    if (pv && !(e.target as Element).closest(".floating")) {
+      const p = this.toPagePoint(pv, e);
+      const h = this.fieldHandleAt(pv, p);
+      if (h >= 0) kind = ["over-nwse", "over-nesw", "over-nwse", "over-nesw", "over-ns", "over-ew", "over-ns", "over-ew"][h];
+      else if (this.fieldAt(pv, p)) kind = "over-move";
+    }
+    const all = ["over-nwse", "over-nesw", "over-ns", "over-ew", "over-move"];
+    if (this.cursorPage && (this.cursorPage !== pv || this.cursorKind !== kind)) this.cursorPage.el.classList.remove(...all);
+    if (pv && kind) pv.el.classList.add(kind);
+    this.cursorPage = pv;
+    this.cursorKind = kind;
+  }
+
   private fieldDown(pv: PageView, p: Point, e: PointerEvent): void {
     const cur = this.selectedField();
-    let corner = -1;
-    if (cur && cur.page === pv.index) {
-      const pad = 3 / this.zoom;
-      const r = cur.w.rect;
-      const reach = (navigator.maxTouchPoints > 0 ? 16 : 8) / this.zoom;
-      corner = this.corners([r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]).findIndex(([x, y]) => Math.abs(p[0] - x) <= reach && Math.abs(p[1] - y) <= reach);
-    }
-    const w = corner >= 0 ? cur!.w : this.fieldAt(pv, p);
+    const handle = this.fieldHandleAt(pv, p);
+    const w = handle >= 0 ? cur!.w : this.fieldAt(pv, p);
     if (w) {
       this.selectField({ page: pv.index, index: w.index });
-      this.drag = { kind: "fieldmove", pv, w, corner, start: p, next: [...w.rect] as Rect, moved: false, x: e.clientX, y: e.clientY };
+      this.drag = { kind: "fieldmove", pv, w, handle, start: p, next: [...w.rect] as Rect, moved: false, x: e.clientX, y: e.clientY };
     } else {
+      // (with a finger, a tap next to the chosen field first lets go of it, so the page scrolls again)
+      const letGo = !!cur && e.pointerType === "touch";
       this.selectField(null);
+      if (letGo) return;
       this.drag = { kind: "fieldnew", pv, start: p, last: p, x: e.clientX, y: e.clientY };
     }
     // (the page itself: what was under the pointer may just have been redrawn)
@@ -1574,20 +1677,28 @@ export class Viewer {
     this.hideFloating();
     const r = d.w.rect;
     const pg = d.pv.info;
-    if (d.corner < 0) {
+    const q: Point = [Math.max(pg.x, Math.min(pg.x + pg.w, p[0])), Math.max(pg.y, Math.min(pg.y + pg.h, p[1]))];
+    const min = 6;
+    if (d.handle < 0) {
       // keep it on the page
       const dx = Math.max(pg.x - r[0], Math.min(pg.x + pg.w - r[2], p[0] - d.start[0]));
       const dy = Math.max(pg.y - r[1], Math.min(pg.y + pg.h - r[3], p[1] - d.start[1]));
       d.next = [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy];
-    } else {
-      const opp = this.corners(r)[(d.corner + 2) % 4];
-      const q: Point = [Math.max(pg.x, Math.min(pg.x + pg.w, p[0])), Math.max(pg.y, Math.min(pg.y + pg.h, p[1]))];
-      const min = 6;
+    } else if (d.handle < 4) {
+      const opp = this.corners(r)[(d.handle + 2) % 4];
       const x1 = Math.abs(q[0] - opp[0]) < min ? opp[0] + (q[0] >= opp[0] ? min : -min) : q[0];
       const y1 = Math.abs(q[1] - opp[1]) < min ? opp[1] + (q[1] >= opp[1] ? min : -min) : q[1];
       d.next = normRect(opp[0], opp[1], x1, y1);
+    } else {
+      // an edge: only that side moves (not past the other side)
+      const n: Rect = [...r] as Rect;
+      if (d.handle === 4) n[1] = Math.min(q[1], r[3] - min);
+      if (d.handle === 5) n[2] = Math.max(q[0], r[0] + min);
+      if (d.handle === 6) n[3] = Math.max(q[1], r[1] + min);
+      if (d.handle === 7) n[0] = Math.min(q[0], r[2] - min);
+      d.next = n;
     }
-    this.drawSelectionBox(d.pv, d.next, true);
+    this.drawFieldBox(d.pv, d.next);
   }
 
   private async fieldNew(d: Extract<Drag, { kind: "fieldnew" }>, dragged: boolean): Promise<void> {
@@ -1621,7 +1732,6 @@ export class Viewer {
         dateFormat,
         // (named in the interface language: "Text 1", "Kontrollkästchen 1"…)
         baseName: t(FIELD_BASE[kind]),
-        signLabel: t("Sign here"),
       }),
     );
     if (kind === "radio") this.radioGroup = res.name;
@@ -1733,7 +1843,7 @@ export class Viewer {
   private async newNote(pv: PageView, p: Point): Promise<void> {
     const text = await noteDialog("", true);
     if (text === null || text === "delete") return;
-    const at = this.clampToPage(pv, [p[0] - 9, p[1] - 9], 18, 18);
+    const at = this.clampToPage(pv, [p[0] - 11, p[1] - 11], 22, 22);
     const annots = await this.host.busy(this.host.engine.addNote(pv.index, at, text, hexToRgb(this.host.settings.colors.note)));
     this.afterAnnotEdit(pv, annots);
   }

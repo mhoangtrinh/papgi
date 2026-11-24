@@ -626,6 +626,7 @@ function acroForm(doc: MuPDF.PDFDocument, dr: MuPDF.PDFObject | null, map: MuPDF
  * redraws it MuPDF's way). Plain lines are left to MuPDF.
  */
 export function arrowAppearance(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation): void {
+  if (a.getType() === "Text") return noteAppearance(m, page, a);
   if (a.getType() !== "Line") return;
   const le = a.getLineEndingStyles();
   if (le.start === "None" && le.end === "None") return;
@@ -668,6 +669,37 @@ export function arrowAppearance(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotatio
   const o = a.getObject();
   o.put("AP", ap);
   o.put("Rect", bbox);
+}
+
+/**
+ * A note's icon: a sticky note of its colour with a folded corner and a few lines of
+ * "writing" (MuPDF's own is a small black speech bubble). Like any note icon it stays
+ * upright when the page is turned (the viewer does that), so it's drawn upright here.
+ */
+export function noteAppearance(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation): void {
+  void m;
+  const doc = page._doc;
+  const o = a.getObject();
+  const r = [0, 1, 2, 3].map((i) => o.get("Rect").get(i).asNumber());
+  const s = Math.max(4, Math.min(Math.abs(r[2] - r[0]), Math.abs(r[3] - r[1])));
+  // a point of the icon (0..18, top-left origin) in the icon's own box (PDF: y up)
+  const at = (x: number, y: number) => `${num((x / 18) * s)} ${num(((18 - y) / 18) * s)}`;
+  const raw = a.getColor();
+  const c = raw.length === 3 ? raw : [1, 0.83, 0];
+  const dark = c.map((v) => num(v * 0.5)).join(" ");
+  const fold = c.map((v) => num(v * 0.78)).join(" ");
+  const ops =
+    `q 1 j ${c.map(num).join(" ")} rg ${dark} RG ${num((0.9 * s) / 18)} w\n` +
+    `${at(1.5, 1.5)} m ${at(16.5, 1.5)} l ${at(16.5, 12)} l ${at(12, 16.5)} l ${at(1.5, 16.5)} l h B\n` +
+    `${fold} rg ${at(16.5, 12)} m ${at(12, 12)} l ${at(12, 16.5)} l h B\n` +
+    `${num((1.1 * s) / 18)} w 1 J ${at(4.5, 6)} m ${at(13.5, 6)} l S ${at(4.5, 9)} m ${at(13.5, 9)} l S ${at(4.5, 12)} m ${at(9.5, 12)} l S\nQ\n`;
+  const form = doc.addStream(ops, {});
+  form.put("Type", doc.newName("XObject"));
+  form.put("Subtype", doc.newName("Form"));
+  form.put("BBox", [0, 0, s, s]);
+  const ap = doc.newDictionary();
+  ap.put("N", form);
+  o.put("AP", ap);
 }
 
 /** Can this kind of item be resized by its corners? */

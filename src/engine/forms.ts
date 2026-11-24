@@ -120,7 +120,7 @@ function circle(cx: number, cy: number, r: number): string {
  * these into the file, and other apps need them). Size as the box is in PDF space;
  * a turned page has its widgets turned with /MK /R, so w and h are swapped there.
  */
-export function writeButtonAppearance(doc: MuPDF.PDFDocument, obj: MuPDF.PDFObject, kind: "checkbox" | "radio" | "signature" | "box", onState = "Yes", signLabel = "Sign here"): void {
+export function writeButtonAppearance(doc: MuPDF.PDFDocument, obj: MuPDF.PDFObject, kind: "checkbox" | "radio" | "signature" | "box", onState = "Yes"): void {
   const r = obj.get("Rect");
   const w = Math.abs(r.get(2).asNumber() - r.get(0).asNumber());
   const h = Math.abs(r.get(3).asNumber() - r.get(1).asNumber());
@@ -143,17 +143,9 @@ export function writeButtonAppearance(doc: MuPDF.PDFDocument, obj: MuPDF.PDFObje
     return;
   }
   if (kind === "signature") {
-    const fonts = doc.newDictionary();
-    const res = doc.newDictionary();
-    fonts.put("Helv", ensureForm(doc).get("DR", "Font", "Helv"));
-    res.put("Font", fonts);
-    const size = Math.max(5, Math.min(8, ah * 0.22));
-    const line = Math.max(size + 4, ah * 0.28);
-    const ops =
-      `q ${stroke} 0.375 0.375 ${n(aw - 0.75)} ${n(ah - 0.75)} re S ` +
-      `0.5 w 6 ${n(line)} m ${n(aw - 6)} ${n(line)} l S Q ` +
-      `BT /Helv ${n(size)} Tf 0.5 0.5 0.55 rg 6 ${n(line - size - 2)} Td (${signLabel.replace(/[()\\]/g, "").replace(/[^\x20-\x7e]/g, "")}) Tj ET`;
-    ap.put("N", make(ops, res));
+    // a box with a line to sign on (no words: a signature put in later sits on top of it)
+    const line = Math.max(4, ah * 0.25);
+    ap.put("N", make(`q ${stroke} 0.375 0.375 ${n(aw - 0.75)} ${n(ah - 0.75)} re S 0.5 w 6 ${n(line)} m ${n(aw - 6)} ${n(line)} l S Q`));
     obj.put("AP", ap);
     return;
   }
@@ -192,7 +184,7 @@ function findGroup(doc: MuPDF.PDFDocument, name: string): MuPDF.PDFObject | null
  * `group` when it exists (otherwise a new group is made). Returns the widget's object number
  * and the name of its field (the group's name for radio buttons).
  */
-export function addField(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, kind: NewFieldKind, rect: Rect, opts: FieldProps & { group?: string | null; baseName?: string; signLabel?: string } = {}): { num: number; name: string } {
+export function addField(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, kind: NewFieldKind, rect: Rect, opts: FieldProps & { group?: string | null; baseName?: string } = {}): { num: number; name: string } {
   const form = ensureForm(doc);
   const pobj = page.getObject();
   const pdf = m.Rect.transform(rect, m.Matrix.invert(page.getTransform())) as Rect;
@@ -274,7 +266,7 @@ export function addField(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, kind
     writeButtonAppearance(doc, ref, "radio", on);
   } else {
     form.get("Fields").push(ref);
-    writeButtonAppearance(doc, ref, kind === "checkbox" ? "checkbox" : kind === "signature" ? "signature" : "box", "Yes", opts.signLabel);
+    writeButtonAppearance(doc, ref, kind === "checkbox" ? "checkbox" : kind === "signature" ? "signature" : "box");
   }
   let annots = pobj.get("Annots");
   if (!annots.isArray()) {
