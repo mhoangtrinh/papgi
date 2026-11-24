@@ -1375,7 +1375,9 @@ export class App {
 
   /** A new version of the app is ready to use. */
   updateReady(apply: () => void): void {
-    if (!this.info) return apply();
+    // (switch right away only when nothing would be lost: no document, no files in a tool,
+    // nothing running and no dialog open)
+    if (!this.info && !this.hub?.hasWork() && !this.busyCount && !document.querySelector(".modal-back")) return apply();
     let bar = document.querySelector<HTMLDivElement>(".update-bar");
     if (!bar) {
       bar = document.createElement("div");

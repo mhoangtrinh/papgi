@@ -124,6 +124,11 @@ export class Hub {
     return !this.el.hidden;
   }
 
+  /** Files picked or made in a tool, which reloading the page would lose. */
+  hasWork(): boolean {
+    return this.items.length > 0 || this.results.length > 0 || this.running;
+  }
+
   /** Show the start screen or a tool page. */
   show(route: "home" | ToolId): void {
     const changed = route !== this.route || this.el.hidden;

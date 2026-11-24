@@ -66,6 +66,7 @@ try {
     await Promise.all([page.waitForEvent("load", { timeout: 15000 }).catch(() => {}), page.click('.update-bar [data-act="reload"]')]);
     await page.waitForFunction(() => window.papgiBuild, null, { timeout: 15000 }).catch(() => {});
     check("Reload switches to the new version", (await build()) === "B", String(await build()));
+    check("and leaves a clean address", !new URL(page.url()).search, page.url());
   }
 
   // "Later", then the next time the app opens with a document: Reload still works
@@ -78,6 +79,8 @@ try {
   check("Later hides the bar", !(await page.isVisible(".update-bar")));
   const page2 = await ctx.newPage();
   await page.close();
+  // (headless Chromium sometimes stalls a page opened at the very moment the old one closes)
+  await page2.waitForTimeout(1000);
   await page2.goto(URL_);
   await page2.waitForFunction(() => window.papgiBuild, null, { timeout: 15000 });
   // nothing open yet: the waiting version is put in right away
@@ -108,6 +111,26 @@ try {
     await withDoc.click('.update-bar [data-act="reload"]');
     await withDoc.waitForFunction(() => window.papgiBuild === "B", null, { timeout: 15000 }).catch(() => {});
     check("and Reload there switches too", (await withDoc.evaluate(() => window.papgiBuild).catch(() => "?")) === "B", await withDoc.evaluate(() => window.papgiBuild).catch(() => "?"));
+  }
+
+  // files picked in a tool (no document open): ask first instead of reloading them away
+  const tool = await ctx.newPage();
+  await tool.goto(URL_ + "#merge");
+  await tool.waitForFunction(() => window.papgiBuild === "B", null, { timeout: 15000 });
+  await tool.evaluate(async () => {
+    const r = await fetch("./samples/pages.pdf");
+    await window.papgi.hub.drop([{ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null }]);
+  });
+  await tool.waitForTimeout(1000);
+  for (const p of [withDoc, page2]) await p.close().catch(() => {});
+  use("A");
+  await tool.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
+  const bar3 = await tool.waitForSelector(".update-bar", { timeout: 30000 }).then(() => true, () => false);
+  check("files picked in a tool: the bar shows instead of a reload", bar3 && (await tool.evaluate(() => window.papgiBuild)) === "B");
+  if (bar3) {
+    await tool.click('.update-bar [data-act="reload"]');
+    await tool.waitForFunction(() => window.papgiBuild === "A", null, { timeout: 15000 }).catch(() => {});
+    check("and Reload there switches", (await tool.evaluate(() => window.papgiBuild).catch(() => "?")) === "A");
   }
 } finally {
   await browser.close();
