@@ -62,6 +62,7 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | **Watermark** | Document → *Watermark…*: text, size, opacity, colour, bold, diagonal or across, on all pages or a range, with a preview. Written into the pages (Vietnamese and other Latin letters work) |
 | **Page numbers** | Document → *Page numbers, header & footer…*: "1", "Page 1 of 9", "1 / 9"… in any corner, a header and footer text ({page}, {pages}, {date}, {file}), start number, skip a title page, page range, with a preview |
 | **Redact** | Select area → *Redact*, or Document → *Redact a text everywhere…* (shows how many places first): black boxes, and the text, pictures and drawings under them are really removed from the file |
+| **Digital signatures** | Document → *Sign digitally…*: a real cryptographic signature (PAdES-style, adbe.pkcs7.detached, SHA-256) that Acrobat, Preview and others check. Sign with a certificate you make in papgi (kept on this device, valid 5 years; others see who signed and that nothing changed since, but nobody vouches for the name) or one from a .p12/.pfx file (e.g. from a trust service; RSA or EC keys). The key stays on the device and can't be read back out. Sign into a signature box (add one with the Form tool) or invisibly; the signed PDF is saved as a new file. Signing an unchanged signed PDF again keeps the earlier signatures valid. Opening a signed PDF checks its signatures: the **Signed** mark next to the name shows who signed and whether the PDF was changed since (the certificate chain isn't checked against trusted issuers). A signed PDF saved unchanged is written byte for byte as it was |
 | **Password** | Document → *Password protection…*: AES-256 password on the saved file, or remove one. Takes effect when you save |
 | **Contents** | Sidebar → *Contents*: the PDF's bookmarks, or, when it has none, its headings (found from their size, bold and numbering; running headers and table headers are skipped). Click to jump; the section you're reading is marked |
 | **Scans (OCR)** | Recognize text on scanned pages (Document → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
@@ -127,6 +128,13 @@ src/
   core/docx.ts       small .docx writer (sections, columns, paragraphs, tabs, pictures)
   engine/tools.ts    merge, split, images <-> PDF, compress (work on copies; unit-tested in Node)
   engine/clip.ts     copy/cut/paste of items and page areas, erasing, baking pasted areas on save
+  engine/comments.ts note replies (comment threads)
+  engine/sigfield.ts digital signatures in the PDF: the signature field and dictionary, listing signatures
+  sign/pdfsig.ts     the bytes around a signature (byte ranges, its room in the file)
+  sign/cms.ts        making and checking signatures (CMS via PKI.js and WebCrypto), own certificates, .p12 files
+  sign/signpdf.ts    signing a prepared file; checking a file's signatures
+  sign/identities.ts certificates kept on this device (IndexedDB)
+  ui/sign-digital.ts "Sign digitally" dialog and the signature details
   engine/forms.ts    making form fields (text, check box, radio, drop-down, date, signature box) and their appearances
   i18n.ts            interface language: swaps shown English texts for German as they appear
   i18n-de.ts         the German texts (dictionary + patterns for texts with numbers and names)

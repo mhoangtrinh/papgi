@@ -2055,6 +2055,7 @@ export class Viewer {
 
   /** Put the current signature into a signature box, as big as fits. */
   private async signField(pv: PageView, w: WidgetInfo): Promise<void> {
+    if (w.signed) return void toast("This box is already signed digitally.", "info");
     if (!this.host.activeSignature() && !(await this.host.needSignature())) return;
     const sig = this.host.activeSignature();
     if (!sig) return;
@@ -2651,7 +2652,8 @@ export class Viewer {
     const focusKey = focused?.closest(".page-forms") === pv.forms ? focused.dataset.key : undefined;
     pv.forms.replaceChildren(
       ...widgets
-        .filter((w) => w.kind !== "button" && (w.kind !== "signature" || !this.signedField(pv, w)))
+        // (a box signed with a picture, or digitally, shows its signature: no "Sign here")
+        .filter((w) => w.kind !== "button" && (w.kind !== "signature" || (!w.signed && !this.signedField(pv, w))))
         .map((w) => this.widgetElement(pv, w)),
     );
     if (focusKey) pv.forms.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();

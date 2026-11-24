@@ -334,6 +334,140 @@ kbd {
   display: none;
 }
 
+/* a digitally signed PDF: a mark next to its name */
+.sig-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, #1f9d55 14%, transparent);
+  color: #157a42;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sig-badge[hidden] {
+  display: none;
+}
+
+.sig-badge .ic {
+  width: 14px;
+  height: 14px;
+}
+
+.sig-badge[data-state="warn"] {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #9a5b00;
+}
+
+.sig-badge[data-state="bad"] {
+  background: color-mix(in srgb, #e5484d 16%, transparent);
+  color: #c62a2f;
+}
+
+:root[data-theme="dark"] .sig-badge {
+  color: #4ccb7f;
+}
+
+:root[data-theme="dark"] .sig-badge[data-state="warn"] {
+  color: #f5b544;
+}
+
+:root[data-theme="dark"] .sig-badge[data-state="bad"] {
+  color: #ff7b7f;
+}
+
+/* Sign digitally */
+.sd-section {
+  margin-bottom: 12px;
+}
+
+.sd-label {
+  margin-bottom: 6px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.sd-ids {
+  display: grid;
+  gap: 6px;
+}
+
+.sd-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.sd-id.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.sd-id-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sd-bad {
+  color: #c62a2f;
+}
+
+.sd-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sd-add .btn .ic {
+  width: 15px;
+  height: 15px;
+  margin-right: 4px;
+}
+
+.sd-sig {
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.4;
+}
+
+.sd-sig-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #1f9d55;
+  color: #fff;
+}
+
+.sd-sig-icon .ic {
+  width: 15px;
+  height: 15px;
+}
+
+.sd-sig.warn .sd-sig-icon {
+  background: #f59e0b;
+}
+
+.sd-sig.bad .sd-sig-icon {
+  background: #e5484d;
+}
+
 .docname.dirty .dirty-dot {
   display: block;
 }

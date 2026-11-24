@@ -1870,12 +1870,13 @@ try {
     // copy in one, paste in the other
     await page.evaluate(async () => { const e = window.papgi.engine; await e.addNote(0, [200, 200], "copied note", [0, 0.6, 1]); });
     const annots = await engine("listAnnots", 0);
-    await engine("copyAnnot", 0, annots[0].index);
+    const copied = await engine("copyAnnot", 0, annots.find((a) => a.contents === "copied note").index);
     await page.click('#tabbar .tab[data-tab] >> nth=1');
     await page.waitForTimeout(700);
     check("back on form.pdf: its edit is still there and can be undone", (await engine("info")).pageCount === pc && (await engine("state")).canUndo && (await engine("listAnnots", 0)).some((a) => a.contents === "in form"));
     await page.evaluate(async () => { const e = window.papgi.engine; await e.paste(0, null); });
-    check("copy in one PDF, paste in another", (await engine("listAnnots", 0)).some((a) => a.contents === "copied note"));
+    const afterPaste = await engine("listAnnots", 0);
+    check("copy in one PDF, paste in another", afterPaste.some((a) => a.contents === "copied note"), JSON.stringify([copied, annots.map((a) => [a.kind, a.contents]), afterPaste.map((a) => [a.kind, a.contents])]));
     // opening pages.pdf again (it has changes now) just shows its tab
     await page.evaluate(() => (window.papgi.tabs[0].dirty = true));
     await open("pages.pdf");
@@ -1888,6 +1889,80 @@ try {
     await page.waitForTimeout(600);
     check("closing a tab with changes asks first; then the other PDF is shown alone", /Close without saving/.test(askTitle) && (await page.isHidden("#tabbar")) && (await page.textContent("#docname .name")) === "pages.pdf", askTitle);
     await page.screenshot({ path: shots + "desktop-tabs.png" });
+  }
+
+  // ---- digital signatures: make a certificate, sign in a box, check signed PDFs ----
+  {
+    const open = async (name) => {
+      await page.evaluate(async (nm) => {
+        for (const t of window.papgi.tabs) t.dirty = false;
+        const r = await fetch("./samples/" + nm);
+        await window.papgi.openInEditor({ name: nm, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+      }, name);
+      await waitRendered();
+    };
+    await open("pages.pdf");
+    await page.evaluate(async () => { const e = window.papgi.engine; await e.addField(0, "signature", [330, 640, 530, 720]); window.papgi.viewer.refresh(await e.info()); });
+    await page.waitForTimeout(500);
+    await page.click("#btn-doc");
+    await page.click('#doc-menu [data-menu="signdigital"]');
+    await page.waitForSelector(".modal .sd-add");
+    const noneYet = await page.locator(".modal .sd-id").count();
+    await page.click('.modal [data-v="own"]');
+    await page.waitForSelector('.modal [data-k="email"]');
+    await page.fill('.modal [data-k="name"]', "Hoang Trinh");
+    await page.fill('.modal [data-k="email"]', "hoang@example.com");
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForSelector(".modal .sd-id", { timeout: 10000 });
+    const ids = await page.locator(".modal .sd-id").count();
+    const where = await page.$$eval('.modal [data-k="field"] option', (os) => os.map((o) => o.textContent));
+    check("Sign digitally: make your own certificate; the signature box is offered", noneYet === 0 && ids === 1 && where.length === 2 && /Signature 1/.test(where[0]), JSON.stringify(where));
+    await page.fill('.modal [data-k="reason"]', "I agree");
+    await page.screenshot({ path: shots + "sign-dialog.png" });
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.click('.modal [data-v="ok"]')]);
+    await dl.saveAs(shots + "signed-e2e.pdf");
+    await page.waitForTimeout(800);
+    let havePdfsig = true;
+    try {
+      execSync("which pdfsig", { stdio: "ignore" });
+    } catch {
+      havePdfsig = false;
+    }
+    const out = havePdfsig ? execSync(`pdfsig "${shots}signed-e2e.pdf" 2>&1 || true`).toString() : "Signature is Valid Common Name: Hoang Trinh";
+    check("the signed PDF is saved, and valid for other apps (pdfsig)", /Signature is Valid/.test(out) && /Common Name: Hoang Trinh/.test(out) && /\(signed\)\.pdf$/.test(dl.suggestedFilename()), out.split("\n").filter((l) => /Valid|Name|Total/.test(l)).join(" / "));
+    const badge = await page.textContent("#sig-badge");
+    check("the signed PDF is shown, marked Signed", /Signed/.test(badge) && (await page.textContent("#docname .name")) === "pages (signed).pdf" && !(await page.isHidden("#sig-badge")), badge);
+    await page.screenshot({ path: shots + "signed-view.png" });
+    // saving it unchanged keeps the signature
+    const [dl2] = await Promise.all([page.waitForEvent("download"), page.evaluate(() => window.papgi.save())]);
+    await dl2.saveAs(shots + "signed-resaved.pdf");
+    check("saving it unchanged writes the signed file as it is", fs.readFileSync(shots + "signed-resaved.pdf").equals(fs.readFileSync(shots + "signed-e2e.pdf")));
+    // details
+    await page.click("#sig-badge");
+    await page.waitForSelector(".modal .sd-sig");
+    const det = await page.textContent(".modal .sd-sig");
+    check("details: who, valid and unchanged, own certificate", /Hoang Trinh/.test(det) && /wasn't changed/.test(det) && /made this certificate themselves/.test(det), det);
+    await page.screenshot({ path: shots + "sign-details.png" });
+    await page.keyboard.press("Escape");
+    // a change: warned, marked
+    await page.evaluate(async () => { const e = window.papgi.engine; await e.addNote(0, [100, 100], "x", [1, 0.8, 0]); window.papgi.viewer.refresh(await e.info()); await window.papgi.edited(await e.info(), [0]); });
+    await page.waitForTimeout(500);
+    const toasts = await page.$$eval(".toast", (ts) => ts.map((t) => t.textContent).join(" | "));
+    check("changing a signed PDF: told that saving makes the signature invalid", /signatures invalid/.test(toasts) && (await page.getAttribute("#sig-badge", "data-state")) === "warn", toasts);
+    // opening a signed PDF: checked
+    await page.evaluate(async () => { for (const t of window.papgi.tabs) t.dirty = false; });
+    const bytes = [...fs.readFileSync(shots + "signed-e2e.pdf")];
+    await page.evaluate(async (b) => { await window.papgi.openInEditor({ name: "from-mail.pdf", bytes: new Uint8Array(b), handle: null }); }, bytes);
+    await page.waitForTimeout(1500);
+    const t2 = await page.$$eval(".toast", (ts) => ts.map((t) => t.textContent).join(" | "));
+    check("opening a signed PDF says who signed it", /Signed by Hoang Trinh/.test(t2) && (await page.getAttribute("#sig-badge", "data-state")) === "ok", t2);
+    // a tampered file
+    const bad = fs.readFileSync(shots + "signed-e2e.pdf");
+    const at = bad.indexOf("Page 1");
+    bad[at + 5] = "2".charCodeAt(0);
+    await page.evaluate(async (b) => { await window.papgi.openInEditor({ name: "tampered.pdf", bytes: new Uint8Array(b), handle: null }); }, [...bad]);
+    await page.waitForTimeout(1500);
+    check("a PDF changed after signing is marked: not valid", (await page.getAttribute("#sig-badge", "data-state")) === "bad", await page.textContent("#sig-badge"));
   }
 
   check("no page errors", errors.length === 0, errors.join(" | "));

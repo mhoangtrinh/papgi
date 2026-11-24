@@ -18,7 +18,9 @@
   "author": "",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
+    "asn1js": "^4.1.0",
     "mupdf": "^1.28.6",
+    "pkijs": "^4.0.1",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {

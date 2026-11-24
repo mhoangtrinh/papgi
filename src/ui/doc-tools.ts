@@ -10,7 +10,7 @@ import { modal } from "./dialogs";
 export const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
 /** Remembered choices (this device only). */
-function remember<T extends object>(key: string, defaults: T): { get(): T; set(v: T): void } {
+export function remember<T extends object>(key: string, defaults: T): { get(): T; set(v: T): void } {
   const k = `papgi.${key}`;
   return {
     get() {

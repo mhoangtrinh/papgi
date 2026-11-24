@@ -21,6 +21,7 @@ import { Hub } from "./hub/hub";
 import { FLOWS } from "./hub/flows";
 import { TOOL_LIST, type ToolId } from "./hub/registry";
 import { rememberFile } from "./recent";
+import type { SigReport } from "./sign/signpdf";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "select", label: "Select", key: "V", icon: "select" },
@@ -260,6 +261,7 @@ export class App {
             <button data-menu="watermark" data-needs-doc>${icon("watermark")}Watermark…</button>
             <button data-menu="numbers" data-needs-doc>${icon("pageNum")}Page numbers, header &amp; footer…</button>
             <button data-menu="redact" data-needs-doc>${icon("redact")}Redact a text everywhere…</button>
+            <button data-menu="signdigital" data-needs-doc>${icon("certificate")}Sign digitally…</button>
             <button data-menu="password" data-needs-doc>${icon("lock")}Password protection…</button>
             <button data-menu="flatten" data-needs-doc>${icon("flatten")}Flatten forms &amp; annotations</button>
             <hr>
@@ -268,7 +270,7 @@ export class App {
         </div>
         <button class="menu-label" id="btn-organize" title="See all pages: drag to reorder, turn, remove, insert">${icon("pages", "ml-icon")}<span>Pages</span></button>
       </div>
-      <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name" translate="no"></span></div>
+      <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name" translate="no"></span><button class="sig-badge" id="sig-badge" hidden></button></div>
       <div class="tb-group">
         <button class="icon-btn" id="btn-undo" title="Undo (Ctrl+Z)">${icon("undo")}</button>
         <button class="icon-btn" id="btn-redo" title="Redo (Ctrl+Y)">${icon("redo")}</button>
@@ -365,6 +367,7 @@ export class App {
       }
     });
     on("#tab-new", () => void this.openPicker());
+    on("#sig-badge", () => void this.signatureDetails());
     on("#btn-spread", () => {
       this.settings.spread = SPREADS[(SPREADS.indexOf(this.settings.spread) + 1) % SPREADS.length];
       saveSettings(this.settings);
@@ -1000,6 +1003,7 @@ export class App {
       case "numbers": return void this.pageNumbers();
       case "redact": return void this.redactText();
       case "password": return void this.password();
+      case "signdigital": return void this.signDigitally();
       case "organize": return this.toggleOrganize(true);
       case "ocr": return void this.recognize();
       case "print": return void this.print();
@@ -1088,8 +1092,11 @@ export class App {
       this.file = { name: f.name, handle: f.handle };
       this.sampleOpen = sample;
       target.view = null;
+      target.original = target.sigs = undefined;
+      target.sigWarned = false;
       this.setDoc(info);
       void this.remember(keep);
+      void this.checkSigned(target, keep);
       if (info.pageCount > 0 && !(await this.engine.pageText(0)).trim()) {
         const scanned = info.pageCount === 1 || !(await this.engine.pageText(Math.min(1, info.pageCount - 1))).trim();
         if (scanned) toast("This looks like a scan: there's no text to select yet.", "info", { label: "Recognize text", run: () => void this.recognize() });
@@ -1097,6 +1104,93 @@ export class App {
     } catch (e) {
       back();
       toast(`Couldn't open ${f.name}: ${friendlyError((e as Error).message)}`, "error");
+    }
+  }
+
+  /**
+   * The document as a file. A signed PDF that wasn't changed is written exactly as it was
+   * opened, so its signatures stay valid.
+   */
+  private async fileBytes(): Promise<Uint8Array> {
+    if (this.tab.original && !this.dirty) return this.tab.original.slice();
+    return this.busy(this.engine.save(false));
+  }
+
+  // ---------- digital signatures ----------
+
+  /** A just-opened PDF: are there digital signatures, and are they valid? */
+  private async checkSigned(tab: Tab, bytes: Uint8Array): Promise<void> {
+    try {
+      const sigs = await this.engine.signatures();
+      if (!sigs.length) return this.showSigBadge();
+      tab.original = bytes;
+      const { checkSignatures } = await import("./sign/signpdf");
+      tab.sigs = await checkSignatures(bytes, sigs);
+      if (tab !== this.tab) return;
+      this.showSigBadge();
+      const bad = tab.sigs.filter((x) => x.status !== "valid").length;
+      if (bad) toast(tab.sigs.length === 1 ? "This PDF's digital signature isn't valid." : "Some of this PDF's digital signatures aren't valid.", "error", { label: "Details", run: () => void this.signatureDetails() });
+      else toast(tab.sigs.length === 1 ? `Signed by ${tab.sigs[0].signer || "someone"}.` : `Signed by ${tab.sigs.length} people.`, "info", { label: "Details", run: () => void this.signatureDetails() });
+    } catch {
+      /* (only extra information) */
+    }
+  }
+
+  /** The "Signed" mark next to the file name. */
+  private showSigBadge(): void {
+    const b = this.$<HTMLButtonElement>("#sig-badge");
+    const sigs = this.tab.sigs;
+    b.hidden = !sigs?.length;
+    if (!sigs?.length) return;
+    const bad = sigs.some((x) => x.status !== "valid");
+    const state = bad ? "bad" : this.dirty ? "warn" : "ok";
+    b.dataset.state = state;
+    b.innerHTML = `${icon(bad ? "close" : "certificate")}<span>${state === "bad" ? "Signature not valid" : state === "warn" ? "Signed · changed" : "Signed"}</span>`;
+    b.title = state === "warn" ? "You changed this digitally signed PDF: saving makes its signatures invalid" : "Digital signatures: details";
+  }
+
+  private async signatureDetails(): Promise<void> {
+    if (!this.tab.sigs?.length) return;
+    const { showSignatures } = await import("./ui/sign-digital");
+    await showSignatures(this.tab.sigs, this.dirty);
+  }
+
+  /** Document → Sign digitally: sign with a certificate, save the signed PDF and show it. */
+  private async signDigitally(): Promise<void> {
+    if (!this.info || !this.file) return;
+    this.viewer.closeEditor(true);
+    await this.viewer.closeParagraph(true);
+    const tab = this.tab;
+    try {
+      const [{ signDialog }, { finishSignature, checkSignatures }] = await Promise.all([import("./ui/sign-digital"), import("./sign/signpdf")]);
+      // the empty signature boxes
+      const boxes: { page: number; widget: number; name: string }[] = [];
+      for (let i = 0; i < this.info.pageCount; i++)
+        for (const w of await this.engine.listWidgets(i)) if (w.kind === "signature" && !w.signed) boxes.push({ page: i, widget: w.index, name: w.name });
+      const warn = tab.sigs?.length && this.dirty ? t("You changed this signed PDF: its earlier signatures won't be valid anymore.") : "";
+      const c = await signDialog(boxes, this.settings.author, warn);
+      if (!c) return;
+      const now = new Date();
+      const when = now.toLocaleString(lang === "de" ? "de-DE" : "en-GB", { dateStyle: "short", timeStyle: "short" });
+      const off = -now.getTimezoneOffset();
+      const zone = `${off >= 0 ? "+" : "-"}${String(Math.floor(Math.abs(off) / 60)).padStart(2, "0")}:${String(Math.abs(off) % 60).padStart(2, "0")}`;
+      const lines = [t("Digitally signed by"), c.identity.name, `${t("Date")}: ${when} ${zone}`, ...(c.reason ? [`${t("Reason")}: ${c.reason}`] : []), ...(c.location ? [`${t("Place")}: ${c.location}`] : [])];
+      const prepared = await this.busy(this.engine.prepareSign({ field: c.field, name: c.identity.name, reason: c.reason, location: c.location, time: now.getTime(), lines }, tab.original && !this.dirty ? tab.original.slice() : null));
+      const signed = await this.busy(finishSignature(prepared, c.identity, now));
+      const name = `${baseName(this.file.name).replace(/ \((signed|signiert)\)$/, "")} (${t("signed")}).pdf`;
+      await saveAs(signed.slice(), name);
+      // show the signed PDF (it's a new file: its history starts here)
+      const info = await this.busy(this.engine.open(signed.slice(), name));
+      if (!info || tab !== this.tab) return;
+      this.file = { name, handle: null };
+      tab.original = signed;
+      tab.sigWarned = false;
+      this.setDoc(info);
+      tab.sigs = await checkSignatures(signed, await this.engine.signatures());
+      this.showSigBadge();
+      toast(`Signed and saved as ${name}`, "info");
+    } catch (e) {
+      toast(`Couldn't sign: ${friendlyError((e as Error).message)}`, "error");
     }
   }
 
@@ -1212,13 +1306,13 @@ export class App {
     await this.viewer.closeParagraph(true);
     try {
       if (this.file.handle) {
-        const bytes = await this.busy(this.engine.save(false));
+        const bytes = await this.fileBytes();
         await writeToHandle(this.file.handle, bytes);
         await this.engine.markSaved();
         toast(`Saved ${this.file.name}`);
         void this.remember(bytes);
       } else {
-        const bytes = await this.busy(this.engine.save(false));
+        const bytes = await this.fileBytes();
         await saveAs(bytes, this.file.name);
         await this.engine.markSaved();
         toast(`Downloaded ${this.file.name}`);
@@ -1238,7 +1332,7 @@ export class App {
     this.viewer.closeEditor(true);
     await this.viewer.closeParagraph(true);
     try {
-      const bytes = await this.busy(this.engine.save(false, flat));
+      const bytes = flat ? await this.busy(this.engine.save(false, true)) : await this.fileBytes();
       const name = `${baseName(this.file.name)} (${t(flat ? "for sending" : "copy")}).pdf`;
       await saveAs(bytes, name);
       toast(`Downloaded ${name}`);
@@ -1256,6 +1350,10 @@ export class App {
     if (info) this.info = info;
     this.sidebar.refresh(pages);
     this.updateUi(await this.engine.state());
+    if (this.tab.sigs?.length && this.dirty && !this.tab.sigWarned) {
+      this.tab.sigWarned = true;
+      toast("This PDF is digitally signed: saving your changes makes its signatures invalid.", "info");
+    }
   }
 
   private async undo(): Promise<void> {
@@ -1560,6 +1658,7 @@ export class App {
     if (!has) this.$<HTMLInputElement>("#page-input").value = "0";
     document.title = has ? `${this.dirty ? "• " : ""}${name} — papgi` : "papgi";
     this.renderTabs();
+    this.showSigBadge();
   }
 
   /** The name written with new notes and replies. */
@@ -1631,6 +1730,11 @@ interface Tab {
   sampleOpen: boolean;
   /** Where the reader was when another tab was shown. */
   view: ViewState | null;
+  /** Digitally signed: the file as it was opened (saved as it is while unchanged) and its signatures, checked. */
+  original?: Uint8Array;
+  sigs?: SigReport[];
+  /** Told that changes make the signatures invalid. */
+  sigWarned?: boolean;
 }
 
 /** How many documents can be open at once (each takes memory). */

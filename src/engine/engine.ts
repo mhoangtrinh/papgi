@@ -19,6 +19,7 @@ export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
 export type { ClipInfo } from "./clip";
 import type { TextLine, TocItem } from "../core/toc";
+import { addSignatureDict, listSignatures, type SigInfo, type SignOptions } from "./sigfield";
 import { addReply, authorOf, dateOf, dropOrphanReplies, replyTo, setReplyText, type Reply } from "./comments";
 import { addField, uniqueName, dateFormatOf, deleteWidget, isRequired, placeWidget, redrawWidget, setFieldProps, type FieldProps, type NewFieldKind } from "./forms";
 import { addHeaderFooter, addWatermark, pickFont, type HeaderFooterOptions, type WatermarkOptions } from "./stamp";
@@ -88,6 +89,8 @@ export interface WidgetInfo {
   required: boolean;
   /** Date fields: how the date is written (e.g. "dd.mm.yyyy"); "" for other fields. */
   dateFormat: string;
+  /** Signature boxes: signed digitally (its look is the signature's). */
+  signed?: boolean;
 }
 
 export interface SearchHit {
@@ -1488,6 +1491,42 @@ export class PdfEngine {
     return { result, annots: this.listAnnots(index) };
   }
 
+  // ---------- digital signatures ----------
+
+  /** The digital signatures in the document. */
+  signatures(): SigInfo[] {
+    return listSignatures(this.requireDoc());
+  }
+
+  /**
+   * The document as a file, ready to be signed: a signature dictionary with room for the
+   * signature (the room and the byte ranges are filled in by the page, see src/sign).
+   * The open document itself doesn't change.
+   */
+  prepareSign(o: SignOptions, original: Uint8Array | null = null): Uint8Array {
+    if (this.password || (this.protect && this.protect !== "none")) throw new Error("A password-protected PDF can't be signed here. Remove the password first (Document → Password protection), then sign.");
+    // Unchanged since it was opened: the signature is added to the file as it is (earlier
+    // signatures stay valid). Otherwise a copy of the document as it is now.
+    let copy: MuPDF.PDFDocument;
+    if (original) {
+      const d = this.mupdf.Document.openDocument(original, "application/pdf").asPDF();
+      if (!d) throw new Error("Not a PDF file");
+      copy = d;
+    } else {
+      copy = this.copyOfDoc();
+      bakeAreas(copy);
+    }
+    try {
+      addSignatureDict(this.mupdf, copy, o);
+      const buf = copy.saveToBuffer(original ? "incremental" : "garbage=deduplicate,compress");
+      const out = buf.asUint8Array().slice();
+      buf.destroy();
+      return out;
+    } finally {
+      copy.destroy();
+    }
+  }
+
   // ---------- forms ----------
 
   listWidgets(index: number): WidgetInfo[] {
@@ -1519,6 +1558,7 @@ export class PdfEngine {
       fontSize,
       required: isRequired(w.getObject()),
       dateFormat: kind === "text" ? dateFormatOf(w.getObject()) : "",
+      ...(kind === "signature" && !w.getObject().get("V").isNull() ? { signed: true } : {}),
     };
   }
 
