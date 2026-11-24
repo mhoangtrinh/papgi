@@ -644,6 +644,10 @@ export const DE: Record<string, string> = {
   "unlocked": "entsperrt",
   "just now": "gerade eben",
   copy: "Kopie",
+  "for sending": "zum Versenden",
+  "Download a copy for sending": "Kopie zum Versenden herunterladen",
+  "Text boxes, signatures, drawings and filled-in fields become part of the pages: they look sharp in every app (e.g. iPhone Mail) and can't be changed by others":
+    "Textfelder, Unterschriften, Zeichnungen und ausgefüllte Felder werden Teil der Seiten: Sie sehen in jeder App scharf aus (z. B. iPhone Mail) und können von anderen nicht geändert werden",
   Deutsch: "Deutsch",
   Español: "Español",
   Français: "Français",

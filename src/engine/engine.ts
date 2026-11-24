@@ -218,18 +218,24 @@ export class PdfEngine {
   }
 
   /** Serialize the current document; by default this also marks it as saved. */
-  save(markSaved = true): Uint8Array {
+  /**
+   * The file's bytes. `flat`: a copy for sending, with every annotation and form field made
+   * part of the pages (some viewers, e.g. Apple's in Mail and Preview, draw annotations as
+   * blurry pictures; page content is sharp everywhere, and can't be moved or changed).
+   */
+  save(markSaved = true, flat = false): Uint8Array {
     const doc = this.requireDoc();
     // pasted parts of pages become page content in the file (they stay movable here)
-    const baked = hasAreas(doc) ? this.copyOfDoc() : null;
+    const baked = hasAreas(doc) || flat ? this.copyOfDoc() : null;
     if (baked) bakeAreas(baked);
+    if (baked && flat) baked.bake(true, true);
     let out: Uint8Array;
     try {
       out = this.writeOut(baked ?? doc);
     } finally {
       baked?.destroy();
     }
-    if (markSaved) this.markSaved();
+    if (markSaved && !flat) this.markSaved();
     return out;
   }
 

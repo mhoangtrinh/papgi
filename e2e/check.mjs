@@ -1746,6 +1746,13 @@ try {
     const fdoc = mupdf.Document.openDocument(fs.readFileSync(shots + "saved-form.pdf"), "application/pdf");
     const fw = fdoc.loadPage(0).getWidgets().map((w) => [w.getFieldType(), w.getName(), w.getValue()]);
     check("saved: the new fields are real form fields with their values", fw.length === 8 && fw[0][2] === "Hoang" && fw[5][1] === "Colour" && fw[5][2] === "Green" && fdoc.getTrailer().get("Root", "AcroForm", "Fields").length === 7, JSON.stringify(fw));
+    // a copy for sending: everything part of the pages, sharp in any app
+    await page.click("#btn-file");
+    const [sdl] = await Promise.all([page.waitForEvent("download"), page.click('#file-menu [data-menu="saveflat"]')]);
+    await sdl.saveAs(shots + "saved-for-sending.pdf");
+    const sdoc = mupdf.Document.openDocument(fs.readFileSync(shots + "saved-for-sending.pdf"), "application/pdf");
+    const sp = sdoc.loadPage(0);
+    check("Download a copy for sending: fields and items become part of the page", /\(for sending\)\.pdf$/.test(sdl.suggestedFilename()) && sp.getWidgets().length === 0 && sp.getAnnotations().length === 0 && sp.toStructuredText("").asText().includes("Hoang"), sdl.suggestedFilename());
     await page.keyboard.press("v");
   }
 

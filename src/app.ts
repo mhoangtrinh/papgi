@@ -210,6 +210,7 @@ export class App {
             <button data-menu="open">${icon("open")}Open…<kbd>Ctrl O</kbd></button>
             <button data-menu="save" data-needs-doc>${icon("save")}Save<kbd>Ctrl S</kbd></button>
             <button data-menu="saveas" data-needs-doc>${icon("extract")}Download a copy<kbd>Ctrl ⇧ S</kbd></button>
+            <button data-menu="saveflat" data-needs-doc title="Text boxes, signatures, drawings and filled-in fields become part of the pages: they look sharp in every app (e.g. iPhone Mail) and can't be changed by others">${icon("flatten")}Download a copy for sending</button>
             <button data-menu="print" data-needs-doc>${icon("print")}Print…<kbd>Ctrl P</kbd></button>
             <hr>
             <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
@@ -929,6 +930,7 @@ export class App {
       case "open": return void this.openPicker();
       case "save": return void this.save();
       case "saveas": return void this.saveCopy();
+      case "saveflat": return void this.saveCopy(true);
       case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
       case "flatten": return void this.flatten();
       case "crop": return void this.crop();
@@ -1043,13 +1045,14 @@ export class App {
     }
   }
 
-  private async saveCopy(): Promise<void> {
+  /** A copy to download; `flat`: everything added made part of the pages (for sending). */
+  private async saveCopy(flat = false): Promise<void> {
     if (!this.info || !this.file) return;
     this.viewer.closeEditor(true);
     await this.viewer.closeParagraph(true);
     try {
-      const bytes = await this.busy(this.engine.save(false));
-      const name = `${baseName(this.file.name)} (${t("copy")}).pdf`;
+      const bytes = await this.busy(this.engine.save(false, flat));
+      const name = `${baseName(this.file.name)} (${t(flat ? "for sending" : "copy")}).pdf`;
       await saveAs(bytes, name);
       toast(`Downloaded ${name}`);
       const note = await this.engine.takeNote();
