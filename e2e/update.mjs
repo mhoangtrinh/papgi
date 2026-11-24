@@ -59,7 +59,8 @@ try {
   // a new version is published while the app is open (found more than a minute later)
   await page.waitForTimeout(62000);
   use("B");
-  await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
+  // (found by the app itself: it looks again when the window gets the focus)
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   const bar = await page.waitForSelector(".update-bar", { timeout: 30000 }).then(() => true, () => false);
   check("an open document gets the 'new version' bar", bar);
   if (bar) {
@@ -67,6 +68,8 @@ try {
     await page.waitForFunction(() => window.papgiBuild, null, { timeout: 15000 }).catch(() => {});
     check("Reload switches to the new version", (await build()) === "B", String(await build()));
     check("and leaves a clean address", !new URL(page.url()).search, page.url());
+    const told = await page.waitForSelector(".toast", { timeout: 5000 }).then((t) => t.textContent(), () => "");
+    check("and says it was updated", /updated to the newest version/.test(told), told);
   }
 
   // "Later", then the next time the app opens with a document: Reload still works

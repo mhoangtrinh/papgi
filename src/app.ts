@@ -950,7 +950,7 @@ export class App {
           title: "About papgi",
           body: `<p>papgi is a PDF editor and toolbox that runs entirely in your browser. Your files are never uploaded: opening, editing, converting and text recognition all happen on this device, and it works offline once loaded.</p>
                  <p>Found a problem or have an idea? <a href="https://github.com/mhoangtrinh/papgi/issues" target="_blank" rel="noopener">Tell us on GitHub</a>.</p>
-                 <p class="muted small">Version ${__APP_VERSION__} · ${__BUILD_DATE__}<br>Free software under the AGPL-3.0. Built on <a href="https://mupdf.com" target="_blank" rel="noopener">MuPDF</a> (AGPL) and <a href="https://github.com/naptha/tesseract.js" target="_blank" rel="noopener">Tesseract</a> (Apache-2.0). Source and licenses: <a href="https://github.com/mhoangtrinh/papgi" target="_blank" rel="noopener">github.com/mhoangtrinh/papgi</a></p>`,
+                 <p class="muted small">Version ${__APP_VERSION__} · ${__BUILD_DATE__} · <span translate="no">${__BUILD_ID__}</span><br>Free software under the AGPL-3.0. Built on <a href="https://mupdf.com" target="_blank" rel="noopener">MuPDF</a> (AGPL) and <a href="https://github.com/naptha/tesseract.js" target="_blank" rel="noopener">Tesseract</a> (Apache-2.0). Source and licenses: <a href="https://github.com/mhoangtrinh/papgi" target="_blank" rel="noopener">github.com/mhoangtrinh/papgi</a></p>`,
           actions: [{ label: "Close", value: "", primary: true }],
         });
     }

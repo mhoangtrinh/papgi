@@ -771,6 +771,7 @@ export const DE_PATTERNS: Pattern[] = [
   [/^Picturing page (\d+) of (\d+)…$/, "Seite $1 von $2 wird als Bild erstellt…"],
   [/^Looking for headings… page (\d+) of (\d+)$/, "Suche nach Überschriften… Seite $1 von $2"],
   [/^Version (.+)$/, "Version $1"],
+  [/^papgi was updated to the newest version \((.+)\)\.$/, "papgi wurde auf die neueste Version aktualisiert ($1)."],
   [/^(Ctrl|Shift)\b.*$/, (m) => m[0].replace(/\bCtrl\b/g, "Strg").replace(/\bShift\b/g, "Umschalt").replace(/\bwheel\b/, "Mausrad")],
   [/^(Cut|Copied) (.+)\. Paste with (.+)\.$/, (m, tr) => {
     const what: Record<string, string> = { "part of a page": "Seitenausschnitt", "part of the page": "Seitenausschnitt", "text box": "Textfeld", drawing: "Zeichnung", picture: "Bild", item: "Element" };

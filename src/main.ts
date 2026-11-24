@@ -1,6 +1,7 @@
 import "./style.css";
 import { registerSW } from "virtual:pwa-register";
 import { App } from "./app";
+import { toast } from "./ui/dialogs";
 import { lang, missing, seen, startTranslating } from "./i18n";
 
 const app = new App(document.getElementById("app")!);
@@ -26,6 +27,11 @@ let applying = false;
  * screen can show the old page from memory: a new address makes it ask again.)
  */
 function freshReload(): void {
+  try {
+    sessionStorage.setItem("papgi.updated", "1");
+  } catch {
+    /* private mode */
+  }
   const u = new URL(location.href);
   u.searchParams.set("v", Date.now().toString(36));
   location.replace(u.href);
@@ -35,6 +41,16 @@ if (new URL(location.href).searchParams.has("v")) {
   const u = new URL(location.href);
   u.searchParams.delete("v");
   history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+}
+
+// Say so after switching to a new version (it may have happened by itself)
+try {
+  if (sessionStorage.getItem("papgi.updated")) {
+    sessionStorage.removeItem("papgi.updated");
+    setTimeout(() => toast(`papgi was updated to the newest version (${__BUILD_DATE__}).`), 600);
+  }
+} catch {
+  /* private mode */
 }
 
 /** Wait until a newly found version is installed (or gone), at most `ms`. */
@@ -96,18 +112,20 @@ registerSW({
   onRegisteredSW(_url, reg) {
     registration = reg;
     if (!reg) return;
-    // look for a new version every 30 minutes, and when the app comes back to the front
-    // (an app on the iPhone home screen is mostly paused in the background, so timers rarely
-    // run there), at most every 5 minutes
+    // Look for a new version every 2 minutes while the app is on screen, and right away when
+    // it comes back to the front, gets the focus or goes online again (at most every 30 s).
+    // (An app on the iPhone home screen is mostly paused in the background, so timers rarely
+    // run there.) Each look only asks for the small sw.js.
     let last = Date.now();
-    const check = () => {
-      if (applying || !navigator.onLine) return;
+    const check = (min: number) => {
+      if (applying || !navigator.onLine || document.visibilityState !== "visible" || Date.now() - last < min) return;
       last = Date.now();
       void reg.update().catch(() => {});
     };
-    setInterval(check, 30 * 60 * 1000);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && Date.now() - last > 5 * 60 * 1000) check();
-    });
+    setInterval(() => check(110 * 1000), 120 * 1000);
+    const soon = () => check(30 * 1000);
+    document.addEventListener("visibilitychange", soon);
+    window.addEventListener("focus", soon);
+    window.addEventListener("online", soon);
   },
 });

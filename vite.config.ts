@@ -7,6 +7,8 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
+    // (which build is running: the commit on GitHub, otherwise the time it was built)
+    __BUILD_ID__: JSON.stringify(process.env.GITHUB_SHA?.slice(0, 7) ?? new Date().toISOString().slice(11, 16).replace(":", "")),
   },
   base: "./",
   build: { target: "es2022", chunkSizeWarningLimit: 2000 },
