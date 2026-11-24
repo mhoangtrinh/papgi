@@ -914,6 +914,8 @@ export function eraseBrush(m: M, doc: MuPDF.PDFDocument, index: number, path: Po
         else {
           a.setInkList(pieces);
           a.update();
+          // (a highlighter stroke keeps its marker look)
+          arrowAppearance(m, page, a);
         }
       } else if (a.hasQuadPoints()) {
         const qs = a.getQuadPoints();

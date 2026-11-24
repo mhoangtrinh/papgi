@@ -1073,8 +1073,10 @@ export class App {
       return;
     }
     const prev = this.tab;
-    const target = same ?? (this.info ? this.blankTab() : this.tab);
+    // (a fresh tab: the same file's tab is replaced only once this one opened)
+    const target = this.info || same ? this.blankTab() : this.tab;
     if (target !== prev) {
+      if (!(await this.settle())) return;
       await this.leaveTab();
       this.useTab(target.id);
     }
@@ -1093,16 +1095,18 @@ export class App {
         const pw = await askPassword(f.name, wrong);
         if (pw === null) {
           await this.engine.close();
-          // (its tab's earlier document is gone too)
-          if (this.tabs.includes(target)) await this.dropTab(target, target === prev);
-          else back();
+          back();
           return;
         }
         info = await this.engine.authenticate(pw);
         wrong = true;
       }
       this.tab = target;
-      if (!this.tabs.includes(target)) this.tabs.splice(this.tabs.indexOf(prev) + 1 || this.tabs.length, 0, target);
+      if (same) {
+        // the file opened again: in place of its old tab
+        this.tabs.splice(this.tabs.indexOf(same), 1, target);
+        void this.engine.dropTab(same.id);
+      } else if (!this.tabs.includes(target)) this.tabs.splice(this.tabs.indexOf(prev) + 1 || this.tabs.length, 0, target);
       this.file = { name: f.name, handle: f.handle };
       this.sampleOpen = sample;
       target.view = null;
@@ -1125,15 +1129,23 @@ export class App {
    * The document as a file. A signed PDF that wasn't changed is written exactly as it was
    * opened, so its signatures stay valid.
    */
-  private async fileBytes(): Promise<Uint8Array> {
-    if (this.tab.original && !this.dirty) return this.tab.original.slice();
-    return this.busy(this.engine.save(false));
+  private async fileBytes(saving = false): Promise<Uint8Array> {
+    const tab = this.tab;
+    if (tab.original && !this.dirty) return tab.original.slice();
+    const bytes = await this.busy(this.engine.save(false));
+    // a signed PDF saved with changes: its signatures are checked again (they no longer fit)
+    if (saving && tab.original) {
+      tab.original = undefined;
+      tab.sigs = undefined;
+      void this.checkSigned(tab, bytes.slice(), true);
+    }
+    return bytes;
   }
 
   // ---------- digital signatures ----------
 
   /** A just-opened PDF: are there digital signatures, and are they valid? */
-  private async checkSigned(tab: Tab, bytes: Uint8Array): Promise<void> {
+  private async checkSigned(tab: Tab, bytes: Uint8Array, quiet = false): Promise<void> {
     try {
       const sigs = await this.engine.signatures();
       if (!sigs.length) return this.showSigBadge();
@@ -1142,9 +1154,13 @@ export class App {
       tab.sigs = await checkSignatures(bytes, sigs);
       if (tab !== this.tab) return;
       this.showSigBadge();
-      const bad = tab.sigs.filter((x) => x.status !== "valid").length;
-      if (bad) toast(tab.sigs.length === 1 ? "This PDF's digital signature isn't valid." : "Some of this PDF's digital signatures aren't valid.", "error", { label: "Details", run: () => void this.signatureDetails() });
-      else toast(tab.sigs.length === 1 ? `Signed by ${tab.sigs[0].signer || "someone"}.` : `Signed by ${tab.sigs.length} people.`, "info", { label: "Details", run: () => void this.signatureDetails() });
+      if (quiet) return;
+      const details = { label: "Details", run: () => void this.signatureDetails() };
+      const names = [...new Set(tab.sigs.filter((x) => x.status === "valid").map((x) => x.signer || x.info.name).filter(Boolean))];
+      if (tab.sigs.some((x) => x.status === "invalid")) toast(tab.sigs.length === 1 ? "This PDF's digital signature isn't valid." : "Some of this PDF's digital signatures aren't valid.", "error", details);
+      // (e.g. a time stamp, or an old kind of signature)
+      else if (tab.sigs.some((x) => x.status === "unknown")) toast("Signed, but not every signature could be checked here.", "info", details);
+      else toast(names.length ? `Signed by ${names.join(", ")}.` : "Signed.", "info", details);
     } catch {
       /* (only extra information) */
     }
@@ -1156,11 +1172,12 @@ export class App {
     const sigs = this.tab.sigs;
     b.hidden = !sigs?.length;
     if (!sigs?.length) return;
-    const bad = sigs.some((x) => x.status !== "valid");
-    const state = bad ? "bad" : this.dirty ? "warn" : "ok";
+    const bad = sigs.some((x) => x.status === "invalid");
+    const unchecked = sigs.some((x) => x.status === "unknown");
+    const state = bad ? "bad" : this.dirty || unchecked ? "warn" : "ok";
     b.dataset.state = state;
-    b.innerHTML = `${icon(bad ? "close" : "certificate")}<span>${state === "bad" ? "Signature not valid" : state === "warn" ? "Signed · changed" : "Signed"}</span>`;
-    b.title = state === "warn" ? "You changed this digitally signed PDF: saving makes its signatures invalid" : "Digital signatures: details";
+    b.innerHTML = `${icon(bad ? "close" : "certificate")}<span>${bad ? "Signature not valid" : this.dirty ? "Signed · changed" : "Signed"}</span>`;
+    b.title = this.dirty ? "You changed this digitally signed PDF: saving makes its signatures invalid" : unchecked ? "Not every signature could be checked here: details" : "Digital signatures: details";
   }
 
   private async signatureDetails(): Promise<void> {
@@ -1245,9 +1262,22 @@ export class App {
     this.viewer.closeNotes();
   }
 
+  /**
+   * Before leaving the PDF shown: short work on it is waited for; text recognition (long)
+   * keeps it in front, since its results go into this PDF. False: stay.
+   */
+  private async settle(): Promise<boolean> {
+    if (this.ocrRunning) {
+      toast("Text recognition is still running on this PDF. Wait until it's done, or stop it first.", "info");
+      return false;
+    }
+    for (let i = 0; this.busyCount > 0 && i < 300; i++) await new Promise((r) => setTimeout(r, 50));
+    return true;
+  }
+
   /** Show another open document. */
   private async switchTab(t: Tab): Promise<void> {
-    if (t === this.tab) return;
+    if (t === this.tab || !(await this.settle())) return;
     await this.leaveTab();
     this.tab = t;
     this.useTab(t.id);
@@ -1264,11 +1294,11 @@ export class App {
     document.body.classList.toggle("has-doc", !!t.info);
     if (t.info) this.updateUi(await this.engine.state());
     else this.updateUi({ canUndo: false, canRedo: false, dirty: false, undoName: "", redoName: "" });
-    if (location.hash === "#edit") document.title = this.file && this.info ? `${this.file.name} · papgi` : "papgi";
   }
 
   /** Close a tab (asks first if it has unsaved changes). */
   private async closeTab(t: Tab): Promise<void> {
+    if (t === this.tab && !(await this.settle())) return;
     if (t === this.tab) this.viewer.closeEditor(true), await this.viewer.closeParagraph(true);
     if (t === this.tab && t.info) {
       try {
@@ -1286,7 +1316,11 @@ export class App {
     const i = this.tabs.indexOf(t);
     if (i >= 0) this.tabs.splice(i, 1);
     void this.engine.dropTab(t.id);
-    if (t !== this.tab) return this.renderTabs();
+    if (t !== this.tab) {
+      // (calls go to the tab shown again)
+      this.useTab(this.tab.id);
+      return this.renderTabs();
+    }
     this.tab = this.tabs[Math.min(Math.max(i, 0), this.tabs.length - 1)] ?? this.blankTab();
     this.useTab(this.tab.id);
     if (show) await this.showTab();
@@ -1311,7 +1345,13 @@ export class App {
         return `<div class="tab${t === this.tab ? " on" : ""}${t.dirty ? " dirty" : ""}" role="tab" aria-selected="${t === this.tab}" data-tab="${t.id}" title="${esc(name)}"><span class="tab-dot" title="Unsaved changes"></span><span class="tab-name" translate="no">${esc(name.replace(/\.pdf$/i, ""))}</span><button class="tab-close" data-close="${t.id}" title="Close">${icon("close")}</button></div>`;
       })
       .join("");
-    row.querySelector<HTMLElement>(".tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // the shown tab in view (only the row scrolls)
+    const on = row.querySelector<HTMLElement>(".tab.on");
+    if (on) {
+      const l = on.offsetLeft - row.offsetLeft;
+      if (l < row.scrollLeft) row.scrollLeft = l;
+      else if (l + on.offsetWidth > row.scrollLeft + row.clientWidth) row.scrollLeft = l + on.offsetWidth - row.clientWidth;
+    }
   }
 
   private async save(): Promise<void> {
@@ -1320,13 +1360,13 @@ export class App {
     await this.viewer.closeParagraph(true);
     try {
       if (this.file.handle) {
-        const bytes = await this.fileBytes();
+        const bytes = await this.fileBytes(true);
         await writeToHandle(this.file.handle, bytes);
         await this.engine.markSaved();
         toast(`Saved ${this.file.name}`);
         void this.remember(bytes);
       } else {
-        const bytes = await this.fileBytes();
+        const bytes = await this.fileBytes(true);
         await saveAs(bytes, this.file.name);
         await this.engine.markSaved();
         toast(`Downloaded ${this.file.name}`);
@@ -1704,7 +1744,10 @@ export class App {
       sign: "signature handwritten unterschrift unterschreiben",
     };
     const list: Command[] = TOOLS.map((tl) => ({ id: `tool-${tl.id}`, label: tl.label, icon: tl.icon, where: "Tools", words: TOOL_WORDS[tl.id], key: tl.key, needsDoc: true, run: inEditor(() => this.setTool(tl.id)) }));
-    const m = (id: string, label: string, ic: string, where: string, words: string, needsDoc = true, key?: string) => list.push({ id, label, icon: ic, where, words, needsDoc, key, run: menu(id) });
+    // (settings and information open where you are; the rest in the editor)
+    const here = new Set(["keys", "lang", "author", "about"]);
+    const m = (id: string, label: string, ic: string, where: string, words: string, needsDoc = true, key?: string) =>
+      list.push({ id, label, icon: ic, where, words, needsDoc, key, run: here.has(id) ? () => this.menuAction(id) : menu(id) });
     m("ocr", "Recognize text (OCR)…", "scan", "Document menu", "ocr scan scanned searchable select text recognise texterkennung erkennen gescannt durchsuchbar");
     m("signature", "Add a signature…", "sign", "Document menu", "signature handwritten draw photo unterschrift unterschreiben", false);
     m("signdigital", "Sign digitally…", "certificate", "Document menu", "digital signature certificate e-signature electronic qualified p12 pfx zertifikat elektronisch signieren signatur digitale unterschrift");

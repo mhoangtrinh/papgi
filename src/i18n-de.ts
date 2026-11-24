@@ -482,6 +482,9 @@ export const DE: Record<string, string> = {
   "Fit width": "An Breite anpassen",
   "Undo": "Rückgängig",
   "Redo": "Wiederholen",
+  "Signed, but not every signature could be checked here.": "Signiert, aber nicht jede Signatur konnte hier geprüft werden.",
+  "Signed.": "Signiert.",
+  "Not every signature could be checked here: details": "Nicht jede Signatur konnte hier geprüft werden: Details",
   "Close without saving?": "Schließen, ohne zu speichern?",
   "This PDF": "Dieses PDF",
   "Open PDFs": "Offene PDFs",
@@ -800,7 +803,6 @@ const pl = (re: string) => new RegExp(`^${re.replace(/PL/g, PL)}$`);
 
 /** Texts with numbers or names in them. The first that matches is used. */
 export const DE_PATTERNS: Pattern[] = [
-  [/^Signed by (\d+) people\.$/, "Von $1 Personen signiert."],
   [/^Signed by (.+)\.$/, "Signiert von $1."],
   [/^Signed and saved as (.+)$/, "Signiert und gespeichert als $1"],
   [/^Couldn't sign: (.+)$/, (m, tr) => `Signieren nicht möglich: ${tr(m[1]) ?? m[1]}`],

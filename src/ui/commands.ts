@@ -36,7 +36,8 @@ export function score(c: Command, query: string): number {
     else if (inLabel > 0 && /[\s(/-]/.test(label[inLabel - 1])) total += 7;
     else if (inLabel > 0) total += 4;
     else if (new RegExp(`(^|[\\s,(/-])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(rest)) total += 3;
-    else if (rest.includes(w)) total += 1;
+    // (inside another word only for longer words: "sign" shouldn't find "design")
+    else if (w.length >= 5 && rest.includes(w)) total += 1;
     else return 0;
   }
   return total;

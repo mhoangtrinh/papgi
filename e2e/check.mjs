@@ -1875,6 +1875,7 @@ try {
     // (start with nothing open)
     await page.evaluate(async () => {
       for (const t of [...window.papgi.tabs]) {
+        if (t === window.papgi.tab) await window.papgi.engine.markSaved();
         t.dirty = false;
         await window.papgi.closeTab(t);
       }
@@ -2073,6 +2074,158 @@ try {
     await page.evaluate(async (b) => { await window.papgi.openInEditor({ name: "tampered.pdf", bytes: new Uint8Array(b), handle: null }); }, [...bad]);
     await page.waitForTimeout(1500);
     check("a PDF changed after signing is marked: not valid", (await page.getAttribute("#sig-badge", "data-state")) === "bad", await page.textContent("#sig-badge"));
+  }
+
+  // ---- tabs: text recognition keeps its PDF in front; signed PDFs saved with changes; closing a tab not shown; settings from Find a function; a cut marker ----
+  {
+    const open = async (name) => {
+      await page.evaluate(async (nm) => {
+        for (const t of window.papgi.tabs) t.dirty = false;
+        const r = await fetch("./samples/" + nm);
+        await window.papgi.openInEditor({ name: nm, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+      }, name);
+      await waitRendered();
+    };
+    const tabs = () => page.evaluate(() => window.papgi.tabs.map((t) => [t.file?.name, t.dirty, t === window.papgi.tab]));
+    await page.evaluate(async () => { for (const t of [...window.papgi.tabs]) { if (t === window.papgi.tab) await window.papgi.engine.markSaved(); t.dirty = false; await window.papgi.closeTab(t); } });
+    await open("pages.pdf");
+    await open("form.pdf");
+    // B) OCR running: switching tabs is refused
+    await page.evaluate(() => (window.papgi.ocrRunning = true));
+    await page.click("#tabbar .tab >> nth=0");
+    await page.waitForTimeout(400);
+    const t1 = await tabs();
+    await page.evaluate(() => (window.papgi.ocrRunning = false));
+    check("while text recognition runs, the PDF stays in front", t1[1][2] === true, JSON.stringify(t1));
+    // C) a signed PDF: edit, save, then download a copy: the copy has the edit
+    const signed = fs.readFileSync(shots + "signed-e2e.pdf");
+    const openBytes = (name, bytes) => page.evaluate(async ([n, b]) => { await window.papgi.openInEditor({ name: n, bytes: new Uint8Array(b), handle: null }); }, [name, [...bytes]]);
+    await openBytes("signed.pdf", signed);
+    await page.waitForTimeout(1200);
+    await page.evaluate(async () => { const e = window.papgi.engine; await e.addNote(0, [100, 100], "edit after signing", [1, 0.8, 0]); window.papgi.viewer.refresh(await e.info()); await window.papgi.edited(await e.info(), [0]); });
+    const [d1] = await Promise.all([page.waitForEvent("download"), page.evaluate(() => window.papgi.save())]);
+    await d1.saveAs(shots + "x-saved.pdf");
+    await page.waitForTimeout(800);
+    const badge = await page.getAttribute("#sig-badge", "data-state");
+    const [d2] = await Promise.all([page.waitForEvent("download"), page.evaluate(() => window.papgi.saveCopy())]);
+    await d2.saveAs(shots + "x-copy.pdf");
+    const copy = fs.readFileSync(shots + "x-copy.pdf");
+    check("signed PDF edited and saved: a later copy keeps the edit, and the mark says the signature no longer fits", copy.includes("edit after signing") && badge === "bad", `badge=${badge} copy has edit=${copy.includes("edit after signing")}`);
+    // D) close a tab that isn't shown: calls still go to the shown one
+    const before = await tabs();
+    await page.evaluate(async () => { const t = window.papgi.tabs.find((x) => x.file.name === "pages.pdf"); t.dirty = false; await window.papgi.closeTab(t); });
+    const info = await engine("info");
+    const after = await tabs();
+    check("closing another tab leaves the shown PDF working", after.length === before.length - 1 && info.pageCount >= 1 && (await page.textContent("#docname .name")) === "signed.pdf", JSON.stringify([before, after, info.pageCount]));
+    // E) Find a function from the start screen: Language opens there (doesn't jump to the editor)
+    await page.evaluate(() => (location.hash = ""));
+    await page.waitForTimeout(400);
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector(".cmd input");
+    await page.keyboard.type("language");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(400);
+    check("settings from Find a function open where you are", (await page.evaluate(() => location.hash)) === "" && (await page.locator(".modal").count()) === 1);
+    await page.keyboard.press("Escape");
+    // F) marker erased partly keeps its multiply look
+    await page.evaluate(() => (location.hash = "#edit"));
+    await open("pages.pdf");
+    await page.evaluate(async () => { const e = window.papgi.engine; await e.addMarker(0, [[100, 200], [300, 200]], [1, 0.85, 0], 14); });
+    await engine("erase", 0, [[200, 190], [200, 210]], 3, false);
+    const doc = await page.evaluate(async () => { const b = await window.papgi.engine.save(false); return [...b]; });
+    const txt = Buffer.from(doc).toString("latin1");
+    check("a highlighter stroke cut by the eraser stays see-through like a marker", /Multiply/.test(txt), "");
+  }
+
+  // ---- a password asked for a file open in another tab ----
+  {
+    const open = async (name) => {
+      await page.evaluate(async (nm) => {
+        for (const t of window.papgi.tabs) t.dirty = false;
+        const r = await fetch("./samples/" + nm);
+        await window.papgi.openInEditor({ name: nm, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+      }, name);
+      await waitRendered();
+    };
+    const tabs = () => page.evaluate(() => window.papgi.tabs.map((t) => [t.file?.name, t.dirty, t === window.papgi.tab]));
+    await page.evaluate(async () => { for (const t of [...window.papgi.tabs]) { if (t === window.papgi.tab) await window.papgi.engine.markSaved(); t.dirty = false; await window.papgi.closeTab(t); } });
+    await open("pages.pdf");
+    await open("form.pdf");
+    const locked = [...(mupdf.Document.openDocument(fs.readFileSync("public/samples/pages.pdf"), "application/pdf")).saveToBuffer("encrypt=aes-256,user-password=secret,owner-password=owner").asUint8Array()];
+    const p = page.evaluate(async (b) => { await window.papgi.openInEditor({ name: "pages.pdf", bytes: new Uint8Array(b), handle: null }); }, locked);
+    await page.waitForSelector(".modal input[type=password]");
+    await page.keyboard.press("Escape");
+    await p;
+    await page.waitForTimeout(500);
+    const tabsNow = await page.evaluate(() => window.papgi.tabs.map((t) => [t.file?.name, t === window.papgi.tab]));
+    const info = await engine("info").catch((e) => String(e));
+    check("password asked for a file open in another tab, cancelled: both tabs stay, the PDF shown keeps working", (await page.textContent("#docname .name")) === "form.pdf" && info.pageCount >= 1 && tabsNow.length === 2, JSON.stringify([tabsNow, info.pageCount ?? info]));
+    // and with the password
+    const p2 = page.evaluate(async (b) => { await window.papgi.openInEditor({ name: "locked.pdf", bytes: new Uint8Array(b), handle: null }); }, locked);
+    await page.waitForSelector(".modal input[type=password]");
+    await page.fill(".modal input[type=password]", "secret");
+    await page.keyboard.press("Enter");
+    await p2;
+    await page.waitForTimeout(800);
+    check("…and opened with the password in a new tab", (await page.textContent("#docname .name")) === "locked.pdf" && (await engine("info")).pageCount === 5);
+  }
+
+  // ---- a sweep: five PDFs, every tool and dialog, every view command ----
+  {
+    const open = async (name) => {
+      await page.evaluate(async (nm) => {
+        for (const t of window.papgi.tabs) t.dirty = false;
+        const r = await fetch("./samples/" + nm);
+        await window.papgi.openInEditor({ name: nm, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+      }, name);
+      await waitRendered();
+    };
+    const tabs = () => page.evaluate(() => window.papgi.tabs.map((t) => [t.file?.name, t.dirty, t === window.papgi.tab]));
+    await page.evaluate(async () => { for (const t of [...window.papgi.tabs]) { if (t === window.papgi.tab) await window.papgi.engine.markSaved(); t.dirty = false; await window.papgi.closeTab(t); } });
+    const errs = [];
+    page.on("pageerror", (e) => errs.push(String(e)));
+    page.on("console", (m) => m.type() === "error" && errs.push(m.text()));
+    for (const f of ["paper.pdf", "report.pdf", "scan.pdf", "form.pdf", "pages.pdf"]) await open(f);
+    check("five PDFs in five tabs", (await page.evaluate(() => window.papgi.tabs.length)) === 5);
+    // every tool on every tab, the options shown
+    const tools = await page.$$eval(".toolstrip .tool[data-tool]", (ts) => ts.map((t) => t.dataset.tool));
+    for (let k = 0; k < 5; k++) {
+      await page.click(`#tabbar .tab >> nth=${k}`);
+      await page.waitForTimeout(300);
+      for (const t of tools) {
+        await page.click(`.toolstrip .tool[data-tool="${t}"]`);
+        await page.waitForTimeout(60);
+      }
+      await page.keyboard.press("Escape");
+    }
+    // every menu entry that opens a dialog: open it and close it again
+    for (const menu of ["#btn-doc", "#btn-file"]) {
+      const items = await page.$$eval(`${menu} + .menu [data-menu]`, (bs) => bs.map((b) => b.dataset.menu)).catch(() => []);
+      const list = items.length ? items : await page.$$eval(menu === "#btn-doc" ? "#doc-menu [data-menu]" : "#file-menu [data-menu]", (bs) => bs.map((b) => b.dataset.menu));
+      for (const it of list) {
+        if (["open", "save", "saveas", "saveflat", "print", "flatten", "lang", "organize", "insert", "picture"].includes(it)) continue;
+        await page.click(menu);
+        await page.click(`[data-menu="${it}"]`);
+        await page.waitForTimeout(500);
+        const modal = await page.locator(".modal").count();
+        if (modal) await page.keyboard.press("Escape");
+        await page.waitForTimeout(200);
+      }
+    }
+    // find a function: run every view command
+    for (const q of ["zoom in", "zoom out", "fit width", "two pages", "cover alone", "one page", "pages and contents", "search in document"]) {
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Control+k");
+      await page.waitForSelector(".cmd input");
+      await page.keyboard.type(q);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(250);
+    }
+    await page.keyboard.press("Escape");
+    // close all tabs (discarding)
+    await page.evaluate(async () => { for (const t of [...window.papgi.tabs]) { if (t === window.papgi.tab) await window.papgi.engine.markSaved(); t.dirty = false; await window.papgi.closeTab(t); } });
+    check("all closed, empty editor", (await page.evaluate(() => window.papgi.tabs.length)) === 0 && !(await page.isHidden("#empty")));
+    check("no errors in the console during the sweep", errs.length === 0, errs.slice(0, 5).join(" | "));
   }
 
   check("no page errors", errors.length === 0, errors.join(" | "));

@@ -171,6 +171,8 @@ export class Viewer {
     const keep = keepPosition ? this.current : 0;
     this.closeEditor(false);
     this.closeNotes();
+    // (replies being written belong to the document that was shown)
+    if (!keepPosition) this.drafts.clear();
     if (this.para) {
       this.para.ed.destroy();
       this.para = null;
