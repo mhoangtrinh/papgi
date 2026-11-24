@@ -66,7 +66,8 @@ body {
   display: grid;
   /* (nothing may make the app wider than the screen) */
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: calc(var(--top) + env(safe-area-inset-top)) var(--strip) 1fr;
+  /* (the tool strip can take two rows on narrow screens) */
+  grid-template-rows: calc(var(--top) + env(safe-area-inset-top)) minmax(var(--strip), auto) 1fr;
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
@@ -1431,24 +1432,64 @@ textarea.field-input {
 
 /* ---------- small screens ---------- */
 
-@media (max-width: 1100px) {
-  .tool span {
-    display: none;
-  }
-  .options .hint {
-    display: none;
-  }
+/*
+ * The tool strip fits itself to its width (app.ts fitStrip): tool names for all tools,
+ * only the chosen one, or none; on narrow screens a second row for the options.
+ */
+.toolstrip[data-labels="active"] .tool:not(.on) span,
+.toolstrip[data-labels="none"] .tool span,
+.toolstrip[data-hint="off"] .options .hint {
+  display: none;
 }
 
-/* tablets: the top bar keeps its icons, without their words */
-@media (max-width: 900px) {
-  .brand-btn .brand-name,
-  .menu-label span {
-    display: none;
-  }
-  .menu-label {
-    padding: 0 8px;
-  }
+.toolstrip[data-rows="2"] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  overflow-x: hidden;
+}
+
+.toolstrip[data-rows="2"] .scroller:first-child {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.toolstrip[data-rows="2"] .tools {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.toolstrip[data-rows="2"] .options {
+  flex: 1 1 auto;
+  min-height: 32px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.toolstrip[data-rows="2"] .tools::-webkit-scrollbar,
+.toolstrip[data-rows="2"] .options::-webkit-scrollbar {
+  display: none;
+}
+
+/* (on two rows a long hint is cut short) */
+.toolstrip[data-rows="2"] .options .hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* a crowded top bar keeps its icons, without their words, so the file name has room (app.ts fitStrip) */
+.topbar[data-compact="1"] .brand-btn .brand-name,
+.topbar[data-compact="1"] .menu-label span {
+  display: none;
+}
+
+.topbar[data-compact="1"] .menu-label {
+  padding: 0 8px;
 }
 
 @media (max-width: 760px) {
@@ -4168,4 +4209,57 @@ textarea.note-text {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
+}
+
+/* rows of the tool strip that scroll sideways: ‹ › at the edges when there's more */
+.scroller {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.options-scroller {
+  flex: 1 1 auto;
+}
+
+.scroll-arrow {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.scroll-arrow[hidden] {
+  display: none;
+}
+
+.scroll-arrow .ic {
+  width: 18px;
+  height: 18px;
+}
+
+.scroll-arrow.left {
+  left: 0;
+  justify-content: flex-start;
+  border-radius: 10px 0 0 10px;
+  background: linear-gradient(to right, var(--panel) 60%, transparent);
+}
+
+.scroll-arrow.right {
+  right: 0;
+  justify-content: flex-end;
+  border-radius: 0 10px 10px 0;
+  background: linear-gradient(to left, var(--panel) 60%, transparent);
+}
+
+.scroll-arrow:hover .ic {
+  color: var(--accent);
 }

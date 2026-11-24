@@ -440,6 +440,10 @@ export const DE: Record<string, string> = {
   "Next page (↓)": "Nächste Seite (↓)",
   "Previous page (↑)": "Vorherige Seite (↑)",
   "Drag to reorder": "Zum Umsortieren ziehen",
+  "More to the left": "Weiter links",
+  "More to the right": "Weiter rechts",
+  "Scroll left": "Nach links blättern",
+  "Scroll right": "Nach rechts blättern",
   "Move up": "Nach oben",
   "Move down": "Nach unten",
 

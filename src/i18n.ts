@@ -150,6 +150,11 @@ function walk(root: Node): void {
   }
 }
 
+/** Translate a part of the page now (e.g. something measured before it's shown). */
+export function translateTree(el: Element): void {
+  if (lang === "de") walk(el);
+}
+
 /** Translate the page now and whatever is shown later. */
 export function startTranslating(): void {
   document.documentElement.lang = lang;

@@ -32,6 +32,8 @@ const P: Record<string, string> = {
   blank: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   up: '<path d="m6 15 6-6 6 6"/>',
+  chevLeft: '<path d="m15 6-6 6 6 6"/>',
+  chevRight: '<path d="m9 6 6 6-6 6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   underline: '<path d="M7 4v6a5 5 0 0 0 10 0V4"/><path d="M5 20h14"/>',

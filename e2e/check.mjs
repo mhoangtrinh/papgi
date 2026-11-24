@@ -1707,6 +1707,14 @@ try {
       return { bar: bar.scrollWidth <= innerWidth, theme: theme.right <= innerWidth, page: pg.left >= 0 && pg.right <= innerWidth };
     });
     check(`phone ${scheme}: top bar and the page fit the screen width`, fit.bar && fit.theme && fit.page, JSON.stringify(fit));
+    // the tools don't fit: a › arrow scrolls them, then ‹ comes back
+    const strip = await pp.evaluate(() => ({ rows: document.querySelector(".toolstrip").dataset.rows, right: !document.querySelector(".toolstrip .scroller .scroll-arrow.right").hidden }));
+    await pp.evaluate(() => (document.querySelector(".toolstrip .tools").scrollLeft = 0));
+    await pp.waitForTimeout(100);
+    await pp.tap(".toolstrip .scroller:first-child .scroll-arrow.right");
+    await pp.waitForTimeout(600);
+    const moved = await pp.evaluate(() => ({ x: document.querySelector(".toolstrip .tools").scrollLeft, left: !document.querySelector(".toolstrip .scroller:first-child .scroll-arrow.left").hidden }));
+    check(`phone ${scheme}: tools on their own row, › and ‹ scroll along it`, strip.rows === "2" && strip.right && moved.x > 50 && moved.left, JSON.stringify([strip, moved]));
     check(`phone ${scheme}: papgi (tools), File and Document buttons in the top bar`, (await pp.isVisible("#btn-tools")) && (await pp.isVisible("#btn-file")) && (await pp.isVisible("#btn-doc")));
     await pp.tap("#btn-doc");
     await pp.screenshot({ path: shots + `phone-doc-menu-${scheme}.png` });

@@ -1,5 +1,5 @@
 // App shell: toolbar, files, keyboard shortcuts, and wiring between engine, viewer and sidebar.
-import { lang, langSetting, setLangSetting, t, type LangSetting } from "./i18n";
+import { lang, langSetting, setLangSetting, t, translateTree, type LangSetting } from "./i18n";
 import { createEngine, type Engine } from "./engine/client";
 import type { DocInfo, SearchHit } from "./engine/engine";
 import { Viewer, PALETTE } from "./ui/viewer";
@@ -140,6 +140,15 @@ export class App {
     this.sidebar.setWidth(this.settings.sidebarWidth);
     this.bind();
     this.setTool(this.settings.tool);
+    document.querySelectorAll<HTMLElement>(".toolstrip .scroller").forEach(setupScroller);
+    // the tool strip fits itself to its width (and again once the fonts are in)
+    let stripWidth = 0;
+    new ResizeObserver(([e]) => {
+      if (Math.abs(e.contentRect.width - stripWidth) < 1) return;
+      stripWidth = e.contentRect.width;
+      this.fitStrip();
+    }).observe(this.$(".toolstrip"));
+    void document.fonts?.ready.then(() => this.fitStrip());
     this.renderOptions();
     this.updateUi();
     this.organize = new Organize(
@@ -254,10 +263,18 @@ export class App {
       <div class="progress" id="progress"></div>
     </header>
     <nav class="toolstrip" aria-label="Tools">
-      <div class="tools" role="radiogroup">
-        ${TOOLS.map((t) => `<button class="tool" data-tool="${t.id}" role="radio" title="${t.label} (${t.key})">${icon(t.icon)}<span>${t.label}</span></button>`).join("")}
+      <div class="scroller">
+        ${scrollArrow(-1)}
+        <div class="tools" role="radiogroup">
+          ${TOOLS.map((t) => `<button class="tool" data-tool="${t.id}" role="radio" title="${t.label} (${t.key})">${icon(t.icon)}<span>${t.label}</span></button>`).join("")}
+        </div>
+        ${scrollArrow(1)}
       </div>
-      <div class="options" id="options"></div>
+      <div class="scroller options-scroller">
+        ${scrollArrow(-1)}
+        <div class="options" id="options"></div>
+        ${scrollArrow(1)}
+      </div>
     </nav>
     <div class="main"></div>
     <div class="empty" id="empty">
@@ -528,10 +545,82 @@ export class App {
     this.renderOptions();
   }
 
+  private fitPending = 0;
+
+  /**
+   * Fit the tool strip to its width, the same way whichever tool is chosen (so the tools
+   * don't jump about): the tools' names show if there's room for them next to the widest
+   * set of options; else only the chosen tool's name; else icons only; and if even that's
+   * too wide, the options go on a row of their own under the tools. The hint shows when it
+   * fits. (A frame later, once the texts are in their final language.)
+   */
+  private fitStrip(): void {
+    cancelAnimationFrame(this.fitPending);
+    this.fitPending = requestAnimationFrame(() => {
+      const strip = this.$(".toolstrip");
+      const tools = strip.querySelector<HTMLElement>(".tools")!;
+      const cs = getComputedStyle(strip);
+      const room = strip.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - parseFloat(cs.columnGap || "0") - 2;
+      strip.dataset.rows = "1";
+      strip.dataset.labels = "all";
+      const all = tools.scrollWidth;
+      const longest = Math.max(0, ...[...tools.querySelectorAll<HTMLElement>(".tool span")].map((e) => e.offsetWidth));
+      strip.dataset.labels = "none";
+      const none = tools.scrollWidth;
+      const active = none + longest + 6;
+      const opts = this.widestOptions();
+      if (all + opts <= room) strip.dataset.labels = "all";
+      else if (active + opts <= room) strip.dataset.labels = "active";
+      else if (none + opts <= room) strip.dataset.labels = "none";
+      else {
+        strip.dataset.labels = "active";
+        strip.dataset.rows = "2";
+      }
+      // the top bar: words on the File/Document/Pages buttons only if the file name keeps room
+      const top = this.$(".topbar");
+      top.dataset.compact = "0";
+      const name = top.querySelector<HTMLElement>(".docname");
+      if (name && this.info && (name.clientWidth < 200 || top.scrollWidth > top.clientWidth + 1)) top.dataset.compact = "1";
+      // the hint, when the whole of it fits (on two rows it's cut short instead)
+      strip.dataset.hint = "on";
+      if (strip.dataset.rows === "1" && strip.scrollWidth > strip.clientWidth + 1) strip.dataset.hint = "off";
+      // (the chosen tool in view when the tools scroll)
+      const on = tools.querySelector<HTMLElement>(".tool.on");
+      if (on && tools.scrollWidth > tools.clientWidth) tools.scrollLeft = Math.max(0, on.offsetLeft - tools.clientWidth / 2 + on.offsetWidth / 2);
+    });
+  }
+
+  /** The width of the widest tool options (without hints), in the interface language. */
+  private widestOptions(): number {
+    const probe = document.createElement("div");
+    probe.className = "options";
+    probe.style.cssText = "position:absolute;left:-10000px;top:0;visibility:hidden";
+    probe.setAttribute("aria-hidden", "true");
+    this.$(".toolstrip").append(probe);
+    let max = 0;
+    try {
+      for (const t of TOOLS) {
+        probe.innerHTML = this.optionsHtml(t.id);
+        probe.querySelectorAll(".hint").forEach((h) => h.remove());
+        translateTree(probe);
+        max = Math.max(max, probe.scrollWidth);
+      }
+    } finally {
+      probe.remove();
+    }
+    return max;
+  }
+
   private renderOptions(): void {
-    const s = this.settings;
-    const t = s.tool;
     const el = this.$("#options");
+    el.innerHTML = this.optionsHtml(this.settings.tool);
+    this.shapeOpts?.place(el);
+    this.fitStrip();
+  }
+
+  /** The settings shown next to the tools for a tool. */
+  private optionsHtml(t: Tool): string {
+    const s = this.settings;
     const swatches = () =>
       `<div class="swatches">${PALETTE.map((c) => `<button class="swatch ${s.colors[t] === c ? "on" : ""}" data-color="${c}" style="--c:${c}" title="${c}"></button>`).join("")}
        <label class="swatch custom" title="Custom colour" style="--c:${s.colors[t]}"><input type="color" data-color-input value="${s.colors[t]}"></label></div>`;
@@ -607,8 +696,7 @@ export class App {
         break;
       }
     }
-    el.innerHTML = html;
-    this.shapeOpts?.place(el);
+    return html;
   }
 
   private onOption(e: Event): void {
@@ -1268,7 +1356,11 @@ export class App {
     this.$("#btn-sidebar").classList.toggle("on", this.settings.sidebar);
     document.querySelectorAll<HTMLButtonElement>(".toolstrip [data-tool]").forEach((b) => (b.disabled = !has));
     const name = this.file?.name ?? "";
-    this.$("#docname .name").textContent = has ? name : "";
+    const shown = has ? name : "";
+    if (this.$("#docname .name").textContent !== shown) {
+      this.$("#docname .name").textContent = shown;
+      this.fitStrip();
+    }
     this.$("#docname").classList.toggle("dirty", has && this.dirty);
     this.$("#page-count").textContent = `/ ${this.info?.pageCount ?? 0}`;
     if (!has) this.$<HTMLInputElement>("#page-input").value = "0";
@@ -1310,3 +1402,26 @@ export class App {
 
 export { ZOOM_STEPS };
 
+/** A ‹ or › button at the edge of a row that scrolls sideways. */
+function scrollArrow(dir: -1 | 1): string {
+  return `<button class="scroll-arrow ${dir < 0 ? "left" : "right"}" data-dir="${dir}" tabindex="-1" hidden aria-label="${dir < 0 ? "Scroll left" : "Scroll right"}" title="${dir < 0 ? "More to the left" : "More to the right"}">${icon(dir < 0 ? "chevLeft" : "chevRight")}</button>`;
+}
+
+/** Show the arrows of a sideways-scrolling row when there's more that way; they scroll it. */
+function setupScroller(wrap: HTMLElement): void {
+  const row = wrap.querySelector<HTMLElement>(".tools, .options")!;
+  const [left, right] = [...wrap.querySelectorAll<HTMLButtonElement>(":scope > .scroll-arrow")];
+  const update = () => {
+    const max = row.scrollWidth - row.clientWidth;
+    left.hidden = max <= 1 || row.scrollLeft <= 1;
+    right.hidden = max <= 1 || row.scrollLeft >= max - 1;
+  };
+  for (const b of [left, right])
+    b.addEventListener("click", () => row.scrollBy({ left: Number(b.dataset.dir) * Math.max(80, row.clientWidth * 0.7), behavior: "smooth" }));
+  row.addEventListener("scroll", update, { passive: true });
+  new ResizeObserver(update).observe(row);
+  // (new options, or the strip switching between one and two rows)
+  new MutationObserver(() => requestAnimationFrame(update)).observe(row, { childList: true, subtree: true });
+  new MutationObserver(() => requestAnimationFrame(update)).observe(wrap.closest(".toolstrip")!, { attributes: true, attributeFilter: ["data-rows", "data-labels"] });
+  update();
+}
