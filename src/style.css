@@ -4867,3 +4867,153 @@ textarea.note-text {
 .floating[data-kind="note"] .note-text-shown {
   padding-right: 18px;
 }
+
+/* ---- Find a function (Ctrl+K) ---- */
+.cmd-back {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: calc(env(safe-area-inset-top) + 9vh) 12px 12px;
+  background: rgba(15, 18, 24, 0.32);
+}
+
+.cmd {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(560px, 76dvh);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+}
+
+.cmd-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cmd-search > .ic {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+}
+
+.cmd-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+}
+
+.cmd-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.cmd kbd {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  font: 11px/1.6 inherit;
+  white-space: nowrap;
+}
+
+.cmd-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+}
+
+.cmd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.cmd-item > .ic {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+
+.cmd-item.on {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.cmd-item.on > .ic {
+  color: var(--accent);
+}
+
+.cmd-item.off {
+  opacity: 0.5;
+}
+
+.cmd-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmd-where {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cmd-none {
+  margin: 0;
+  padding: 18px 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.hub-find .ic {
+  width: 18px;
+  height: 18px;
+}
+
+@media (max-width: 560px) {
+  .cmd-back {
+    padding-top: calc(env(safe-area-inset-top) + 10px);
+  }
+  .cmd-item kbd,
+  .cmd-search kbd {
+    display: none;
+  }
+  .hub-find .lbl {
+    display: none;
+  }
+}
+
+/* (small phones: Redo makes room for Find a function; it's in Find a function, and Ctrl+Y) */
+@media (max-width: 420px) {
+  #btn-redo {
+    display: none;
+  }
+}

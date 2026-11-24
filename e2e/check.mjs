@@ -1922,6 +1922,85 @@ try {
     await page.screenshot({ path: shots + "desktop-tabs.png" });
   }
 
+  // ---- Esc after a slider, the freehand highlighter, Find a function (Ctrl+K) ----
+  {
+    const open = async (name) => {
+      await page.evaluate(async (nm) => {
+        for (const t of window.papgi.tabs) t.dirty = false;
+        const r = await fetch("./samples/" + nm);
+        await window.papgi.openInEditor({ name: nm, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+      }, name);
+      await waitRendered();
+    };
+    await open("pages.pdf");
+    const box = await page.locator(".page").first().boundingBox();
+    const inkBefore = (await engine("listAnnots", 0)).filter((a) => a.kind === "Ink").length;
+    // 1) Escape after using the pen's width slider: back to Select, keys work again
+    await page.keyboard.press("p");
+    const slider = page.locator('#options input[type="range"]').first();
+    await slider.focus();
+    await page.keyboard.press("ArrowRight");
+    const y = box.y + 450;
+    await page.mouse.move(box.x + 200, y);
+    await page.mouse.down();
+    for (let i = 1; i < 10; i++) await page.mouse.move(box.x + 200 + i * 10, y + Math.sin(i) * 5);
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    const tool1 = await page.evaluate(() => [document.querySelector(".tool.on")?.dataset.tool, document.activeElement?.tagName]);
+    await page.keyboard.press("t");
+    const tool2 = await page.evaluate(() => document.querySelector(".tool.on")?.dataset.tool);
+    check("pen: after the width slider and a drawing, Esc goes back to Select (and letter keys work)", tool1[0] === "select" && tool1[1] !== "INPUT" && tool2 === "text", JSON.stringify([tool1, tool2]));
+    await page.keyboard.press("Escape");
+    // 2) freehand highlighter
+    await page.keyboard.press("h");
+    await page.click('#options [data-mark="Freehand"]');
+    const hasWidth = await page.locator('#options [data-range="markerWidth"]').count();
+    const y2 = box.y + 300;
+    await page.mouse.move(box.x + 100, y2);
+    await page.mouse.down();
+    for (let i = 1; i < 15; i++) await page.mouse.move(box.x + 100 + i * 20, y2 + Math.sin(i / 2) * 15);
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    const ink = (await engine("listAnnots", 0)).filter((a) => a.kind === "Ink");
+    check("Highlight → Freehand: draws a free highlighter stroke (with its own width)", hasWidth === 1 && ink.length === inkBefore + 2 && ink[1].rect[2] - ink[1].rect[0] > 100, JSON.stringify(ink.map((a) => a.rect)));
+    await page.screenshot({ path: shots + "desktop-marker.png" });
+    await page.click('#options [data-mark="Highlight"]');
+    await page.keyboard.press("Escape");
+    // 3) find a function
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector(".cmd input");
+    await page.keyboard.type("ocr");
+    const first = await page.textContent(".cmd-item.on .cmd-label");
+    await page.screenshot({ path: shots + "desktop-find-function.png" });
+    await page.keyboard.press("Enter");
+    // (this PDF has text on every page: papgi says so instead of opening the dialog)
+    const ocrOpen = await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /already has text/.test(t.textContent)), null, { timeout: 5000 }).then(() => 1, () => 0);
+    check("Ctrl+K, type 'ocr', Enter: runs text recognition", /Recognize text/.test(first) && ocrOpen === 1, first);
+    await page.keyboard.press("Escape");
+    await page.click("#btn-find");
+    await page.waitForSelector(".cmd input");
+    await page.keyboard.type("unterschrift");
+    const items = await page.$$eval(".cmd-item .cmd-label", (xs) => xs.map((x) => x.textContent));
+    await page.keyboard.type(" digital");
+    const items2 = await page.$$eval(".cmd-item .cmd-label", (xs) => xs.map((x) => x.textContent));
+    check("searching in German words finds them too", items.includes("Add a signature…") && items.includes("Sign") && items2[0] === "Sign digitally…", JSON.stringify([items, items2]));
+    await page.keyboard.press("Escape");
+    await page.click("#btn-find");
+    await page.waitForSelector(".cmd input");
+    await page.keyboard.type("smaller");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(500);
+    check("'smaller' finds Compress PDF", (await page.evaluate(() => location.hash)) === "#compress");
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector(".cmd input");
+    await page.keyboard.type("two pages");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(600);
+    check("from the start screen, a view setting goes back to the editor", (await page.evaluate(() => location.hash)) === "#edit" && (await page.evaluate(() => window.papgi.settings.spread)) === "two");
+  }
+
   // ---- digital signatures: make a certificate, sign in a box, check signed PDFs ----
   {
     const open = async (name) => {

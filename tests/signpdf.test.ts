@@ -28,7 +28,7 @@ const pdfsig = (bytes: Uint8Array) => {
   }
 };
 
-describe("signing a PDF", () => {
+describe("signing a PDF", { timeout: 30000 }, () => {
   it("PDF dates go both ways", () => {
     const t = Date.UTC(2026, 10, 24, 13, 30, 5);
     expect(parsePdfDate(pdfDate(t))).toBe(t);

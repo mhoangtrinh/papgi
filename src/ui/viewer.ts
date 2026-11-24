@@ -58,6 +58,8 @@ interface PageView {
 }
 
 const SVGNS = "http://www.w3.org/2000/svg";
+/** How see-through the freehand highlighter is (it also multiplies, like a real marker). */
+const MARKER_OPACITY = 0.5;
 const PAGE_GAP = 16;
 const MAX_PIXELS = 24e6;
 export const PALETTE = ["#ffd400", "#5fd068", "#2f6fed", "#e5484d", "#8e4ec6", "#1c1c1c"];
@@ -67,7 +69,7 @@ type Drag =
   | { kind: "select"; pv: PageView; start: Point; last: Point }
   | { kind: "pan"; startX: number; startY: number; left: number; top: number }
   | { kind: "mark"; pv: PageView; start: Point; last: Point; onText: boolean }
-  | { kind: "pen"; pv: PageView; points: Point[] }
+  | { kind: "pen"; pv: PageView; points: Point[]; marker?: boolean }
   | { kind: "shape"; pv: PageView; start: Point; last: Point; square: boolean }
   | { kind: "click"; pv: PageView; start: Point; x: number; y: number }
   | { kind: "area"; pv: PageView; start: Point; last: Point }
@@ -638,7 +640,9 @@ export class Viewer {
         break;
       }
       case "highlight":
-        this.drag = { kind: "mark", pv, start: p, last: p, onText: this.onText(pv, p) };
+        // (the freehand highlighter draws like a pen)
+        if (this.host.settings.markKind === "Freehand") this.drag = { kind: "pen", pv, points: [p], marker: true };
+        else this.drag = { kind: "mark", pv, start: p, last: p, onText: this.onText(pv, p) };
         capture();
         e.preventDefault();
         break;
@@ -707,7 +711,7 @@ export class Viewer {
       case "pen": {
         const pts = (e.getCoalescedEvents?.() ?? [e]).map((ce) => this.toPagePoint(d.pv, ce));
         d.points.push(...pts);
-        this.previewPen(d.pv, d.points);
+        this.previewPen(d.pv, d.points, d.marker);
         break;
       }
       case "shape":
@@ -821,7 +825,7 @@ export class Viewer {
           break;
         }
         case "mark": {
-          const kind = s.markKind;
+          const kind = s.markKind === "Freehand" ? "Highlight" : s.markKind;
           const color = hexToRgb(s.colors.highlight);
           let quads: Quad[];
           if (d.onText) {
@@ -851,7 +855,7 @@ export class Viewer {
           const held = this.holdPreview(d.pv);
           const stroke = simplifyStroke(d.points, 0.25 / this.zoom + 0.1);
           try {
-            this.afterAnnotEdit(d.pv, await eng.addInk(d.pv.index, [stroke], hexToRgb(s.colors.pen), s.penWidth));
+            this.afterAnnotEdit(d.pv, await (d.marker ? eng.addMarker(d.pv.index, stroke, hexToRgb(s.colors.highlight), s.markerWidth) : eng.addInk(d.pv.index, [stroke], hexToRgb(s.colors.pen), s.penWidth)));
             held.release(true);
           } catch (err) {
             held.release(false);
@@ -1214,9 +1218,10 @@ export class Viewer {
     }
   }
 
-  private previewPen(pv: PageView, pts: Point[]): void {
+  private previewPen(pv: PageView, pts: Point[], marker = false): void {
     const s = this.host.settings;
-    pv.svg.querySelector(".g-preview")!.innerHTML = `<polyline points="${pts.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${s.colors.pen}" stroke-width="${s.penWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    const look = marker ? `stroke="${s.colors.highlight}" stroke-width="${s.markerWidth}" stroke-opacity="${MARKER_OPACITY}" style="mix-blend-mode:multiply"` : `stroke="${s.colors.pen}" stroke-width="${s.penWidth}"`;
+    pv.svg.querySelector(".g-preview")!.innerHTML = `<polyline points="${pts.map((p) => p.join(",")).join(" ")}" fill="none" ${look} stroke-linecap="round" stroke-linejoin="round"/>`;
   }
 
   private previewShape(pv: PageView, a: Point, b: Point, square = false): void {

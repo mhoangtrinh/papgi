@@ -67,6 +67,11 @@ describe("shapes in the PDF", () => {
     const a = e.drawShape(0, "Cloud", [100, 500], [200, 600], style({ line: "dashed" }));
     expect(a.map((x) => x.shape!.line)).toEqual(["dashed", "dotted", "dashed"]);
     expect(a.map((x) => x.shape!.kind)).toEqual(["Circle", "Square", "Cloud"]);
+    // a real cloud: an outline of round puffs (not a box with wavy edges)
+    const page = mupdf.Document.openDocument(e.save(false), "application/pdf").loadPage(0) as mupdf.PDFPage;
+    const cloud = page.getAnnotations()[2];
+    expect(cloud.getType()).toBe("Polygon");
+    expect(cloud.getVertices().length).toBeGreaterThan(60);
     // restyled, resized or copied, it stays a cloud
     const b = e.styleAnnot(0, a[2].index, { line: "solid", width: 4 });
     expect(b[2].shape!.kind).toBe("Cloud");

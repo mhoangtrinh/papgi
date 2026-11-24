@@ -42,6 +42,8 @@ export interface HubHost {
   cycleTheme(): void;
   themeIcon(): string;
   openSample(name: string): void;
+  /** Search all of papgi's functions. */
+  findFunction(): void;
 }
 
 export const SAMPLES = [
@@ -233,6 +235,7 @@ export class Hub {
         ${title}
         <div class="hub-actions">
           ${doc ? `<button class="btn flat to-editor" data-go="edit" title="Back to ${esc(doc)}">${icon("textEdit")}<span class="lbl">Editor: </span><span class="docn" translate="no">${esc(doc)}</span></button>` : ""}
+          <button class="btn flat hub-find" data-act="find" title="Find a function (Ctrl+K)">${icon("findFn")}<span class="lbl">Find a function</span></button>
           <button class="icon-btn" data-act="theme" title="Theme">${icon(this.host.themeIcon())}</button>
         </div>
       </header>`;
@@ -780,6 +783,7 @@ export class Hub {
     const d = b.dataset;
     if (d.go === "home") return void (location.hash = "");
     if (d.go === "edit") return this.host.showEditor();
+    if (d.act === "find") return this.host.findFunction();
     if (d.act === "theme") {
       this.host.cycleTheme();
       b.innerHTML = icon(this.host.themeIcon());

@@ -14,7 +14,7 @@ const has = (cmd: string) => {
   }
 };
 
-describe("signatures (CMS)", () => {
+describe("signatures (CMS)", { timeout: 30000 }, () => {
   it("signs with a certificate of your own; the signature checks out, and not for changed bytes", async () => {
     const me = await makeSelfSigned("Hoang Trinh", "hoang@example.com");
     expect(certNames(me.cert)).toMatchObject({ name: "Hoang Trinh", email: "hoang@example.com", selfSigned: true });

@@ -105,6 +105,8 @@ export interface RGBAImage {
 }
 
 const SKIP_TYPES = new Set(["Widget", "Popup", "Link"]);
+/** The freehand highlighter's opacity (its strokes also multiply with the page, like ink). */
+const MARKER_OPACITY = 0.5;
 export const FREETEXT_PAD = 2;
 export const LINE_HEIGHT = 1.2;
 
@@ -713,6 +715,21 @@ export class PdfEngine {
     });
   }
 
+  /** A freehand highlighter stroke: a wide see-through line that darkens like a real marker. */
+  addMarker(index: number, stroke: Point[], color: RGB, width: number): AnnotInfo[] {
+    const pts = stroke.length === 1 ? [stroke[0], [stroke[0][0] + 0.1, stroke[0][1] + 0.1] as Point] : stroke;
+    return this.op("Highlight", index, (page) => {
+      const a = page.createAnnotation("Ink");
+      a.setColor(color);
+      a.setBorderWidth(width);
+      a.setOpacity(MARKER_OPACITY);
+      a.setInkList([pts]);
+      a.getObject().put("IT", this.requireDoc().newName("InkHighlight"));
+      a.update();
+      arrowAppearance(this.mupdf, page, a);
+    });
+  }
+
   addShape(index: number, kind: "Square" | "Circle", rect: Rect, color: RGB, width: number): AnnotInfo[] {
     return this.drawShape(index, kind, [rect[0], rect[1]], [rect[2], rect[3]], { color, fill: null, width, line: "solid", opacity: 1 });
   }
@@ -725,13 +742,10 @@ export class PdfEngine {
   drawShape(index: number, kind: ShapeKind, a: Point, b: Point, style: ShapeStyle, square = false): AnnotInfo[] {
     const g = shapeGeometry(kind, a, b, square);
     return this.op(isLineKind(kind) ? (kind === "Line" ? "Line" : "Arrow") : "Shape", index, (page) => {
-      const type = kind === "Square" || kind === "Circle" ? kind : kind === "Cloud" ? "Square" : isLineKind(kind) ? "Line" : "Polygon";
+      const type = kind === "Square" || kind === "Circle" ? kind : isLineKind(kind) ? "Line" : "Polygon";
       const an = page.createAnnotation(type);
-      if (kind === "Cloud") {
-        // a cloud: a box drawn with scalloped edges
-        an.setBorderEffect("Cloudy");
-        an.setBorderEffectIntensity(1);
-      }
+      // (a cloud is a polygon along its puffs; marked so it's known as a cloud again)
+      if (kind === "Cloud") an.getObject().put("papgiCloud", true);
       if (type === "Line") {
         an.setLine(g.points[0], g.points[1]);
         an.setLineEndingStyles(kind === "DoubleArrow" ? "OpenArrow" : "None", kind === "Line" ? "None" : "OpenArrow");
@@ -2057,7 +2071,7 @@ function lineStyleOf(a: MuPDF.PDFAnnotation): LineStyle {
 
 function shapeInfo(a: MuPDF.PDFAnnotation, type: string): { kind: ShapeKind } & ShapeStyle {
   let kind: ShapeKind = type as ShapeKind;
-  if (type === "Polygon") kind = a.getVertices().length === 3 ? "Triangle" : "Diamond";
+  if (type === "Polygon") kind = a.getObject().get("papgiCloud").isBoolean() ? "Cloud" : a.getVertices().length === 3 ? "Triangle" : "Diamond";
   else if (type === "Square" && a.hasBorderEffect() && a.getBorderEffect() === "Cloudy") kind = "Cloud";
   else if (type === "Line") {
     const e = a.getLineEndingStyles();

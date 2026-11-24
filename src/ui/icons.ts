@@ -16,6 +16,8 @@ const P: Record<string, string> = {
   text: '<path d="M5 6V4h14v2"/><path d="M12 4v16"/><path d="M9 20h6"/>',
   shape: '<rect x="3" y="3" width="11" height="11" rx="1.5"/><circle cx="16" cy="16" r="5"/>',
   sign: '<path d="M3 17c3-1 4-8 6-8s0 7 2 7 2-4 4-4 1 3 3 3h3"/><path d="M3 21h18"/>',
+  marker: '<path d="m15.5 4.5 4 4-8.5 8.5-4.5.5.5-4.5 8.5-8.5Z"/><path d="M4 20h7" stroke-width="3" opacity=".45"/>',
+  findFn: '<rect x="3" y="3" width="6.5" height="6.5" rx="1.5"/><rect x="3" y="13" width="6.5" height="6.5" rx="1.5"/><rect x="13" y="3" width="6.5" height="6.5" rx="1.5"/><circle cx="16.3" cy="16.3" r="3.3"/><path d="m18.7 18.7 2.4 2.4"/>',
   certificate: '<path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.3 7.5 9.5 4.3-1.2 7.5-4.9 7.5-9.5V6L12 3Z"/><path d="m8.8 12 2.2 2.2 4.4-4.6"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.2-4 4-6 7.5-6s6.3 2 7.5 6"/>',
   send: '<path d="M4 12 20 4l-4 16-4-6.5L4 12Z"/><path d="m12 13.5 8-9.5"/>',

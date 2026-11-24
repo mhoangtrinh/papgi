@@ -634,6 +634,7 @@ function acroForm(doc: MuPDF.PDFDocument, dr: MuPDF.PDFObject | null, map: MuPDF
  */
 export function arrowAppearance(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation): void {
   if (a.getType() === "Text") return noteAppearance(m, page, a);
+  if (a.getType() === "Ink" && isMarker(a)) return multiplyAppearance(page, a);
   if (a.getType() !== "Line") return;
   const le = a.getLineEndingStyles();
   if (le.start === "None" && le.end === "None") return;
@@ -707,6 +708,38 @@ export function noteAppearance(m: M, page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation
   const ap = doc.newDictionary();
   ap.put("N", form);
   o.put("AP", ap);
+}
+
+/** A freehand highlighter stroke (an ink line meant as a highlight). */
+export function isMarker(a: MuPDF.PDFAnnotation): boolean {
+  const it = a.getObject().get("IT");
+  return it.isName() && it.asName() === "InkHighlight";
+}
+
+/** Its look multiplies with the page (text under it stays dark, like with a real marker). */
+function multiplyAppearance(page: MuPDF.PDFPage, a: MuPDF.PDFAnnotation): void {
+  const doc = page._doc;
+  const ap = a.getObject().get("AP", "N");
+  if (!ap.isStream()) return;
+  if (!ap.get("Resources").isDictionary()) ap.put("Resources", doc.newDictionary());
+  const res = ap.get("Resources");
+  if (!res.get("ExtGState").isDictionary()) res.put("ExtGState", doc.newDictionary());
+  const gs = res.get("ExtGState");
+  let n = 0;
+  gs.forEach((g) => {
+    if (g.isDictionary()) {
+      g.put("BM", doc.newName("Multiply"));
+      n++;
+    }
+  });
+  if (n) return;
+  gs.put("papgiBM", doc.addObject({ Type: doc.newName("ExtGState"), BM: doc.newName("Multiply") }));
+  const ops = ap.readStream().asUint8Array();
+  const pre = new TextEncoder().encode("/papgiBM gs\n");
+  const out = new Uint8Array(pre.length + ops.length);
+  out.set(pre);
+  out.set(ops, pre.length);
+  ap.writeStream(out);
 }
 
 /** Can this kind of item be resized by its corners? */

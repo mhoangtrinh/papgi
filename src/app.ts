@@ -22,6 +22,7 @@ import { FLOWS } from "./hub/flows";
 import { TOOL_LIST, type ToolId } from "./hub/registry";
 import { rememberFile } from "./recent";
 import type { SigReport } from "./sign/signpdf";
+import type { Command } from "./ui/commands";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "select", label: "Select", key: "V", icon: "select" },
@@ -211,6 +212,7 @@ export class App {
         cycleTheme: () => this.cycleTheme(),
         themeIcon: () => this.themeIcon(),
         openSample: (name) => void this.openSample(name),
+        findFunction: () => this.findFunction(),
       },
       document.body,
     );
@@ -234,6 +236,7 @@ export class App {
           </div>
         </div>
         <button class="icon-btn" id="btn-sidebar" title="Pages and contents panel">${icon("sidebar")}</button>
+        <button class="icon-btn" id="btn-find" title="Find a function (Ctrl+K)">${icon("findFn")}</button>
         <div class="menu-wrap">
           <button class="menu-label" id="btn-file" aria-haspopup="menu" title="Open, save, print">${icon("open", "ml-icon")}<span>File</span></button>
           <div class="menu left" id="file-menu" role="menu" hidden>
@@ -376,6 +379,7 @@ export class App {
       toast(SPREAD_NAMES[this.settings.spread]);
     });
     on("#btn-search", () => this.openSearch());
+    on("#btn-find", () => this.findFunction());
     on("#btn-theme", () => this.cycleTheme());
     on("#btn-sidebar", () => {
       this.settings.sidebar = !this.settings.sidebar;
@@ -488,15 +492,20 @@ export class App {
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.applyTheme());
   }
 
+  /** Typing into something (a slider, tick box or colour picker isn't: keys still work then). */
   private isTyping(t: EventTarget | null): boolean {
     const el = t as HTMLElement | null;
-    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+    return !!el && ((el.tagName === "INPUT" && !NOT_TYPING.has((el as HTMLInputElement).type)) || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
   }
 
   private onKey(e: KeyboardEvent): void {
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     if (document.querySelector(".modal-back")) return;
+    if (mod && k === "k" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      return void this.findFunction();
+    }
     if (this.hub?.visible()) return;
     if (mod && k === "s") {
       e.preventDefault();
@@ -569,6 +578,9 @@ export class App {
       return;
     }
     if (e.key === "Escape") {
+      // (out of a slider or button too: back to the page with the Select tool)
+      const f = document.activeElement;
+      if (f instanceof HTMLElement && f !== document.body && !this.isTyping(f)) f.blur();
       this.closeMenus();
       this.viewer.clearSelection();
       this.viewer.selectAnnot(null);
@@ -719,8 +731,10 @@ export class App {
         html = `<span class="muted hint">Click a paragraph to change its text · Ctrl+Enter or click outside to finish · Esc to cancel</span>`;
         break;
       case "highlight":
-        html = seg("mark", [["Highlight", "highlight", "Highlight"], ["Underline", "underline", "Underline"], ["StrikeOut", "strike", "Strike out"]], s.markKind) + swatches() +
-          `<span class="muted hint">Drag over text — or over any area on scans</span>`;
+        html =
+          seg("mark", [["Highlight", "highlight", "Highlight"], ["Underline", "underline", "Underline"], ["StrikeOut", "strike", "Strike out"], ["Freehand", "marker", "Freehand"]], s.markKind) +
+          swatches() +
+          (s.markKind === "Freehand" ? range("markerWidth", 4, 30, 1, s.markerWidth, "Width") + `<span class="muted hint">Draw freely, like a highlighter pen</span>` : `<span class="muted hint">Drag over text — or over any area on scans</span>`);
         break;
       case "pen":
         html = swatches() + range("penWidth", 0.5, 12, 0.5, s.penWidth, "Width");
@@ -1661,6 +1675,93 @@ export class App {
     this.showSigBadge();
   }
 
+  // ---------- find a function ----------
+
+  private async findFunction(): Promise<void> {
+    const { showCommands } = await import("./ui/commands");
+    showCommands(this.commands(), !!this.info);
+  }
+
+  /** Everything papgi can do, for "Find a function". */
+  private commands(): Command[] {
+    // (editor things: the editor is shown first)
+    const inEditor = (fn: () => void) => () => {
+      if (location.hash !== "#edit") location.hash = "#edit";
+      fn();
+    };
+    const menu = (a: string) => inEditor(() => this.menuAction(a));
+    const TOOL_WORDS: Record<string, string> = {
+      select: "mouse pointer move choose auswählen zeiger",
+      area: "region copy cut move part rectangle bereich ausschneiden kopieren",
+      edit: "change words typo correct fix text bearbeiten ändern korrigieren tippfehler",
+      highlight: "mark underline strike out squiggly markieren unterstreichen durchstreichen textmarker",
+      pen: "draw freehand ink scribble zeichnen stift freihand",
+      text: "type write add text textfeld schreiben tippen",
+      shape: "rectangle square circle ellipse arrow line triangle cloud rechteck kreis pfeil linie wolke form",
+      note: "comment sticky reply annotation notiz kommentar antwort",
+      form: "form fields checkbox radio dropdown date fill fillable formular felder ausfüllen kontrollkästchen",
+      eraser: "delete remove rub white out radieren löschen entfernen",
+      sign: "signature handwritten unterschrift unterschreiben",
+    };
+    const list: Command[] = TOOLS.map((tl) => ({ id: `tool-${tl.id}`, label: tl.label, icon: tl.icon, where: "Tools", words: TOOL_WORDS[tl.id], key: tl.key, needsDoc: true, run: inEditor(() => this.setTool(tl.id)) }));
+    const m = (id: string, label: string, ic: string, where: string, words: string, needsDoc = true, key?: string) => list.push({ id, label, icon: ic, where, words, needsDoc, key, run: menu(id) });
+    m("ocr", "Recognize text (OCR)…", "scan", "Document menu", "ocr scan scanned searchable select text recognise texterkennung erkennen gescannt durchsuchbar");
+    m("signature", "Add a signature…", "sign", "Document menu", "signature handwritten draw photo unterschrift unterschreiben", false);
+    m("signdigital", "Sign digitally…", "certificate", "Document menu", "digital signature certificate e-signature electronic qualified p12 pfx zertifikat elektronisch signieren signatur digitale unterschrift");
+    m("organize", "Organize pages", "pages", "Document menu", "reorder rotate turn delete remove move pages grid sortieren drehen löschen seiten verschieben");
+    m("insert", "Insert PDF at end…", "insert", "Document menu", "append add combine another pdf anhängen einfügen");
+    m("crop", "Crop pages…", "crop", "Document menu", "trim margins cut edges zuschneiden ränder beschneiden");
+    m("picture", "Add a picture…", "image", "Document menu", "image photo logo stamp insert bild foto einfügen");
+    m("watermark", "Watermark…", "watermark", "Document menu", "confidential draft stamp wasserzeichen vertraulich entwurf");
+    m("numbers", "Page numbers, header & footer…", "pageNum", "Document menu", "page numbers numbering header footer date seitenzahlen nummerierung kopfzeile fußzeile");
+    m("redact", "Redact a text everywhere…", "redact", "Document menu", "black out hide censor remove private schwärzen zensieren verbergen");
+    m("password", "Password protection…", "lock", "Document menu", "encrypt lock protect secure unlock remove password passwort verschlüsseln schützen");
+    m("flatten", "Flatten forms & annotations", "flatten", "Document menu", "flatten burn in fixed reduzieren");
+    m("open", "Open…", "open", "File menu", "open file load another new tab öffnen datei laden", false, "Ctrl O");
+    m("save", "Save", "save", "File menu", "save store speichern", true, "Ctrl S");
+    m("saveas", "Download a copy", "extract", "File menu", "download copy save as export herunterladen kopie speichern unter", true, "Ctrl ⇧ S");
+    m("saveflat", "Download a copy for sending", "flatten", "File menu", "email mail send share sharp blurry flatten iphone senden teilen verschicken");
+    m("print", "Print…", "print", "File menu", "print printer paper drucken drucker", true, "Ctrl P");
+    m("keys", "Keyboard shortcuts", "keyboard", "File menu", "keys shortcuts hotkeys tastenkürzel tastatur", false);
+    m("lang", "Language", "globe", "File menu", "language german english deutsch englisch sprache", false);
+    m("author", "Your name for comments…", "user", "File menu", "name author comments notes replies autor kommentare", false);
+    m("about", "About papgi", "file", "File menu", "about version help license info hilfe lizenz", false);
+    // the start screen's tools
+    const TOOL_HUB_WORDS: Record<string, string> = {
+      merge: "combine join several multiple files zusammenführen kombinieren verbinden",
+      split: "separate extract pages cut into teilen aufteilen trennen extrahieren",
+      compress: "smaller reduce size shrink email upload komprimieren verkleinern kleiner größe",
+      "images-to-pdf": "jpg jpeg png photos pictures scan convert bilder fotos umwandeln",
+      "pdf-to-images": "png jpg export pictures convert bilder exportieren umwandeln",
+      "pdf-to-word": "docx word doc convert editable umwandeln konvertieren bearbeitbar",
+    };
+    for (const tl of TOOL_LIST) {
+      if (tl.id === "open") continue;
+      list.push({ id: `hub-${tl.id}`, label: tl.name, icon: tl.icon, where: "All tools", words: `${tl.desc} ${TOOL_HUB_WORDS[tl.id] ?? ""}`, run: () => void this.gotoTool(tl.id) });
+    }
+    // the view and the rest of the toolbar
+    const v = (id: string, label: string, ic: string, words: string, run: () => void, key?: string, needsDoc = true) => list.push({ id, label, icon: ic, where: "View", words, key, needsDoc, run: inEditor(run) });
+    v("undo", "Undo", "undo", "back revert rückgängig zurück", () => void this.undo(), "Ctrl Z");
+    v("redo", "Redo", "redo", "again wiederholen", () => void this.redo(), "Ctrl Y");
+    v("find-text", "Search in document", "search", "find text word search suchen finden", () => this.openSearch(), "Ctrl F");
+    v("zoom-in", "Zoom in", "zoomIn", "bigger larger magnify vergrößern", () => this.viewer.setZoom(nextZoom(this.viewer.zoom, 1)), "Ctrl +");
+    v("zoom-out", "Zoom out", "zoomOut", "smaller verkleinern", () => this.viewer.setZoom(nextZoom(this.viewer.zoom, -1)), "Ctrl −");
+    v("fit", "Fit width", "zoomIn", "fit page width breite anpassen", () => this.viewer.setFitWidth(), "Ctrl 0");
+    for (const sp of SPREADS) v(`spread-${sp}`, SPREAD_NAMES[sp], sp === "single" ? "onePage" : sp === "two" ? "twoPages" : "coverPage", "page layout spread book side by side doppelseite nebeneinander seitenansicht", () => this.setSpread(sp));
+    v("sidebar", "Pages and contents panel", "sidebar", "thumbnails bookmarks contents outline sidebar miniaturen lesezeichen inhalt", () => this.$("#btn-sidebar").click());
+    v("theme", "Theme", this.themeIcon(), "dark light mode night dunkel hell nachtmodus design", () => this.cycleTheme(), undefined, false);
+    if (this.tabs.length) v("close-tab", "Close this PDF", "close", "close tab schließen", () => void this.closeTab(this.tab));
+    list.push({ id: "home", label: "All tools", icon: "home", where: "Start screen", words: "home start screen recent files startseite zuletzt", run: () => void (location.hash = "") });
+    return list;
+  }
+
+  private setSpread(sp: Spread): void {
+    this.settings.spread = sp;
+    saveSettings(this.settings);
+    this.viewer.setSpread(sp);
+    this.showSpread();
+  }
+
   /** The name written with new notes and replies. */
   private async chooseAuthor(): Promise<void> {
     const r = await form(
@@ -1736,6 +1837,9 @@ interface Tab {
   /** Told that changes make the signatures invalid. */
   sigWarned?: boolean;
 }
+
+/** Inputs that aren't typed into. */
+const NOT_TYPING = new Set(["range", "checkbox", "radio", "color", "button", "submit", "reset", "file", "image"]);
 
 /** How many documents can be open at once (each takes memory). */
 const MAX_TABS = 10;

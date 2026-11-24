@@ -6,7 +6,7 @@ export type { ShapeKind, LineStyle } from "./core/shapes";
 
 export type Theme = "auto" | "light" | "dark";
 export type Tool = "select" | "area" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign" | "eraser" | "note" | "form";
-export type MarkKind = "Highlight" | "Underline" | "StrikeOut";
+export type MarkKind = "Highlight" | "Underline" | "StrikeOut" | "Freehand";
 
 /** A signature made from a picture: transparent PNG as a data URL, with its pixel size. */
 export interface SignatureImage {
@@ -33,6 +33,8 @@ export interface Settings {
   shapeWidth: number;
   textSize: number;
   markKind: MarkKind;
+  /** Width of the freehand highlighter (pt). */
+  markerWidth: number;
   shapeKind: ShapeKind;
   /** Shape fill colour (hex), or null for none. */
   shapeFill: string | null;
@@ -93,6 +95,7 @@ export const DEFAULTS: Settings = {
   shapeWidth: 2,
   textSize: 12,
   markKind: "Highlight",
+  markerWidth: 12,
   shapeKind: "Square",
   shapeFill: null,
   shapeOutline: true,
@@ -154,6 +157,8 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   if (!["solid", "dashed", "dotted"].includes(out.shapeLine)) out.shapeLine = "solid";
   out.shapeOpacity = typeof out.shapeOpacity === "number" && out.shapeOpacity >= 0.1 && out.shapeOpacity <= 1 ? out.shapeOpacity : 1;
   out.sideToc = out.sideToc === true;
+  if (!["Highlight", "Underline", "StrikeOut", "Freehand"].includes(out.markKind)) out.markKind = "Highlight";
+  out.markerWidth = typeof out.markerWidth === "number" && out.markerWidth >= 2 && out.markerWidth <= 40 ? out.markerWidth : 12;
   if (!SPREADS.includes(out.spread)) out.spread = "single";
   out.author = typeof out.author === "string" ? out.author.slice(0, 60) : "";
   if (!FIELD_KINDS.includes(out.fieldKind)) out.fieldKind = "text";

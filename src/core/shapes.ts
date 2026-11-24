@@ -47,6 +47,9 @@ export function shapeGeometry(kind: ShapeKind, a: Point, b: Point, square = fals
     case "Diamond":
       points = [[cx, y0], [x1, cy], [cx, y1], [x0, cy]];
       break;
+    case "Cloud":
+      points = cloudPoints(rect);
+      break;
     case "Line":
     case "Arrow":
     case "DoubleArrow":
@@ -56,6 +59,46 @@ export function shapeGeometry(kind: ShapeKind, a: Point, b: Point, square = fals
       points = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
   }
   return { rect, points };
+}
+
+// A cloud: round puffs on top and at the sides, a flatter bottom (circles in a 1×1 box, y down)
+const PUFFS: [number, number, number][] = [
+  [0.2, 0.64, 0.17],
+  [0.36, 0.42, 0.21],
+  [0.6, 0.33, 0.25],
+  [0.81, 0.55, 0.18],
+  [0.66, 0.7, 0.17],
+  [0.4, 0.71, 0.18],
+];
+let unitCloud: Point[] | null = null;
+
+/** The outline of a cloud filling the box (a polygon of many points along its puffs). */
+export function cloudPoints(rect: Rect, n = 120): Point[] {
+  if (!unitCloud) {
+    // the outline as seen from the middle: the farthest edge of any puff in each direction
+    const c: Point = [0.52, 0.56];
+    const raw: Point[] = [];
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2;
+      const d: Point = [Math.cos(ang), Math.sin(ang)];
+      let far = 0;
+      for (const [px, py, r] of PUFFS) {
+        const ox = c[0] - px;
+        const oy = c[1] - py;
+        const b = ox * d[0] + oy * d[1];
+        const disc = b * b - (ox * ox + oy * oy - r * r);
+        if (disc >= 0) far = Math.max(far, -b + Math.sqrt(disc));
+      }
+      raw.push([c[0] + d[0] * far, c[1] + d[1] * far]);
+    }
+    // stretched to fill the box exactly
+    const xs = raw.map((p) => p[0]);
+    const ys = raw.map((p) => p[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    unitCloud = raw.map(([x, y]) => [(x - x0) / (x1 - x0), (y - y0) / (y1 - y0)]);
+  }
+  const [x0, y0, x1, y1] = rect;
+  return unitCloud.map(([u, v]) => [x0 + u * (x1 - x0), y0 + v * (y1 - y0)]);
 }
 
 /** Arrowhead size for a line width: grows with the line, but slower (points). */
