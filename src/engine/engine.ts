@@ -19,6 +19,7 @@ export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
 export type { ClipInfo } from "./clip";
 import type { TextLine, TocItem } from "../core/toc";
+import { addReply, authorOf, dateOf, dropOrphanReplies, replyTo, setReplyText, type Reply } from "./comments";
 import { addField, uniqueName, dateFormatOf, deleteWidget, isRequired, placeWidget, redrawWidget, setFieldProps, type FieldProps, type NewFieldKind } from "./forms";
 import { addHeaderFooter, addWatermark, pickFont, type HeaderFooterOptions, type WatermarkOptions } from "./stamp";
 export type { HeaderFooterOptions, WatermarkOptions, Corner } from "./stamp";
@@ -55,6 +56,11 @@ export interface AnnotInfo {
   rect: Rect;
   color: number[];
   contents: string;
+  /** Who wrote it and when (ms; 0 if unknown). */
+  author?: string;
+  date?: number;
+  /** Replies to it, oldest first. */
+  replies?: Reply[];
   fontSize?: number;
   /** A pasted part of a page (becomes page content when saved). */
   area?: boolean;
@@ -143,7 +149,7 @@ export class PdfEngine {
     }
     this.close();
     this.doc = pdf;
-    this.fileSerial++;
+    this.fileSerial = ++PdfEngine.serials;
     this.protect = null;
     this.docSize = bytes.length;
     this.title = title;
@@ -165,6 +171,18 @@ export class PdfEngine {
     this.stateId = 0;
     this.savedId = 0;
     return this.info();
+  }
+
+  hasDoc(): boolean {
+    return this.doc !== null;
+  }
+
+  /** Close the document and let go of everything this engine holds (its tab was closed). */
+  dispose(): void {
+    this.close();
+    for (const f of [this.helv, this.helvBold, ...this.bundled.values()]) f?.destroy();
+    this.helv = this.helvBold = null;
+    this.bundled.clear();
   }
 
   close(): void {
@@ -458,7 +476,8 @@ export class PdfEngine {
   /** Keep the history within MAX_UNDO steps and MAX_UNDO_BYTES (oldest undo steps go first). */
   private trimHistory(): void {
     let total = [...this.undoStack, ...this.redoStack].reduce((n, st) => n + st.size, 0);
-    while (this.undoStack.length > PdfEngine.MAX_UNDO || (total > PdfEngine.MAX_UNDO_BYTES && this.undoStack.length > 1)) {
+    const budget = PdfEngine.MAX_UNDO_BYTES / Math.max(1, PdfEngine.openDocs);
+    while (this.undoStack.length > PdfEngine.MAX_UNDO || (total > budget && this.undoStack.length > 1)) {
       const st = this.undoStack.shift()!;
       total -= st.size;
       this.dropSteps([st]);
@@ -620,13 +639,26 @@ export class PdfEngine {
   listAnnots(index: number): AnnotInfo[] {
     return this.withPage(index, (page) => {
       const out: AnnotInfo[] = [];
+      const replies = new Map<number, Reply[]>();
       page.getAnnotations().forEach((a, i) => {
         const type = a.getType();
         if (SKIP_TYPES.has(type)) return;
+        // (replies show in their note's card, not on the page)
+        const parent = replyTo(a);
+        if (parent) {
+          const list = replies.get(parent) ?? [];
+          list.push({ index: i, num: a.getObject().asIndirect(), author: authorOf(a), date: dateOf(a), text: a.getContents() });
+          replies.set(parent, list);
+          return;
+        }
         const kind = (["Highlight", "Underline", "StrikeOut", "Squiggly", "Ink", "FreeText", "Square", "Circle", "Line", "Polygon", "Text", "Stamp"].includes(type)
           ? type
           : "Other") as AnnotKind;
         const info: AnnotInfo = { index: i, num: a.getObject().asIndirect(), kind, rect: a.getBounds() as Rect, color: [...a.getColor()], contents: a.getContents() };
+        if (kind === "Text") {
+          info.author = authorOf(a);
+          info.date = dateOf(a);
+        }
         if (kind === "Stamp" && isArea(a)) info.area = true;
         if (resizable(type)) info.resizable = true;
         if (kind === "Square" || kind === "Circle" || kind === "Polygon" || kind === "Line") info.shape = shapeInfo(a, kind);
@@ -641,6 +673,17 @@ export class PdfEngine {
         }
         out.push(info);
       });
+      // a thread in the order it was written (replies to replies join their note's thread)
+      const top = new Map<number, number>();
+      for (const [p, list] of replies) for (const r of list) top.set(r.num, p);
+      const rootOf = (n: number) => {
+        for (let k = 0; k < 8 && top.has(n); k++) n = top.get(n)!;
+        return n;
+      };
+      for (const info of out) {
+        const all = [...replies].filter(([p]) => rootOf(p) === info.num).flatMap(([, l]) => l);
+        if (all.length) info.replies = all.sort((x, y) => x.date - y.date || x.index - y.index);
+      }
       return out;
     });
   }
@@ -876,9 +919,12 @@ export class PdfEngine {
   }
 
   /** A sticky note (comment) at a point: an icon on the page with the text in it. */
-  addNote(index: number, at: Point, text: string, color: RGB): AnnotInfo[] {
+  addNote(index: number, at: Point, text: string, color: RGB, author = ""): AnnotInfo[] {
     return this.op("Note", index, (page) => {
       const a = page.createAnnotation("Text");
+      if (author) a.setAuthor(author);
+      a.setCreationDate(new Date());
+      a.setModificationDate(new Date());
       // (the icon's box: 22 pt, its top-left corner where it was put)
       a.setRect([at[0], at[1], at[0] + 22, at[1] + 22]);
       a.setIcon("Comment");
@@ -901,6 +947,25 @@ export class PdfEngine {
       a.setContents(text);
       a.update();
       arrowAppearance(this.mupdf, page, a);
+    });
+  }
+
+  /** Answer a note (`annot`: the note, or a reply in its thread). */
+  addReply(index: number, annot: number, text: string, author: string): AnnotInfo[] {
+    return this.op("Reply", index, (page) => {
+      const a = page.getAnnotations()[annot];
+      if (!a) throw new Error("No such annotation");
+      addReply(page, a, text, author);
+    });
+  }
+
+  /** Change the text of a reply. */
+  setReply(index: number, annot: number, text: string): AnnotInfo[] {
+    return this.op("Reply", index, (page) => {
+      const r = page.getAnnotations()[annot];
+      if (!r || !replyTo(r)) throw new Error("No such reply");
+      if (r.getContents() === text) return false;
+      setReplyText(page, r, text);
     });
   }
 
@@ -984,13 +1049,44 @@ export class PdfEngine {
 
   // ---------- copy, cut, paste, erase ----------
 
-  /** What was copied last (kept when another file is opened). */
-  private clip: Clip | null = null;
-  /** Pastes in a row without a position go a little further down each time. */
-  private pasteRun = { page: -1, n: 0 };
-  /** Where the clip came from: pasting there again offsets it so it doesn't hide the original. */
-  private clipFrom = { file: -1, page: -1 };
+  /**
+   * The clipboard, shared by all open documents (copy in one tab, paste in another):
+   * what was copied last, pastes in a row without a position (each goes a little further
+   * down), and where it came from (pasting there again offsets it so it doesn't hide the original).
+   */
+  private static board: { clip: Clip | null; pasteRun: { page: number; n: number }; clipFrom: { file: number; page: number } } = {
+    clip: null,
+    pasteRun: { page: -1, n: 0 },
+    clipFrom: { file: -1, page: -1 },
+  };
+  private get clip(): Clip | null {
+    return PdfEngine.board.clip;
+  }
+  private set clip(c: Clip | null) {
+    PdfEngine.board.clip = c;
+  }
+  private get pasteRun(): { page: number; n: number } {
+    return PdfEngine.board.pasteRun;
+  }
+  private set pasteRun(r: { page: number; n: number }) {
+    PdfEngine.board.pasteRun = r;
+  }
+  private get clipFrom(): { file: number; page: number } {
+    return PdfEngine.board.clipFrom;
+  }
+  private set clipFrom(f: { file: number; page: number }) {
+    PdfEngine.board.clipFrom = f;
+  }
+  /** Empty the shared clipboard (tests start from nothing copied). */
+  static resetClipboard(): void {
+    PdfEngine.board.clip?.doc.destroy();
+    PdfEngine.board = { clip: null, pasteRun: { page: -1, n: 0 }, clipFrom: { file: -1, page: -1 } };
+  }
+  /** Which file is open (unique across all open documents). */
   private fileSerial = 0;
+  private static serials = 0;
+  /** How many documents are open at once (they share the undo memory budget). */
+  static openDocs = 1;
 
   private setClip(c: Clip | null, page = -1): ClipInfo | null {
     if (this.clip && this.clip !== c) this.clip.doc.destroy();
@@ -1859,7 +1955,17 @@ export class PdfEngine {
   /** Run an undoable change on one page; returns that page's annotations afterwards. */
   private op(name: string, index: number, fn: (p: MuPDF.PDFPage) => void | boolean): AnnotInfo[] {
     // (annotations and form fields only: the page contents stay as drawn)
-    this.journaled(name, () => this.withPage(index, fn), []);
+    this.journaled(
+      name,
+      () =>
+        this.withPage(index, (p) => {
+          const r = fn(p);
+          // (replies to a note that's gone go with it)
+          if (r !== false) dropOrphanReplies(p);
+          return r;
+        }),
+      [],
+    );
     this.stext.get(index)?.destroy();
     this.stext.delete(index);
     this.lines.delete(index);

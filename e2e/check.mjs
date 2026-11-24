@@ -556,7 +556,7 @@ try {
 
   // --- pages sample: rotate, delete, reorder by drag ---
   await page.evaluate(async () => {
-    window.papgi["dirty"] = false;
+    for (const t of window.papgi.tabs) t.dirty = false;
     const r = await fetch("./samples/pages.pdf");
     await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
   });
@@ -622,7 +622,7 @@ try {
   // --- table of contents in the sidebar ---
   for (const [name, want, kind] of [["report.pdf", 2, "bookmarks"], ["paper.pdf", 8, "headings"]]) {
     await page.evaluate(async (n) => {
-      window.papgi["dirty"] = false;
+      for (const t of window.papgi.tabs) t.dirty = false;
       const r = await fetch("./samples/" + n);
       await window.papgi.open({ name: "contents-" + n, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
     }, name);
@@ -647,7 +647,7 @@ try {
   // --- copy, cut, paste, duplicate · select area · eraser ---
   await ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: URL_ });
   await page.evaluate(async () => {
-    window.papgi["dirty"] = false;
+    for (const t of window.papgi.tabs) t.dirty = false;
     const r = await fetch("./samples/pages.pdf");
     await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
   });
@@ -1006,7 +1006,7 @@ try {
 
   // --- scan sample: area highlight ---
   await page.evaluate(async () => {
-    window.papgi["dirty"] = false;
+    for (const t of window.papgi.tabs) t.dirty = false;
     const r = await fetch("./samples/scan.pdf");
     await window.papgi.open({ name: "scan.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
   });
@@ -1314,11 +1314,10 @@ try {
     await page.click("[data-act=run]");
     await waitDone();
     await page.click("[data-act=open-result]");
-    // the edited scan is still open in the editor: papgi asks before replacing it
-    await page.waitForSelector(".modal-back");
-    check("opening a result over unsaved work asks first", /unsaved changes/.test(await page.textContent(".modal-back")));
-    await page.click(".modal-actions .btn.primary");
+    // the edited scan stays open (with its changes) in a tab of its own
     await page.waitForFunction(() => document.querySelector("#docname .name")?.textContent === "Images.pdf", null, { timeout: 15000 });
+    const tabsNow = await page.evaluate(() => window.papgi.tabs.map((t) => [t.file.name, t.dirty]));
+    check("opening a result keeps the edited PDF open in a tab of its own", tabsNow.some(([n, d]) => /scan/.test(n) && d) && tabsNow.some(([n]) => n === "Images.pdf"), JSON.stringify(tabsNow));
     await waitRendered();
     const imgInfo = await page.evaluate(() => window.papgi.info.pages.map((p) => [Math.round(p.w), Math.round(p.h)]));
     check("images to PDF: follows the preview (order, turn)", JSON.stringify(imgInfo) === JSON.stringify([[842, 595], [595, 842]]), JSON.stringify(imgInfo));
@@ -1428,7 +1427,7 @@ try {
   // ---- document tools: watermark, page numbers, redaction, password, notes, picture from a file ----
   {
     await page.evaluate(async () => {
-      window.papgi["dirty"] = false;
+      for (const t of window.papgi.tabs) t.dirty = false;
       location.hash = "#edit";
       const r = await fetch("./samples/pages.pdf");
       await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
@@ -1550,6 +1549,54 @@ try {
     check("deleting a note removes its card too", (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0 && (await engine("listAnnots", 0)).filter((x) => x.kind === "Text").length === 1);
     await page.keyboard.press("Control+z");
     await page.waitForTimeout(500);
+    // ---- comment threads: replies in the note's card ----
+    {
+      const nn = (await engine("listAnnots", 0)).find((x) => x.kind === "Text" && x.contents === "Changed");
+      const at = await raw(0, (nn.rect[0] + nn.rect[2]) / 2, (nn.rect[1] + nn.rect[3]) / 2);
+      await page.keyboard.press("v");
+      await page.mouse.click(...at);
+      await page.waitForSelector('.floating[data-kind="note"] .note-input');
+      const askName = await page.locator('.floating[data-kind="note"] .note-name').count();
+      await page.fill('.floating[data-kind="note"] .note-name', "Hoang");
+      await page.click('.floating[data-kind="note"] .note-input');
+      await page.keyboard.type("Looks good");
+      // Delete/Backspace while typing a reply stays in the reply
+      await page.keyboard.press("Delete");
+      await page.keyboard.press("Backspace");
+      await page.keyboard.type("d");
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(600);
+      let th = (await engine("listAnnots", 0)).find((x) => x.num === nn.num);
+      check("reply to a note: written in its card with your name", th?.replies?.length === 1 && th.replies[0].text === "Looks good" && th.replies[0].author === "Hoang" && askName === 1, JSON.stringify(th?.replies));
+      const shown = await page.$$eval('.floating[data-kind="note"] .note-reply', (rs) => rs.map((r) => r.textContent));
+      const focused = await page.evaluate(() => document.activeElement?.className);
+      check("the reply shows in the thread, and the reply box is ready for the next", shown.length === 1 && shown[0].includes("Hoang") && shown[0].includes("Looks good") && focused === "note-input" && (await page.locator('.floating[data-kind="note"] .note-name').count()) === 0, JSON.stringify([shown, focused]));
+      await page.keyboard.type("Second line");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.type("and more");
+      await page.click('.floating[data-kind="note"] .note-send');
+      await page.waitForTimeout(600);
+      th = (await engine("listAnnots", 0)).find((x) => x.num === nn.num);
+      check("Shift+Enter: a new line in a reply; the send button sends", th?.replies?.length === 2 && th.replies[1].text === "Second line\nand more", JSON.stringify(th?.replies));
+      await page.screenshot({ path: shots + "desktop-comments.png" });
+      // change a reply, delete a reply
+      await page.hover('.floating[data-kind="note"] .note-reply >> nth=0');
+      await page.click('.floating[data-kind="note"] .note-reply >> nth=0 >> [data-act="redit"]');
+      await page.waitForSelector(".modal textarea");
+      await page.fill(".modal textarea", "Looks very good");
+      await page.click('.modal [data-v="ok"]');
+      await page.waitForTimeout(600);
+      await page.hover('.floating[data-kind="note"] .note-reply >> nth=1');
+      await page.click('.floating[data-kind="note"] .note-reply >> nth=1 >> [data-act="rdelete"]');
+      await page.waitForTimeout(600);
+      th = (await engine("listAnnots", 0)).find((x) => x.num === nn.num);
+      check("a reply can be changed or deleted", th?.replies?.length === 1 && th.replies[0].text === "Looks very good" && (await page.locator('.floating[data-kind="note"] .note-reply').count()) === 1, JSON.stringify(th?.replies));
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(600);
+      check("undo brings a deleted reply back", (await engine("listAnnots", 0)).find((x) => x.num === nn.num)?.replies?.length === 2);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(200);
+    }
     // a picture from a file
     const pics = async () => (await engine("listAnnots", 0)).filter((x) => x.kind === "Stamp" && !x.area).length;
     const p0 = await pics();
@@ -1590,7 +1637,7 @@ try {
   // ---- crop pages, and making form fields ----
   {
     await page.evaluate(async () => {
-      window.papgi["dirty"] = false;
+      for (const t of window.papgi.tabs) t.dirty = false;
       const r = await fetch("./samples/pages.pdf");
       await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
     });
@@ -1754,6 +1801,93 @@ try {
     const sp = sdoc.loadPage(0);
     check("Download a copy for sending: fields and items become part of the page", /\(for sending\)\.pdf$/.test(sdl.suggestedFilename()) && sp.getWidgets().length === 0 && sp.getAnnotations().length === 0 && sp.toStructuredText("").asText().includes("Hoang"), sdl.suggestedFilename());
     await page.keyboard.press("v");
+  }
+
+  // ---- two pages side by side ----
+  {
+    await page.evaluate(async () => {
+      for (const t of window.papgi.tabs) t.dirty = false;
+      const r = await fetch("./samples/pages.pdf");
+      await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    });
+    await waitRendered();
+    const tops = () => page.$$eval(".pages > .page", (ps) => ps.slice(0, 3).map((p) => Math.round(p.getBoundingClientRect().top)));
+    const lefts = () => page.$$eval(".pages > .page", (ps) => ps.slice(0, 3).map((p) => Math.round(p.getBoundingClientRect().left)));
+    const t1 = await tops();
+    check("one page at a time: pages below each other", t1[0] < t1[1] && t1[1] < t1[2], JSON.stringify(t1));
+    await page.click("#btn-spread");
+    await page.waitForTimeout(400);
+    const t2 = await tops(), l2 = await lefts();
+    check("two pages side by side", t2[0] === t2[1] && t2[2] > t2[1] && l2[0] < l2[1], JSON.stringify([t2, l2]));
+    const w2 = await page.$eval(".pages > .page", (p) => p.getBoundingClientRect().width);
+    const vw = await page.$eval(".viewer", (v) => v.clientWidth);
+    check("both fit the width", 2 * w2 <= vw && 2 * w2 > vw * 0.6, `${w2} of ${vw}`);
+    await page.click("#btn-spread");
+    await page.waitForTimeout(400);
+    const t3 = await tops();
+    check("cover alone, then pages 2 and 3 side by side", t3[0] < t3[1] && t3[1] === t3[2], JSON.stringify(t3));
+    await page.click("#btn-spread");
+    await page.waitForTimeout(400);
+    const t4 = await tops();
+    check("and back to one page at a time", t4[0] < t4[1] && t4[1] < t4[2], JSON.stringify(t4));
+  }
+
+  // ---- several PDFs open, in tabs ----
+  {
+    const open = async (name) => {
+      await page.evaluate(async (nm) => {
+        const r = await fetch("./samples/" + nm);
+        await window.papgi.openInEditor({ name: nm, bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+      }, name);
+      await waitRendered();
+    };
+    // (start with nothing open)
+    await page.evaluate(async () => {
+      for (const t of [...window.papgi.tabs]) {
+        t.dirty = false;
+        await window.papgi.closeTab(t);
+      }
+    });
+    await open("pages.pdf");
+    check("one PDF: no tab row", await page.isHidden("#tabbar"));
+    await page.evaluate(() => { window.papgi.viewer.setZoom(1.3); document.querySelector(".viewer").scrollTop = 900; });
+    await page.waitForTimeout(400);
+    const v1 = await page.evaluate(() => [window.papgi.viewer.zoom, document.querySelector(".viewer").scrollTop]);
+    await open("form.pdf");
+    const names = () => page.$$eval("#tabbar .tab", (ts) => ts.map((t) => (t.classList.contains("on") ? "*" : "") + (t.classList.contains("dirty") ? "!" : "") + t.textContent.trim()));
+    check("a second PDF opens in a tab of its own", JSON.stringify(await names()) === JSON.stringify(["pages", "*form"]), JSON.stringify(await names()));
+    const pc = (await engine("info")).pageCount;
+    // an edit in form.pdf
+    await page.evaluate(async () => { const e = window.papgi.engine; await e.addNote(0, [100, 100], "in form", [1, 0.8, 0]); window.papgi.viewer.refresh(await e.info()); window.papgi.edited(await e.info(), [0]); });
+    await page.waitForTimeout(500);
+    check("its changes mark its tab", JSON.stringify(await names()) === JSON.stringify(["pages", "*!form"]), JSON.stringify(await names()));
+    await page.click('#tabbar .tab[data-tab] >> nth=0');
+    await page.waitForTimeout(700);
+    const v2 = await page.evaluate(() => [window.papgi.viewer.zoom, document.querySelector(".viewer").scrollTop]);
+    const info2 = await engine("info");
+    check("switching shows the other PDF where it was left", info2.pageCount === 5 && Math.abs(v2[0] - v1[0]) < 0.01 && Math.abs(v2[1] - v1[1]) < 5 && (await page.textContent("#docname .name")) === "pages.pdf", JSON.stringify([v1, v2]));
+    check("each tab has its own undo", (await engine("state")).canUndo === false && (await page.isDisabled("#btn-undo")));
+    // copy in one, paste in the other
+    await page.evaluate(async () => { const e = window.papgi.engine; await e.addNote(0, [200, 200], "copied note", [0, 0.6, 1]); });
+    const annots = await engine("listAnnots", 0);
+    await engine("copyAnnot", 0, annots[0].index);
+    await page.click('#tabbar .tab[data-tab] >> nth=1');
+    await page.waitForTimeout(700);
+    check("back on form.pdf: its edit is still there and can be undone", (await engine("info")).pageCount === pc && (await engine("state")).canUndo && (await engine("listAnnots", 0)).some((a) => a.contents === "in form"));
+    await page.evaluate(async () => { const e = window.papgi.engine; await e.paste(0, null); });
+    check("copy in one PDF, paste in another", (await engine("listAnnots", 0)).some((a) => a.contents === "copied note"));
+    // opening pages.pdf again (it has changes now) just shows its tab
+    await page.evaluate(() => (window.papgi.tabs[0].dirty = true));
+    await open("pages.pdf");
+    check("opening a PDF that's already open with changes shows its tab", JSON.stringify(await names()).includes('"*!pages"') && (await names()).length === 2, JSON.stringify(await names()));
+    // close the changed form.pdf: asks first
+    await page.click('#tabbar .tab >> nth=1 >> .tab-close');
+    await page.waitForSelector(".modal");
+    const askTitle = await page.textContent(".modal h2").catch(() => "");
+    await page.click('.modal [data-v="ok"], .modal .btn.danger');
+    await page.waitForTimeout(600);
+    check("closing a tab with changes asks first; then the other PDF is shown alone", /Close without saving/.test(askTitle) && (await page.isHidden("#tabbar")) && (await page.textContent("#docname .name")) === "pages.pdf", askTitle);
+    await page.screenshot({ path: shots + "desktop-tabs.png" });
   }
 
   check("no page errors", errors.length === 0, errors.join(" | "));

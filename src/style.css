@@ -67,9 +67,155 @@ body {
   /* (nothing may make the app wider than the screen) */
   grid-template-columns: minmax(0, 1fr);
   /* (the tool strip can take two rows on narrow screens) */
-  grid-template-rows: calc(var(--top) + env(safe-area-inset-top)) minmax(var(--strip), auto) 1fr;
+  /* (the row of tabs only takes room when several PDFs are open) */
+  grid-template-rows: calc(var(--top) + env(safe-area-inset-top)) auto minmax(var(--strip), auto) 1fr;
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+}
+
+#app > .topbar {
+  grid-row: 1;
+}
+
+#app > .tabbar {
+  grid-row: 2;
+}
+
+#app > .toolstrip {
+  grid-row: 3;
+}
+
+#app > .main {
+  grid-row: 4;
+}
+
+/* ---- tabs: several PDFs open ---- */
+.tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 8px 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.tabbar[hidden] {
+  display: none;
+}
+
+.tabbar .tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabbar .tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 72px;
+  max-width: 220px;
+  height: 32px;
+  padding: 0 4px 0 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.tab.on {
+  margin-bottom: -1px;
+  height: 33px;
+  border-color: var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.tab-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-dot {
+  display: none;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn, #f59e0b);
+}
+
+.tab.dirty .tab-dot {
+  display: block;
+}
+
+.tab-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.tab-close .ic {
+  width: 13px;
+  height: 13px;
+}
+
+.tab-close:hover {
+  background: var(--hover-strong, rgba(127, 127, 127, 0.2));
+  color: var(--text);
+}
+
+.tab-new {
+  flex: none;
+  margin-bottom: 3px;
+}
+
+@media (max-width: 760px) {
+  .tabbar {
+    padding: 3px 4px 0;
+  }
+  .tab {
+    max-width: 150px;
+    height: 34px;
+    padding-left: 10px;
+  }
+  .tab.on {
+    height: 35px;
+  }
+  .tab-close {
+    width: 28px;
+    height: 28px;
+  }
 }
 
 button {
@@ -766,6 +912,35 @@ body:not(.has-doc) .sidebar {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+.pages[data-spread] {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  justify-content: center;
+  align-items: start;
+  gap: 16px 8px;
+}
+
+/* (two pages meet in the middle) */
+.pages[data-spread] > .page:nth-child(odd of .page) {
+  justify-self: end;
+}
+
+.pages[data-spread] > .page:nth-child(even of .page) {
+  justify-self: start;
+}
+
+.pages[data-spread="cover"] > .page:nth-child(odd of .page) {
+  justify-self: start;
+}
+
+.pages[data-spread="cover"] > .page:nth-child(even of .page) {
+  justify-self: end;
+}
+
+.pages[data-spread="cover"] > .page:nth-child(1 of .page) {
+  grid-column: 2;
 }
 
 .page {
@@ -1522,7 +1697,8 @@ textarea.field-input {
   .docname,
   .pagenav,
   #btn-zoom-in,
-  #btn-zoom-out {
+  #btn-zoom-out,
+  #btn-spread {
     display: none;
   }
   .topbar {
@@ -4339,6 +4515,141 @@ textarea.note-text {
   white-space: pre-wrap;
   word-break: break-word;
   cursor: text;
+}
+
+.note-by {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 20px;
+  margin: -2px 22px 4px 0;
+  font-size: 11.5px;
+  color: rgba(35, 34, 31, 0.62);
+}
+
+.note-by b {
+  font-weight: 600;
+  color: rgba(35, 34, 31, 0.85);
+}
+
+.note-by button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(35, 34, 31, 0.55);
+}
+
+.note-by button .ic {
+  width: 14px;
+  height: 14px;
+}
+
+.note-by button:hover {
+  background: rgba(0, 0, 0, 0.07);
+  color: #23221f;
+}
+
+/* (the small buttons of a reply show when pointing at it; always on touch screens) */
+@media (hover: hover) {
+  .note-reply .note-by button {
+    opacity: 0;
+  }
+  .note-reply:hover .note-by button,
+  .note-reply .note-by button:focus-visible {
+    opacity: 1;
+  }
+}
+
+.note-thread {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.note-reply {
+  padding: 6px 0 4px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+.note-reply .note-by {
+  margin: 0 0 1px;
+}
+
+.note-reply-text {
+  font-size: 13.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-answer {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.note-answer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.note-answer input,
+.note-answer textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.75);
+  color: #23221f;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.35;
+  resize: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.note-answer input:focus,
+.note-answer textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--note) 70%, #000);
+  outline-offset: -1px;
+  background: #fff;
+}
+
+.note-answer input::placeholder,
+.note-answer textarea::placeholder {
+  color: rgba(35, 34, 31, 0.45);
+}
+
+.note-send {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--note) 75%, #000 8%);
+  color: #23221f;
+}
+
+.note-send:disabled {
+  background: transparent;
+  color: rgba(35, 34, 31, 0.35);
+}
+
+.note-send .ic {
+  width: 16px;
+  height: 16px;
 }
 
 .note-empty {

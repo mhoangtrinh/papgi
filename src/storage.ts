@@ -22,6 +22,9 @@ export type SavedSignature =
 
 export const MAX_SIGNATURES = 5;
 
+export type Spread = "single" | "two" | "cover";
+export const SPREADS: Spread[] = ["single", "two", "cover"];
+
 export interface Settings {
   theme: Theme;
   tool: Tool;
@@ -39,6 +42,10 @@ export interface Settings {
   /** 0.1 .. 1 */
   shapeOpacity: number;
   sidebar: boolean;
+  /** Name written with notes and replies. */
+  author: string;
+  /** Pages shown one below the other, two side by side, or two with the first (cover) alone. */
+  spread: Spread;
   /** Pages panel width set by hand (px; 0 = default). */
   sidebarWidth: number;
   /** Page size in the pages panel (px; 0 = default). */
@@ -92,6 +99,8 @@ export const DEFAULTS: Settings = {
   shapeLine: "solid",
   shapeOpacity: 1,
   sidebar: true,
+  author: "",
+  spread: "single",
   sidebarWidth: 0,
   sidebarZoom: 0,
   signatures: [],
@@ -145,6 +154,8 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   if (!["solid", "dashed", "dotted"].includes(out.shapeLine)) out.shapeLine = "solid";
   out.shapeOpacity = typeof out.shapeOpacity === "number" && out.shapeOpacity >= 0.1 && out.shapeOpacity <= 1 ? out.shapeOpacity : 1;
   out.sideToc = out.sideToc === true;
+  if (!SPREADS.includes(out.spread)) out.spread = "single";
+  out.author = typeof out.author === "string" ? out.author.slice(0, 60) : "";
   if (!FIELD_KINDS.includes(out.fieldKind)) out.fieldKind = "text";
   out.eraserSize = typeof out.eraserSize === "number" && out.eraserSize >= 2 && out.eraserSize <= 80 ? out.eraserSize : DEFAULTS.eraserSize;
   out.sidebarZoom = typeof out.sidebarZoom === "number" && out.sidebarZoom > 0 && out.sidebarZoom < 4000 ? Math.round(out.sidebarZoom) : 0;

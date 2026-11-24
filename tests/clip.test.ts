@@ -5,6 +5,9 @@ import { PdfEngine } from "../src/engine/engine";
 import { brushRects, eraseStroke, brushTouchesOutline, distToSegment } from "../src/core/erase";
 import type { Point, Rect } from "../src/core/geometry";
 
+// (the clipboard is shared by all open documents: each test starts with nothing copied)
+beforeEach(() => PdfEngine.resetClipboard());
+
 const sample = (name: string) => new Uint8Array(fs.readFileSync(new URL(`../public/samples/${name}`, import.meta.url)));
 
 /** Text of a page in a saved file (what other apps will see). */
@@ -451,5 +454,24 @@ describe("big files", () => {
     } finally {
       (PdfEngine as unknown as { BIG_FILE: number }).BIG_FILE = saved;
     }
+  });
+});
+
+describe("several documents open (tabs)", () => {
+  it("copy in one document, paste in another; each keeps its own undo", () => {
+    const a = new PdfEngine(mupdf);
+    const b = new PdfEngine(mupdf);
+    a.open(sample("pages.pdf"));
+    b.open(sample("form.pdf"));
+    const ink = a.addInk(0, [[[100, 100], [150, 120], [200, 100]]], [1, 0, 0], 2);
+    a.copyAnnot(0, ink[0].index);
+    const before = b.listAnnots(0).length;
+    b.paste(0, [300, 300]);
+    expect(b.listAnnots(0).filter((x) => x.kind === "Ink")).toHaveLength(1);
+    expect(b.listAnnots(0).length).toBe(before + 1);
+    expect(a.state().undoName).toBe("Draw");
+    b.undo();
+    expect(b.listAnnots(0).length).toBe(before);
+    expect(a.listAnnots(0)).toHaveLength(1);
   });
 });

@@ -312,7 +312,7 @@ export async function redactTextDialog(count: (q: string) => Promise<number>): P
 // ---------- sticky note ----------
 
 /** Write or change a note's text. "delete": remove the note. */
-export async function noteDialog(text: string, isNew: boolean): Promise<string | "delete" | null> {
+export async function noteDialog(text: string, isNew: boolean, title = "Note"): Promise<string | "delete" | null> {
   const body = document.createElement("div");
   body.className = "dt";
   body.innerHTML = `<textarea class="field note-text" rows="6" maxlength="5000" placeholder="Write your note…" aria-label="Note"></textarea><p class="muted dt-note">Ctrl+Enter to save. The note shows as an icon on the page; click it to read it.</p>`;
@@ -321,7 +321,7 @@ export async function noteDialog(text: string, isNew: boolean): Promise<string |
   let value = text;
   const v = await modal(
     {
-      title: isNew ? "New note" : "Note",
+      title: isNew ? "New note" : title,
       body,
       actions: [...(isNew ? [] : [{ label: "Delete", value: "delete", danger: true }]), { label: "Cancel", value: "" }, { label: "Save", value: "ok", primary: true }],
     },

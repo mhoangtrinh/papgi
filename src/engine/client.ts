@@ -7,7 +7,9 @@ export type Remote<T> = {
 };
 export type Engine = Remote<WorkerEngine>;
 
-export function createEngine(): { engine: Engine; ready: Promise<void> } {
+export function createEngine(): { engine: Engine; ready: Promise<void>; useTab: (tab: number) => void } {
+  // (every call goes to the engine of the document in this tab)
+  let tab = 0;
   const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
   let nextId = 1;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
@@ -41,9 +43,9 @@ export function createEngine(): { engine: Engine; ready: Promise<void> } {
           const id = nextId++;
           pending.set(id, { resolve, reject });
           const transfer = args.filter((a): a is Uint8Array => a instanceof Uint8Array).map((a) => a.buffer as ArrayBuffer);
-          worker.postMessage({ id, method, args }, transfer);
+          worker.postMessage({ id, method, args, tab }, transfer);
         });
     },
   });
-  return { engine, ready };
+  return { engine, ready, useTab: (t) => (tab = t) };
 }

@@ -2,7 +2,7 @@
 import { lang, langSetting, setLangSetting, t, translateTree, type LangSetting } from "./i18n";
 import { createEngine, type Engine } from "./engine/client";
 import type { DocInfo, SearchHit } from "./engine/engine";
-import { Viewer, PALETTE } from "./ui/viewer";
+import { Viewer, PALETTE, type ViewState } from "./ui/viewer";
 import { Sidebar } from "./ui/sidebar";
 import { icon } from "./ui/icons";
 import { toast, askPassword, confirmDialog, showShortcuts, modal } from "./ui/dialogs";
@@ -11,9 +11,9 @@ import { ocrDialog, runOcr } from "./ui/ocr";
 import { Organize } from "./ui/organize";
 import { ShapeOptions } from "./ui/shape-options";
 import { cropDialog } from "./ui/crop";
-import { headerFooterDialog, passwordDialog, redactTextDialog, watermarkDialog } from "./ui/doc-tools";
+import { esc, form, headerFooterDialog, passwordDialog, redactTextDialog, watermarkDialog } from "./ui/doc-tools";
 import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
-import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
+import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, SPREADS, type Spread, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
 import { pickPdfs, writeToHandle, saveAs, download, onLaunchFiles, fileToOpened, baseName, friendlyError, type OpenedFile } from "./files";
 import { nextZoom, strokesBounds, ZOOM_STEPS } from "./core/geometry";
 import { afterDelete, formatRange, movedSelection } from "./core/pages";
@@ -45,12 +45,38 @@ export class App {
   private sidebar!: Sidebar;
   private hub!: Hub;
   private organize!: Organize;
-  /** The open file is one of the samples (not added to recent files). */
-  private sampleOpen = false;
   private openingSample = false;
-  private info: DocInfo | null = null;
-  private file: { name: string; handle: FileSystemFileHandle | null } | null = null;
-  private dirty = false;
+  /** The open documents, one per tab (`tab` is the one shown; it has no document when none is open). */
+  private tabs: Tab[] = [];
+  private tab: Tab = { id: 0, info: null, file: null, dirty: false, sampleOpen: false, view: null };
+  private nextTab = 1;
+  private useTab: (id: number) => void;
+  // (the document shown)
+  private get info(): DocInfo | null {
+    return this.tab.info;
+  }
+  private set info(v: DocInfo | null) {
+    this.tab.info = v;
+  }
+  private get file(): Tab["file"] {
+    return this.tab.file;
+  }
+  private set file(v: Tab["file"]) {
+    this.tab.file = v;
+  }
+  private get dirty(): boolean {
+    return this.tab.dirty;
+  }
+  private set dirty(v: boolean) {
+    this.tab.dirty = v;
+  }
+  /** The open file is one of the samples (not added to recent files). */
+  private get sampleOpen(): boolean {
+    return this.tab.sampleOpen;
+  }
+  private set sampleOpen(v: boolean) {
+    this.tab.sampleOpen = v;
+  }
   private busyCount = 0;
   private hits: SearchHit[] = [];
   private hitIndex = -1;
@@ -59,8 +85,9 @@ export class App {
   private $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
   constructor(root: HTMLElement) {
-    const { engine, ready } = createEngine();
+    const { engine, ready, useTab } = createEngine();
     this.engine = engine;
+    this.useTab = useTab;
     this.ready = ready;
     this.applyTheme();
     root.innerHTML = this.template();
@@ -136,6 +163,8 @@ export class App {
     // On phones the pages panel covers the page, so start with it closed there.
     if (window.matchMedia("(max-width: 760px)").matches) this.settings.sidebar = false;
     this.sidebar.setTab(this.settings.sideToc);
+    this.viewer.setSpread(this.settings.spread);
+    this.showSpread();
     this.sidebar.show(this.settings.sidebar);
     addEventListener("papgi-about", () => this.menuAction("about"));
     this.sidebar.setTile(this.settings.sidebarZoom);
@@ -214,6 +243,7 @@ export class App {
             <button data-menu="print" data-needs-doc>${icon("print")}Print…<kbd>Ctrl P</kbd></button>
             <hr>
             <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
+            <button data-menu="author">${icon("user")}Your name for comments…</button>
             <button data-menu="lang">${icon("globe")}Language: ${lang === "de" ? "Deutsch" : "English"}</button>
             <button data-menu="about">${icon("file")}About papgi</button>
           </div>
@@ -251,6 +281,7 @@ export class App {
         <button class="icon-btn" id="btn-zoom-out" title="Zoom out (Ctrl −)">${icon("zoomOut")}</button>
         <button class="zoom-label" id="zoom-label" title="Fit width (Ctrl 0)">100%</button>
         <button class="icon-btn" id="btn-zoom-in" title="Zoom in (Ctrl +)">${icon("zoomIn")}</button>
+        <button class="icon-btn" id="btn-spread" title="One page at a time">${icon("onePage")}</button>
       </div>
       <div class="tb-group">
         <button class="icon-btn" id="btn-search" title="Search (Ctrl+F)">${icon("search")}</button>
@@ -265,6 +296,10 @@ export class App {
       </div>
       <div class="progress" id="progress"></div>
     </header>
+    <div class="tabbar" id="tabbar" hidden>
+      <div class="tabs" role="tablist" aria-label="Open PDFs"></div>
+      <button class="icon-btn sm tab-new" id="tab-new" title="Open another PDF">${icon("plus")}</button>
+    </div>
     <nav class="toolstrip" aria-label="Tools">
       <div class="scroller">
         ${scrollArrow(-1)}
@@ -311,6 +346,32 @@ export class App {
     on("#btn-zoom-in", () => this.viewer.setZoom(nextZoom(this.viewer.zoom, 1)));
     on("#btn-zoom-out", () => this.viewer.setZoom(nextZoom(this.viewer.zoom, -1)));
     on("#zoom-label", () => this.viewer.setFitWidth());
+    // tabs: click to show, × (or a middle click) to close
+    const tabbar = this.$("#tabbar");
+    tabbar.addEventListener("click", (e) => {
+      const el = e.target as HTMLElement;
+      const close = el.closest<HTMLElement>("[data-close]");
+      const tab = this.tabs.find((t) => String(t.id) === (close ?? el.closest<HTMLElement>("[data-tab]"))?.dataset[close ? "close" : "tab"]);
+      if (!tab) return;
+      if (close) void this.closeTab(tab);
+      else void this.switchTab(tab);
+    });
+    tabbar.addEventListener("auxclick", (e) => {
+      const id = (e.target as HTMLElement).closest<HTMLElement>("[data-tab]")?.dataset.tab;
+      const tab = this.tabs.find((t) => String(t.id) === id);
+      if (e.button === 1 && tab) {
+        e.preventDefault();
+        void this.closeTab(tab);
+      }
+    });
+    on("#tab-new", () => void this.openPicker());
+    on("#btn-spread", () => {
+      this.settings.spread = SPREADS[(SPREADS.indexOf(this.settings.spread) + 1) % SPREADS.length];
+      saveSettings(this.settings);
+      this.viewer.setSpread(this.settings.spread);
+      this.showSpread();
+      toast(SPREAD_NAMES[this.settings.spread]);
+    });
     on("#btn-search", () => this.openSearch());
     on("#btn-theme", () => this.cycleTheme());
     on("#btn-sidebar", () => {
@@ -402,8 +463,8 @@ export class App {
       }
       if (!files.length) return;
       if (this.hub.visible()) return void this.hub.drop(files);
-      const pdf = files.find((f) => /\.pdf$/i.test(f.name)) ?? files[0];
-      await this.openInEditor(pdf);
+      const pdfs = files.filter((f) => /\.pdf$/i.test(f.name));
+      for (const f of pdfs.length ? pdfs : files.slice(0, 1)) await this.openInEditor(f);
     });
 
     document.addEventListener("keydown", (e) => this.onKey(e));
@@ -419,7 +480,7 @@ export class App {
       }
     });
     window.addEventListener("beforeunload", (e) => {
-      if (this.dirty) e.preventDefault();
+      if (this.tabs.some((t) => t.dirty)) e.preventDefault();
     });
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => this.applyTheme());
   }
@@ -945,6 +1006,7 @@ export class App {
       case "signature": return void this.addSignature();
       case "keys": return showShortcuts();
       case "lang": return void this.chooseLanguage();
+      case "author": return void this.chooseAuthor();
       case "about":
         return void modal({
           title: "About papgi",
@@ -959,8 +1021,8 @@ export class App {
   // ---------- files ----------
 
   private async openPicker(): Promise<void> {
-    const [f] = await pickPdfs(false);
-    if (f) await this.open(f);
+    // (several at once: each in a tab of its own)
+    for (const f of await pickPdfs(true)) await this.open(f);
   }
 
   private async openSample(name: string): Promise<void> {
@@ -974,11 +1036,36 @@ export class App {
     }
   }
 
+  /**
+   * Open a PDF in a tab of its own (or in the empty editor). The same file already open:
+   * unchanged, it's opened again in its tab; with changes, its tab is just shown.
+   */
   async open(f: OpenedFile): Promise<void> {
     const sample = this.openingSample;
     this.openingSample = false;
-    if (this.dirty && !(await confirmDialog("Discard changes?", "The current document has unsaved changes.", "Discard", true))) return;
     await this.ready;
+    const same = this.tabs.find((t) => t.file?.name === f.name);
+    if (same?.dirty) {
+      await this.switchTab(same);
+      toast(`${f.name} is already open`);
+      return;
+    }
+    if (!same && this.info && this.tabs.length >= MAX_TABS) {
+      toast(`Up to ${MAX_TABS} PDFs can be open at once. Close one first.`, "error");
+      return;
+    }
+    const prev = this.tab;
+    const target = same ?? (this.info ? this.blankTab() : this.tab);
+    if (target !== prev) {
+      await this.leaveTab();
+      this.useTab(target.id);
+    }
+    // back to the document shown before (nothing was opened)
+    const back = () => {
+      if (target === prev) return;
+      if (!target.info) void this.engine.dropTab(target.id);
+      this.useTab(prev.id);
+    };
     // (the engine takes over the bytes; keep a copy for "Recent files")
     const keep = f.bytes.slice();
     try {
@@ -988,14 +1075,19 @@ export class App {
         const pw = await askPassword(f.name, wrong);
         if (pw === null) {
           await this.engine.close();
-          this.setDoc(null);
+          // (its tab's earlier document is gone too)
+          if (this.tabs.includes(target)) await this.dropTab(target, target === prev);
+          else back();
           return;
         }
         info = await this.engine.authenticate(pw);
         wrong = true;
       }
+      this.tab = target;
+      if (!this.tabs.includes(target)) this.tabs.splice(this.tabs.indexOf(prev) + 1 || this.tabs.length, 0, target);
       this.file = { name: f.name, handle: f.handle };
       this.sampleOpen = sample;
+      target.view = null;
       this.setDoc(info);
       void this.remember(keep);
       if (info.pageCount > 0 && !(await this.engine.pageText(0)).trim()) {
@@ -1003,6 +1095,7 @@ export class App {
         if (scanned) toast("This looks like a scan: there's no text to select yet.", "info", { label: "Recognize text", run: () => void this.recognize() });
       }
     } catch (e) {
+      back();
       toast(`Couldn't open ${f.name}: ${friendlyError((e as Error).message)}`, "error");
     }
   }
@@ -1017,6 +1110,100 @@ export class App {
     this.$("#empty").hidden = !!info;
     document.body.classList.toggle("has-doc", !!info);
     this.updateUi({ canUndo: false, canRedo: false, dirty: false, undoName: "", redoName: "" });
+  }
+
+  // ---------- tabs: several documents open ----------
+
+  private blankTab(): Tab {
+    return { id: this.nextTab++, info: null, file: null, dirty: false, sampleOpen: false, view: null };
+  }
+
+  /** Before another tab is shown: finish edits in progress and remember where the reader was. */
+  private async leaveTab(): Promise<void> {
+    const t = this.tab;
+    this.viewer.closeEditor(true);
+    await this.viewer.closeParagraph(true);
+    if (t.info) {
+      t.view = this.viewer.viewState();
+      // (an edit just finished counts too)
+      try {
+        t.dirty = (await this.engine.state()).dirty;
+      } catch {
+        /* closed */
+      }
+    }
+    this.closeSearch();
+    this.organize?.close();
+    this.viewer.closeNotes();
+  }
+
+  /** Show another open document. */
+  private async switchTab(t: Tab): Promise<void> {
+    if (t === this.tab) return;
+    await this.leaveTab();
+    this.tab = t;
+    this.useTab(t.id);
+    await this.showTab();
+  }
+
+  /** Show the active tab's document as it was left. */
+  private async showTab(): Promise<void> {
+    const t = this.tab;
+    this.sidebar.setDocument(t.info);
+    this.viewer.setDocument(t.info);
+    if (t.view) this.viewer.restoreView(t.view);
+    this.$("#empty").hidden = !!t.info;
+    document.body.classList.toggle("has-doc", !!t.info);
+    if (t.info) this.updateUi(await this.engine.state());
+    else this.updateUi({ canUndo: false, canRedo: false, dirty: false, undoName: "", redoName: "" });
+    if (location.hash === "#edit") document.title = this.file && this.info ? `${this.file.name} · papgi` : "papgi";
+  }
+
+  /** Close a tab (asks first if it has unsaved changes). */
+  private async closeTab(t: Tab): Promise<void> {
+    if (t === this.tab) this.viewer.closeEditor(true), await this.viewer.closeParagraph(true);
+    if (t === this.tab && t.info) {
+      try {
+        t.dirty = (await this.engine.state()).dirty;
+      } catch {
+        /* closed */
+      }
+    }
+    if (t.dirty && !(await confirmDialog("Close without saving?", `${t.file?.name ?? "This PDF"} has unsaved changes.`, "Close", true))) return;
+    await this.dropTab(t, true);
+  }
+
+  /** Remove a tab and its document; `show`: show the tab next to it (or the empty editor). */
+  private async dropTab(t: Tab, show: boolean): Promise<void> {
+    const i = this.tabs.indexOf(t);
+    if (i >= 0) this.tabs.splice(i, 1);
+    void this.engine.dropTab(t.id);
+    if (t !== this.tab) return this.renderTabs();
+    this.tab = this.tabs[Math.min(Math.max(i, 0), this.tabs.length - 1)] ?? this.blankTab();
+    this.useTab(this.tab.id);
+    if (show) await this.showTab();
+  }
+
+  /** Some open document has unsaved changes. */
+  private anyDirty(): boolean {
+    return this.tabs.some((t) => t.dirty) || this.dirty;
+  }
+
+  /** The tab row (shown when more than one document is open). */
+  private renderTabs(): void {
+    const bar = this.$("#tabbar");
+    const show = this.tabs.length > 1;
+    bar.hidden = !show;
+    document.body.classList.toggle("has-tabs", show);
+    if (!show) return;
+    const row = bar.querySelector<HTMLElement>(".tabs")!;
+    row.innerHTML = this.tabs
+      .map((t) => {
+        const name = t.file?.name ?? "";
+        return `<div class="tab${t === this.tab ? " on" : ""}${t.dirty ? " dirty" : ""}" role="tab" aria-selected="${t === this.tab}" data-tab="${t.id}" title="${esc(name)}"><span class="tab-dot" title="Unsaved changes"></span><span class="tab-name" translate="no">${esc(name.replace(/\.pdf$/i, ""))}</span><button class="tab-close" data-close="${t.id}" title="Close">${icon("close")}</button></div>`;
+      })
+      .join("");
+    row.querySelector<HTMLElement>(".tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   private async save(): Promise<void> {
@@ -1212,7 +1399,8 @@ export class App {
       .join("")}</div>`;
     const v = (await modal({ title: "Language", body, actions: [{ label: "Cancel", value: "" }] })) as LangSetting | "";
     if (!v || v === cur) return;
-    if (this.dirty && !(await confirmDialog("Reload now?", "You have unsaved changes. Save first, or they will be lost.", "Reload anyway", true))) return;
+    if (this.anyDirty() && !(await confirmDialog("Reload now?", "You have unsaved changes. Save first, or they will be lost.", "Reload anyway", true))) return;
+    for (const t of this.tabs) t.dirty = false;
     setLangSetting(v);
     location.reload();
   }
@@ -1371,13 +1559,36 @@ export class App {
     this.$("#page-count").textContent = `/ ${this.info?.pageCount ?? 0}`;
     if (!has) this.$<HTMLInputElement>("#page-input").value = "0";
     document.title = has ? `${this.dirty ? "• " : ""}${name} — papgi` : "papgi";
+    this.renderTabs();
+  }
+
+  /** The name written with new notes and replies. */
+  private async chooseAuthor(): Promise<void> {
+    const r = await form(
+      "Your name for comments",
+      `<label class="dt-row"><span>Name</span><input class="field" data-k="author" maxlength="60" autocomplete="name" value="${esc(this.settings.author)}"></label><p class="muted dt-note">Shown with the notes and replies you write, also in other apps.</p>`,
+      "Save",
+      (root) => requestAnimationFrame(() => root.querySelector<HTMLInputElement>("input")!.select()),
+      (root) => root.querySelector<HTMLInputElement>("input")!.value.trim(),
+    );
+    if (!r) return;
+    this.settings.author = r.value;
+    saveSettings(this.settings);
+  }
+
+  /** The page layout button shows the layout in use. */
+  private showSpread(): void {
+    const b = this.$<HTMLButtonElement>("#btn-spread");
+    const m = this.settings.spread;
+    b.innerHTML = icon(m === "single" ? "onePage" : m === "two" ? "twoPages" : "coverPage");
+    b.title = `${SPREAD_NAMES[m]} (click to change)`;
   }
 
   /** A new version of the app is ready to use. */
   updateReady(apply: () => void): void {
     // (switch right away only when nothing would be lost: no document, no files in a tool,
     // nothing running and no dialog open)
-    if (!this.info && !this.hub?.hasWork() && !this.busyCount && !document.querySelector(".modal-back")) return apply();
+    if (!this.tabs.length && !this.hub?.hasWork() && !this.busyCount && !document.querySelector(".modal-back")) return apply();
     let bar = document.querySelector<HTMLDivElement>(".update-bar");
     if (!bar) {
       bar = document.createElement("div");
@@ -1390,8 +1601,8 @@ export class App {
       const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
       if (!b) return;
       if (b.dataset.act === "later") return bar!.remove();
-      if (this.dirty && !(await confirmDialog("Reload now?", "You have unsaved changes. Save first, or they will be lost.", "Reload anyway", true))) return;
-      this.dirty = false;
+      if (this.anyDirty() && !(await confirmDialog("Reload now?", "You have unsaved changes. Save first, or they will be lost.", "Reload anyway", true))) return;
+      for (const t of this.tabs) t.dirty = false;
       apply();
     };
   }
@@ -1409,6 +1620,27 @@ export class App {
 }
 
 export { ZOOM_STEPS };
+
+/** An open document. */
+interface Tab {
+  /** Which engine in the worker holds it. */
+  id: number;
+  info: DocInfo | null;
+  file: { name: string; handle: FileSystemFileHandle | null } | null;
+  dirty: boolean;
+  sampleOpen: boolean;
+  /** Where the reader was when another tab was shown. */
+  view: ViewState | null;
+}
+
+/** How many documents can be open at once (each takes memory). */
+const MAX_TABS = 10;
+
+const SPREAD_NAMES: Record<Spread, string> = {
+  single: "One page at a time",
+  two: "Two pages side by side",
+  cover: "Two pages side by side, cover alone",
+};
 
 /** A ‹ or › button at the edge of a row that scrolls sideways. */
 function scrollArrow(dir: -1 | 1): string {

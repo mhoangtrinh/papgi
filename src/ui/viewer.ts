@@ -1,11 +1,11 @@
 // The document view: pages, rendering, zoom, tools and form fields.
-import { t } from "../i18n";
+import { lang, t } from "../i18n";
 import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit, EditBlock, ClipInfo } from "../engine/engine";
 import { fromPasteEvent, pictureBytes, readClipboard, writeClipboardText, type ClipboardContent } from "./clipboard";
 import { editorRaise, loadTextBoxFont } from "./textbox-metrics";
 import { ParagraphEditor } from "./text-editor";
 import type { Engine } from "../engine/client";
-import type { Settings, Tool, SavedSignature } from "../storage";
+import type { Settings, Tool, SavedSignature, Spread } from "../storage";
 import { hexToRgb, rgbToHex, shapeStyle } from "../storage";
 import { arrowHeadPoints, dashPattern, isLineKind, shapeBigEnough, shapeGeometry, type ShapeKind, type ShapeStyle } from "../core/shapes";
 import {
@@ -77,6 +77,13 @@ type Drag =
   | { kind: "fieldnew"; pv: PageView; start: Point; last: Point; x: number; y: number }
   | { kind: "fieldmove"; pv: PageView; w: WidgetInfo; handle: number; start: Point; next: Rect; moved: boolean; x: number; y: number };
 
+export interface ViewState {
+  zoom: number;
+  fitWidth: boolean;
+  top: number;
+  left: number;
+}
+
 export class Viewer {
   readonly el: HTMLDivElement;
   private pagesEl: HTMLDivElement;
@@ -84,6 +91,8 @@ export class Viewer {
   private info: DocInfo | null = null;
   zoom = 1;
   fitWidth = true;
+  /** How pages are laid out (two side by side only when there's room). */
+  private spread: Spread = "single";
   private tool: Tool = "select";
   private observer: IntersectionObserver;
   private rendering = false;
@@ -143,7 +152,10 @@ export class Viewer {
     this.pagesEl.addEventListener("contextmenu", (e) => this.onContextMenu(e));
     this.pagesEl.addEventListener("dblclick", (e) => this.onDblClick(e));
     new ResizeObserver(() => {
+      const before = this.pagesEl.dataset.spread;
+      this.applySpread();
       if (this.fitWidth && this.info) this.setZoom(this.fitZoom(), false);
+      else if (before !== this.pagesEl.dataset.spread) this.scrollToPage(this.current, false);
     }).observe(this.el);
   }
 
@@ -170,6 +182,7 @@ export class Viewer {
     this.info = info;
     if (!info) return;
     info.pages.forEach((pi, i) => this.pages.push(this.createPage(i, pi)));
+    this.applySpread();
     if (!keepPosition) this.fitWidth = true;
     this.setZoom(this.fitWidth ? this.fitZoom() : this.zoom, false);
     for (const pv of this.pages) this.observer.observe(pv.el);
@@ -350,9 +363,48 @@ export class Viewer {
 
   // ---------- zoom & navigation ----------
 
+  /** Where the reader is (to come back to it later). */
+  viewState(): ViewState {
+    return { zoom: this.zoom, fitWidth: this.fitWidth, top: this.el.scrollTop, left: this.el.scrollLeft };
+  }
+
+  /** Back to where the reader was (after setDocument). */
+  restoreView(v: ViewState): void {
+    this.fitWidth = v.fitWidth;
+    this.setZoom(v.fitWidth ? this.fitZoom() : v.zoom, false);
+    this.el.scrollTop = v.top;
+    this.el.scrollLeft = v.left;
+    this.updateCurrent();
+    this.schedule();
+  }
+
+  /** Show pages one below the other, two side by side, or two with the cover alone. */
+  setSpread(mode: Spread): void {
+    this.spread = mode;
+    const page = this.current;
+    this.applySpread();
+    if (!this.info) return;
+    this.setZoom(this.fitWidth ? this.fitZoom() : this.zoom, false);
+    this.scrollToPage(page, false);
+    this.current = page;
+    this.updateCurrent();
+  }
+
+  /** Two pages side by side only when the view is wide enough for two readable pages. */
+  private applySpread(): void {
+    const two = this.spread !== "single" && this.el.clientWidth >= 640 && (this.info?.pageCount ?? 0) > 1;
+    if (two) this.pagesEl.dataset.spread = this.spread;
+    else delete this.pagesEl.dataset.spread;
+  }
+
+  /** Two pages are shown side by side right now. */
+  spreadOn(): boolean {
+    return !!this.pagesEl.dataset.spread;
+  }
+
   private fitZoom(): number {
     if (!this.info) return 1;
-    const maxW = Math.max(...this.info.pages.map((p) => p.w));
+    const maxW = Math.max(...this.info.pages.map((p) => p.w)) * (this.spreadOn() ? 2 : 1) + (this.spreadOn() ? 8 : 0);
     const avail = this.el.clientWidth - 2 * PAGE_GAP - 8;
     // Fit the width, but don't blow pages up past a comfortable reading size.
     return clampZoom(Math.min(avail / maxW, 1.6));
@@ -1582,6 +1634,8 @@ export class Viewer {
 
   /** The notes whose cards are open: each stays open until closed (its ×, Esc, or a click on the note). */
   private notes = new Map<string, { page: number; num: number; el: HTMLDivElement }>();
+  /** Replies being written, per note (kept while the card is redrawn). */
+  private drafts = new Map<string, string>();
   private noteZ = 10;
 
   /**
@@ -1631,8 +1685,18 @@ export class Viewer {
     const key = noteKey(pv.index, a.num);
     const current = rgbToHex(a.color);
     const colorsOpen = card.dataset.colors === "1";
+    // (keep what's being typed, and where, while the card is redrawn)
+    const typing = card.contains(document.activeElement) ? (document.activeElement as HTMLElement).className : "";
+    const needName = !this.host.settings.author;
+    const replies = a.replies ?? [];
     card.innerHTML = `<button class="note-close" data-act="close" title="Close (Esc)">${icon("close")}</button>
+       ${byline(a.author ?? "", a.date ?? 0)}
        <div class="note-text-shown" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="note-empty">Empty note</span>`}</div>
+       ${replies.length ? `<div class="note-thread">${replies.map((r) => `<div class="note-reply">${byline(r.author, r.date, `<button data-act="redit" data-reply="${r.num}" title="Edit reply">${icon("edit")}</button><button data-act="rdelete" data-reply="${r.num}" title="Delete reply">${icon("trash")}</button>`)}<div class="note-reply-text" translate="no">${esc(r.text)}</div></div>`).join("")}</div>` : ""}
+       <div class="note-answer">
+         ${needName ? `<input class="note-name" maxlength="60" placeholder="Your name" aria-label="Your name" autocomplete="name">` : ""}
+         <div class="note-answer-row"><textarea class="note-input" rows="1" maxlength="5000" placeholder="Reply…" aria-label="Reply"></textarea><button data-act="reply" class="note-send" title="Send reply (Enter)" disabled>${icon("send")}</button></div>
+       </div>
        <div class="note-colors" ${colorsOpen ? "" : "hidden"}>${PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("")}</div>
        <div class="note-bar">
          <button data-act="colors" class="note-dot" style="--c:${current}" title="Colour"></button>
@@ -1645,7 +1709,35 @@ export class Viewer {
     card.dataset.rect = a.rect.join(",");
     card.hidden = false;
     if (card.parentElement !== pv.el) pv.el.append(card);
+    const input = card.querySelector<HTMLTextAreaElement>(".note-input")!;
+    const send = card.querySelector<HTMLButtonElement>(".note-send")!;
+    const grow = () => {
+      input.style.height = "auto";
+      input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+      send.disabled = !input.value.trim();
+    };
+    input.value = this.drafts.get(key) ?? "";
+    input.addEventListener("input", () => {
+      this.drafts.set(key, input.value);
+      grow();
+    });
+    input.addEventListener("keydown", (e) => {
+      // Enter sends, Shift+Enter starts a new line
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        send.click();
+      }
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        input.blur();
+      }
+    });
+    grow();
+    if (typing) card.querySelector<HTMLElement>(`.${typing.split(" ")[0]}`)?.focus();
     this.placeFloat(card);
+    // the thread's newest reply in view
+    const thread = card.querySelector<HTMLElement>(".note-thread");
+    if (thread) thread.scrollTop = thread.scrollHeight;
     card.onpointerdown = (e) => {
       e.stopPropagation();
       card.style.zIndex = String(++this.noteZ);
@@ -1656,6 +1748,7 @@ export class Viewer {
       // (the note as it is now)
       const cur = pv.annots?.find((x) => x.num === a.num);
       if (!cur) return this.closeNote(key);
+      const reply = cur.replies?.find((r) => String(r.num) === b.dataset.reply);
       try {
         if (b.dataset.act === "close") {
           if (this.selected?.page === pv.index && this.selected.index === cur.index) this.selectAnnot(null);
@@ -1670,7 +1763,23 @@ export class Viewer {
         else if (b.dataset.act === "delete") {
           this.selectAnnot({ page: pv.index, index: cur.index });
           await this.deleteSelectedAnnot();
-        }
+        } else if (b.dataset.act === "reply") {
+          const text = input.value.trim();
+          if (!text) return;
+          const name = card.querySelector<HTMLInputElement>(".note-name");
+          if (name) {
+            this.host.settings.author = name.value.trim();
+            this.host.saveSettings();
+          }
+          this.drafts.delete(key);
+          input.value = "";
+          this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.addReply(pv.index, cur.index, text, this.host.settings.author)));
+          card.querySelector<HTMLElement>(".note-input")?.focus();
+        } else if (b.dataset.act === "redit" && reply) {
+          const text = await noteDialog(reply.text, false, "Reply");
+          if (text === "delete") this.afterAnnotEdit(pv, await this.host.engine.deleteAnnot(pv.index, reply.index));
+          else if (text !== null && text.trim()) this.afterAnnotEdit(pv, await this.host.engine.setReply(pv.index, reply.index, text));
+        } else if (b.dataset.act === "rdelete" && reply) this.afterAnnotEdit(pv, await this.host.engine.deleteAnnot(pv.index, reply.index));
       } catch (err) {
         toast((err as Error).message, "error");
       }
@@ -1975,7 +2084,7 @@ export class Viewer {
     const text = await noteDialog("", true);
     if (text === null || text === "delete") return;
     const at = this.clampToPage(pv, [p[0] - 11, p[1] - 11], 22, 22);
-    const annots = await this.host.busy(this.host.engine.addNote(pv.index, at, text, hexToRgb(this.host.settings.colors.note)));
+    const annots = await this.host.busy(this.host.engine.addNote(pv.index, at, text, hexToRgb(this.host.settings.colors.note), this.host.settings.author));
     this.afterAnnotEdit(pv, annots);
   }
 
@@ -2714,3 +2823,10 @@ const FIELD_BASE: Record<string, string> = { text: "Text", multiline: "Text", ch
 const RESIZE_CURSOR = ["over-nwse", "over-nesw", "over-nwse", "over-nesw", "over-ns", "over-ew", "over-ns", "over-ew"];
 
 const noteKey = (page: number, num: number) => `${page}:${num}`;
+
+/** Who wrote a note or reply and when (nothing if neither is known), with optional buttons. */
+function byline(author: string, date: number, buttons = ""): string {
+  const when = date ? new Date(date).toLocaleString(lang === "de" ? "de-DE" : undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+  if (!author && !when && !buttons) return "";
+  return `<div class="note-by"><span translate="no">${author ? `<b>${esc(author)}</b>` : ""}${author && when ? " · " : ""}${when}</span>${buttons ? `<span class="note-gap"></span>${buttons}` : ""}</div>`;
+}

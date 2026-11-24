@@ -4,6 +4,9 @@ import { PdfEngine, type AnnotInfo, type EditResult, type EditOptions, type OcrW
 import type { Run } from "../core/textlayout";
 
 export class WorkerEngine extends PdfEngine {
+  /** Close a tab's document (handled by the worker itself; here for the call's type). */
+  dropTab(_tab: number): void {}
+
   /** Render straight to an ImageBitmap that can be transferred to the page. */
   async renderBitmap(index: number, scale: number): Promise<ImageBitmap> {
     const img = this.render(index, scale);
@@ -89,13 +92,28 @@ export class WorkerEngine extends PdfEngine {
   }
 }
 
-const engine = new WorkerEngine(mupdf);
+// One engine per open document (tab); the tools on the start screen have their own.
+const engines = new Map<number, WorkerEngine>();
+const TOOLS = -1;
+let current = 0;
+const engineFor = (tab: number): WorkerEngine => {
+  let e = engines.get(tab);
+  if (!e) {
+    e = new WorkerEngine(mupdf);
+    engines.set(tab, e);
+  }
+  return e;
+};
+const countDocs = () => {
+  PdfEngine.openDocs = Math.max(1, [...engines.values()].filter((e) => e.hasDoc()).length);
+};
 mupdf.setLog(null);
 
 interface Call {
   id: number;
   method: string;
   args: unknown[];
+  tab: number;
 }
 
 // When nothing has been asked for a moment, prepare the undo copy for the next change,
@@ -107,7 +125,7 @@ const whenIdle = () => {
   idle = self.setTimeout(() => {
     if (pending) return;
     try {
-      engine.prepareUndo();
+      engines.get(current)?.prepareUndo();
     } catch {
       // (only an optimisation)
     }
@@ -115,13 +133,26 @@ const whenIdle = () => {
 };
 
 self.onmessage = async (ev: MessageEvent<Call>) => {
-  const { id, method, args } = ev.data;
+  const { id, method, args, tab } = ev.data;
   pending++;
   clearTimeout(idle);
   try {
-    const fn = (engine as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
-    if (typeof fn !== "function") throw new Error(`Unknown method ${method}`);
-    const result = await fn.apply(engine, args);
+    let result: unknown;
+    if (method === "dropTab") {
+      // a tab was closed: its document and history go
+      const n = args[0] as number;
+      engines.get(n)?.dispose();
+      engines.delete(n);
+      countDocs();
+    } else {
+      // (the start screen's tools run on their own, whichever document is open)
+      const engine = engineFor(method.startsWith("tool") ? TOOLS : tab);
+      if (!method.startsWith("tool")) current = tab;
+      const fn = (engine as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
+      if (typeof fn !== "function") throw new Error(`Unknown method ${method}`);
+      result = await fn.apply(engine, args);
+      if (method === "open" || method === "close") countDocs();
+    }
     const transfer: Transferable[] = [];
     if (result instanceof ImageBitmap) transfer.push(result);
     else if (result instanceof Uint8Array) transfer.push(result.buffer as ArrayBuffer);

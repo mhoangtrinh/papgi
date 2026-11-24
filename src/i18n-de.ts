@@ -383,6 +383,22 @@ export const DE: Record<string, string> = {
   "A new version of papgi is ready.": "Eine neue Version von papgi ist bereit.",
   "A new version is ready": "Eine neue Version ist bereit",
   Reload: "Neu laden",
+  "Your name": "Ihr Name",
+  "Reply…": "Antworten…",
+  "Send reply (Enter)": "Antwort senden (Enter)",
+  "Edit reply": "Antwort ändern",
+  "Delete reply": "Antwort löschen",
+  Reply: "Antwort",
+  "Your name for comments…": "Ihr Name für Kommentare…",
+  "Your name for comments": "Ihr Name für Kommentare",
+  "Shown with the notes and replies you write, also in other apps.": "Steht bei Ihren Notizen und Antworten, auch in anderen Apps.",
+  "Close without saving?": "Schließen, ohne zu speichern?",
+  "This PDF": "Dieses PDF",
+  "Open PDFs": "Offene PDFs",
+  "Up to 10 PDFs can be open at once. Close one first.": "Es können bis zu 10 PDFs gleichzeitig offen sein. Schließen Sie zuerst eines.",
+  "One page at a time": "Eine Seite untereinander",
+  "Two pages side by side": "Zwei Seiten nebeneinander",
+  "Two pages side by side, cover alone": "Zwei Seiten nebeneinander, Titelseite einzeln",
   "Reload now?": "Jetzt neu laden?",
   "Reload anyway": "Trotzdem neu laden",
   "it isn't a PDF, or it is too damaged to open.": "es ist kein PDF oder zu beschädigt zum Öffnen.",
@@ -694,6 +710,9 @@ const pl = (re: string) => new RegExp(`^${re.replace(/PL/g, PL)}$`);
 
 /** Texts with numbers or names in them. The first that matches is used. */
 export const DE_PATTERNS: Pattern[] = [
+  [/^(.+\.pdf) has unsaved changes\.$/i, "$1 hat ungespeicherte Änderungen."],
+  [/^(.+\.pdf) is already open$/i, "$1 ist schon offen"],
+  [/^(.+) \(click to change\)$/, (m, tr) => `${tr(m[1]) ?? m[1]} (zum Wechseln klicken)`],
   // parts joined with " · ": each part on its own
   [/^.+ · .+$/, (m, tr) => m[0].split(" · ").map((p) => (/^[\d\s.,:%×/–A-Z()-]*$/.test(p) || /\.\w{2,4}$/.test(p) ? p : (tr(p) ?? p))).join(" · ")],
   [/^· (.+)$/, (m, tr) => `· ${tr(m[1]) ?? m[1]}`],

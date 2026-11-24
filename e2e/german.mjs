@@ -147,7 +147,7 @@ try {
     // the document's own words are never translated: "Page 1" stays "Page 1" when edited
     where = "edit text";
     await page.evaluate(async () => {
-      window.papgi["dirty"] = false;
+      for (const t of window.papgi.tabs) t.dirty = false;
       const r = await fetch("./samples/pages.pdf");
       await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
     });

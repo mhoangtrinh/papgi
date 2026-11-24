@@ -9,6 +9,7 @@ import type { Point, Quad, Rect } from "../core/geometry";
 import { arrowHeadPoints } from "../core/shapes";
 import { brushRects, brushTouchesOutline, brushTouchesRect, brushTouchesSegment, eraseStroke, inRects, quadCenter } from "../core/erase";
 import { appendContent, ownResources } from "./ocr";
+import { dropOrphanReplies, isReply } from "./comments";
 
 type M = typeof MuPDF;
 
@@ -129,7 +130,10 @@ export function eraseRects(m: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPage, re
   const mid = (f: Rect) => inRects(rects, (f[0] + f[2]) / 2, (f[1] + f[3]) / 2);
   // form fields (and added items) whose middle is in the erased part go too
   if (opts.fields !== false) removeFields(page, mid);
-  if (opts.annots) for (const rr of rects) for (const a of itemsIn(page, rr).annots) page.deleteAnnotation(a);
+  if (opts.annots) {
+    for (const rr of rects) for (const a of itemsIn(page, rr).annots) page.deleteAnnotation(a);
+    dropOrphanReplies(page);
+  }
   clearGraphics(m, page, rects);
   removeGlyphs(m, page, (c) => inRects(rects, c[0], c[1]));
   const inv = m.Matrix.invert(page.getTransform());
@@ -218,6 +222,7 @@ export function removeItemsIn(page: MuPDF.PDFPage, rect: Rect): boolean {
   const inside = itemsIn(page, rect);
   for (const a of inside.annots) page.deleteAnnotation(a);
   for (const w of inside.widgets) page.deleteAnnotation(w);
+  if (inside.annots.length) dropOrphanReplies(page);
   return inside.annots.length + inside.widgets.length > 0;
 }
 
@@ -226,7 +231,8 @@ export function itemsIn(page: MuPDF.PDFPage, rect: Rect): { annots: MuPDF.PDFAnn
   const mid = (b: Rect) => inRects([rect], (b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
   const annots = page.getAnnotations().filter((a) => {
     const t = a.getType();
-    return t !== "Widget" && t !== "Link" && t !== "Popup" && mid(a.getBounds() as Rect);
+    // (replies go along with their note, never on their own)
+    return t !== "Widget" && t !== "Link" && t !== "Popup" && !isReply(a) && mid(a.getBounds() as Rect);
   });
   const widgets = page.getWidgets().filter((w) => {
     try {
@@ -856,7 +862,7 @@ export function eraseBrush(m: M, doc: MuPDF.PDFDocument, index: number, path: Po
     const gone: MuPDF.PDFAnnotation[] = [];
     for (const a of page.getAnnotations()) {
       const type = a.getType();
-      if (type === "Widget" || type === "Link" || type === "Popup") continue;
+      if (type === "Widget" || type === "Link" || type === "Popup" || isReply(a)) continue;
       const b = a.getBounds() as Rect;
       if (!brushTouchesRect(path, r, b)) continue;
       const w = a.hasBorder() ? a.getBorderWidth() : 1;
@@ -911,6 +917,7 @@ export function eraseBrush(m: M, doc: MuPDF.PDFDocument, index: number, path: Po
       }
     }
     for (const a of gone) page.deleteAnnotation(a);
+    if (gone.length) dropOrphanReplies(page);
     let content = false;
     if (everything) {
       // form fields the brush touches
