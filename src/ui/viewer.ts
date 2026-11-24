@@ -1531,6 +1531,7 @@ export class Viewer {
   // ---------- floating menus ----------
 
   private hideFloating(): void {
+    this.dismissPaste?.();
     this.floating.hidden = true;
     this.floating.dataset.kind = "";
     this.floating.remove();
@@ -2445,11 +2446,30 @@ export class Viewer {
     this.showPasteMenu(pv, p);
   }
 
+  /** Stops listening for a click or key that closes the Paste menu. */
+  private dismissPaste: (() => void) | null = null;
+
   private showPasteMenu(pv: PageView, p: Point): void {
     this.clearSelection();
     this.selectAnnot(null);
     this.setArea(null);
     this.showFloatingAt(pv, [p[0], p[1], p[0], p[1]], "paste", `<button data-act="paste" class="labelled">${icon("paste")}<span>Paste</span></button>`);
+    // a click or tap anywhere else (or Esc) closes it
+    this.dismissPaste?.();
+    const away = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key !== "Escape" : this.floating.contains(e.target as Node)) return;
+      if (this.floating.dataset.kind === "paste") this.hideFloating();
+      else this.dismissPaste?.();
+    };
+    document.addEventListener("pointerdown", away, true);
+    document.addEventListener("keydown", away, true);
+    window.addEventListener("blur", away);
+    this.dismissPaste = () => {
+      document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("keydown", away, true);
+      window.removeEventListener("blur", away);
+      this.dismissPaste = null;
+    };
     this.floating.onclick = (e) => {
       if (!(e.target as HTMLElement).closest("button")) return;
       this.hideFloating();

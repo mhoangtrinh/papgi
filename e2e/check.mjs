@@ -1832,6 +1832,37 @@ try {
     check("and back to one page at a time", t4[0] < t4[1] && t4[1] < t4[2], JSON.stringify(t4));
   }
 
+  // ---- the right-click Paste menu closes with a click elsewhere ----
+  {
+    const box = await page.locator(".page").first().boundingBox();
+    const at = [box.x + box.width * 0.5, box.y + 420];
+    const shown = () => page.locator('.floating[data-kind="paste"]:not([hidden])').count();
+    await page.mouse.click(...at, { button: "right" });
+    await page.waitForTimeout(200);
+    const a = await shown();
+    await page.mouse.click(at[0] + 80, at[1] + 60);
+    await page.waitForTimeout(200);
+    const b = await shown();
+    check("right-click shows Paste; a click elsewhere on the page closes it", a === 1 && b === 0, `${a} ${b}`);
+    await page.mouse.click(...at, { button: "right" });
+    await page.waitForTimeout(200);
+    await page.click("#btn-zoom-in");
+    await page.waitForTimeout(200);
+    const c = await shown();
+    await page.mouse.click(...at, { button: "right" });
+    await page.waitForTimeout(200);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    const d = await shown();
+    await page.mouse.click(...at, { button: "right" });
+    await page.waitForTimeout(200);
+    await page.mouse.click(at[0] + 100, at[1] - 50, { button: "right" });
+    await page.waitForTimeout(200);
+    const e = await shown();
+    check("…also a click on the toolbar, Esc, or a right-click somewhere else (one menu there)", c === 0 && d === 0 && e === 1, `${c} ${d} ${e}`);
+    await page.keyboard.press("Escape");
+  }
+
   // ---- several PDFs open, in tabs ----
   {
     const open = async (name) => {
