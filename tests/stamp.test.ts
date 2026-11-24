@@ -158,3 +158,51 @@ describe("sticky notes", () => {
     expect(p.annots[p.index].contents).toBe("Checked: fine");
   });
 });
+
+describe("redaction beyond the page text", () => {
+  it("replaces the text in comments, text boxes, form fields, details and bookmarks; counts them first", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.addFreeText(0, [300, 500], "secret code 42", 12, [0, 0, 0]);
+    e.addNote(1, [100, 600], "the Secret note, secret!", [1, 1, 0]);
+    const doc = (e as unknown as { doc: mupdf.PDFDocument }).doc;
+    doc.setMetaData("info:Title", "Top secret plan");
+    expect(e.redactCount("secret")).toBe(4);
+    const r = e.redactText("secret");
+    expect(r.count).toBe(4);
+    expect(r.pages).toEqual([0, 1]);
+    const d = mupdf.Document.openDocument(e.save(), "application/pdf") as mupdf.PDFDocument;
+    const all = [0, 1].flatMap((i) => d.loadPage(i).getAnnotations().map((a) => a.getContents()));
+    expect(all.join(" ")).not.toMatch(/secret/i);
+    expect(all).toContain("[redacted] code 42");
+    expect(d.getMetaData("info:Title")).toBe("Top [redacted] plan");
+    expect(e.state().undoName).toBe("Redact");
+  });
+
+  it("finds nothing: no undo step", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    expect(e.redactText("nowhere to be found").count).toBe(0);
+    expect(e.state().canUndo).toBe(false);
+  });
+});
+
+describe("page numbers on some pages", () => {
+  it("counts only the numbered pages: 1 / 3 … 3 / 3", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.headerFooter({ items: { bc: "{page} / {pages}" }, size: 10, color: [0, 0, 0], margin: 28, startAt: 1, skipFirst: false, pages: [4, 2, 3] });
+    expect(e.pageText(2)).toContain("1 / 3");
+    expect(e.pageText(4)).toContain("3 / 3");
+    expect(e.pageText(0)).not.toContain("/ 3");
+  });
+
+  it("refuses letters no bundled font has, instead of writing boxes", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    e.registerFont("LiberationSans-Regular.ttf", font("LiberationSans-Regular.ttf"));
+    expect(() => e.watermark({ text: "机密", size: 40, color: [0, 0, 0], opacity: 1, angle: 0, bold: false, pages: [0] })).toThrow(/can't write these letters/);
+    expect(e.state().canUndo).toBe(false);
+    expect(e.pageText(0)).not.toContain("�");
+  });
+});

@@ -1538,6 +1538,13 @@ try {
     await pp.waitForSelector(".page.rendered", { timeout: 20000 });
     await pp.waitForTimeout(400);
     await pp.screenshot({ path: shots + `phone-form-${scheme}.png` });
+    const fit = await pp.evaluate(() => {
+      const bar = document.querySelector(".topbar");
+      const theme = document.querySelector("#btn-theme").getBoundingClientRect();
+      const pg = document.querySelector(".page").getBoundingClientRect();
+      return { bar: bar.scrollWidth <= innerWidth, theme: theme.right <= innerWidth, page: pg.left >= 0 && pg.right <= innerWidth };
+    });
+    check(`phone ${scheme}: top bar and the page fit the screen width`, fit.bar && fit.theme && fit.page, JSON.stringify(fit));
     check(`phone ${scheme}: papgi (tools), File and Document buttons in the top bar`, (await pp.isVisible("#btn-tools")) && (await pp.isVisible("#btn-file")) && (await pp.isVisible("#btn-doc")));
     await pp.tap("#btn-doc");
     await pp.screenshot({ path: shots + `phone-doc-menu-${scheme}.png` });

@@ -64,6 +64,8 @@ body {
 #app {
   height: 100%;
   display: grid;
+  /* (nothing may make the app wider than the screen) */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: calc(var(--top) + env(safe-area-inset-top)) var(--strip) 1fr;
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
@@ -1438,6 +1440,17 @@ textarea.field-input {
   }
 }
 
+/* tablets: the top bar keeps its icons, without their words */
+@media (max-width: 900px) {
+  .brand-btn .brand-name,
+  .menu-label span {
+    display: none;
+  }
+  .menu-label {
+    padding: 0 8px;
+  }
+}
+
 @media (max-width: 760px) {
   :root {
     --side: 128px;
@@ -1473,6 +1486,29 @@ textarea.field-input {
   }
   .topbar {
     justify-content: space-between;
+    gap: 2px;
+    padding-left: 6px;
+    padding-right: 6px;
+    /* (very narrow screens: the bar scrolls; its menus are fixed, so they still show) */
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .topbar::-webkit-scrollbar {
+    display: none;
+  }
+  .topbar .icon-btn,
+  .topbar .brand-btn {
+    width: 32px;
+    flex: none;
+  }
+  .menu-label {
+    padding: 0 6px;
+    flex: none;
+  }
+  .zoom-label {
+    min-width: 0;
+    padding: 0 4px;
+    font-size: 13px;
   }
   .tb-group + .tb-group {
     padding-left: 2px;

@@ -453,7 +453,8 @@ export class Viewer {
     const pad = 4 / this.zoom;
     let best: AnnotInfo | null = null;
     for (const a of pv.annots ?? []) {
-      if (!inRect(a.rect, p[0], p[1], pad)) continue;
+      // (a note is a small icon: easier to hit, also with a finger)
+      if (!inRect(a.rect, p[0], p[1], a.kind === "Text" ? Math.max(pad, 10 / this.zoom) : pad)) continue;
       if (!best || rectWidth(a.rect) * rectHeight(a.rect) < rectWidth(best.rect) * rectHeight(best.rect)) best = a;
     }
     return best;
@@ -1373,9 +1374,16 @@ export class Viewer {
     const pv = this.pages[Number(this.floating.dataset.page)];
     if (!pv) return;
     const r = this.floating.dataset.rect!.split(",").map(Number);
-    const x = ((r[0] + r[2]) / 2 - pv.info.x) * this.zoom;
+    let x = ((r[0] + r[2]) / 2 - pv.info.x) * this.zoom;
     const top = (r[1] - pv.info.y) * this.zoom;
     const bottom = (r[3] - pv.info.y) * this.zoom;
+    // keep the whole menu on screen (e.g. a box near the page's edge on a phone)
+    const vr = this.el.getBoundingClientRect();
+    const pr = pv.el.getBoundingClientRect();
+    const half = this.floating.offsetWidth / 2;
+    const lo = vr.left - pr.left + 6 + half;
+    const hi = vr.right - pr.left - 6 - half;
+    x = lo > hi ? lo : Math.min(hi, Math.max(lo, x));
     this.floating.style.left = `${x}px`;
     const above = top > 52;
     this.floating.style.top = above ? `${top - 8}px` : `${bottom + 8}px`;

@@ -1107,15 +1107,17 @@ export class App {
     if (!this.info || !this.file) return;
     const o = await headerFooterDialog(this.info.pageCount, this.info.pages[this.currentPage()], this.file.name);
     if (!o) return;
-    const job = this.engine.addHeaderFooter(o, new URL("fonts/", document.baseURI).href);
-    await this.contentOp(job, "Added");
-    const n = await job.catch(() => 0);
-    if (n) toast(`Added to ${n} page${n > 1 ? "s" : ""}`);
+    try {
+      const n = await this.busy(this.engine.addHeaderFooter(o, new URL("fonts/", document.baseURI).href));
+      await this.afterHistory(await this.engine.info(), n ? `Added to ${n} page${n > 1 ? "s" : ""}` : "Nothing was added: no pages left to number");
+    } catch (e) {
+      toast(friendlyError((e as Error).message), "error");
+    }
   }
 
   private async redactText(): Promise<void> {
     if (!this.info) return;
-    const q = await redactTextDialog(async (t) => (await this.engine.search(t, 10000)).reduce((s, h) => s + h.quads.length, 0));
+    const q = await redactTextDialog((t) => this.engine.redactCount(t));
     if (!q) return;
     try {
       const r = await this.busy(this.engine.redactText(q));

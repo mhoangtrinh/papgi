@@ -306,7 +306,9 @@ export class PdfEngine {
     const helv = this.stampHelv(bold);
     if (pickFont([helv], text)) return helv;
     const lib = this.bundled.get(bold ? "LiberationSans-Bold.ttf" : "LiberationSans-Regular.ttf");
-    return lib && pickFont([lib], text) ? lib : helv;
+    if (lib && pickFont([lib], text)) return lib;
+    const missing = [...new Set([...text].filter((c) => c.trim() && helv.encodeCharacter(c.codePointAt(0)!) <= 0 && !(lib && lib.encodeCharacter(c.codePointAt(0)!) > 0)))];
+    throw new Error(`papgi can't write these letters yet: ${missing.slice(0, 8).join(" ")}`);
   }
 
   /** A text watermark on pages (real page content; one undo step). */
@@ -1021,11 +1023,93 @@ export class PdfEngine {
     return this.listAnnots(index);
   }
 
-  /** Redact every place a text appears (one undo step). Returns the pages changed and how many places. */
+  /**
+   * Where a text appears besides the page itself: comments and text boxes, form fields,
+   * the file's details (title, author…) and bookmarks. `apply`: replace it there by "[redacted]".
+   */
+  private redactElsewhere(needle: string, apply: boolean): { count: number; pages: number[] } {
+    const doc = this.requireDoc();
+    const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const hits = (t: string | undefined) => (t ? (t.match(re) ?? []).length : 0);
+    const clean = (t: string) => t.replace(re, "[redacted]");
+    let count = 0;
+    const pages: number[] = [];
+    for (let i = 0; i < doc.countPages(); i++) {
+      const here = this.withPage(i, (page) => {
+        let n = 0;
+        for (const a of page.getAnnotations()) {
+          const k = hits(a.getContents());
+          if (!k) continue;
+          n += k;
+          if (apply) {
+            a.setContents(clean(a.getContents()));
+            // (rich text keeps its own copy of the words)
+            a.getObject().delete("RC");
+            a.update();
+          }
+        }
+        for (const w of page.getWidgets()) {
+          if (w.getFieldType() !== "text") continue;
+          const k = hits(w.getValue());
+          if (!k) continue;
+          n += k;
+          if (apply) {
+            w.setTextValue(clean(w.getValue()));
+            w.update();
+          }
+        }
+        return n;
+      });
+      if (here) {
+        count += here;
+        pages.push(i);
+      }
+    }
+    for (const key of ["info:Title", "info:Author", "info:Subject", "info:Keywords"]) {
+      const v = doc.getMetaData(key);
+      const k = hits(v);
+      count += k;
+      if (k && apply) doc.setMetaData(key, clean(v!));
+    }
+    const it = doc.outlineIterator();
+    const walk = (): void => {
+      for (let guard = 0; guard < 100000; guard++) {
+        const item = it.item();
+        if (item) {
+          const k = hits(item.title);
+          count += k;
+          if (k && apply) it.update({ ...item, title: clean(item.title!) });
+          if (it.down() === this.mupdf.OutlineIterator.ITERATOR_AT_ITEM) {
+            walk();
+            it.up();
+          } else it.up();
+        }
+        if (it.next() !== this.mupdf.OutlineIterator.ITERATOR_AT_ITEM) return;
+      }
+    };
+    try {
+      if (it.item()) walk();
+    } finally {
+      it.destroy();
+    }
+    return { count, pages };
+  }
+
+  /** How many places redactText would black out or replace. */
+  redactCount(needle: string): number {
+    if (!needle.trim()) return 0;
+    return this.search(needle, 10000).length + this.redactElsewhere(needle, false).count;
+  }
+
+  /**
+   * Redact every place a text appears (one undo step): blacked out on the pages, and
+   * replaced by "[redacted]" in comments, text boxes, form fields, the file's details and
+   * bookmarks. Returns the pages changed and how many places.
+   */
   redactText(needle: string): { pages: number[]; count: number } {
     const doc = this.requireDoc();
+    if (!needle.trim()) return { pages: [], count: 0 };
     const hits = this.search(needle, 10000);
-    if (!hits.length) return { pages: [], count: 0 };
     const byPage = new Map<number, Rect[]>();
     for (const h of hits) {
       // a hit can span lines: one box per line piece, a little bigger than the letters
@@ -1037,12 +1121,15 @@ export class PdfEngine {
         byPage.set(h.page, [...(byPage.get(h.page) ?? []), r]);
       }
     }
-    const pages = [...byPage.keys()];
+    let other = { count: 0, pages: [] as number[] };
     this.journaled("Redact", () => {
       for (const [i, rects] of byPage) this.withPage(i, (page) => eraseRects(this.mupdf, doc, page, rects, { fields: false, annots: false, fill: [0, 0, 0] }));
-    }, pages);
+      other = this.redactElsewhere(needle, true);
+      return byPage.size > 0 || other.count > 0;
+    }, [...byPage.keys()]);
+    const pages = [...new Set([...byPage.keys(), ...other.pages])].sort((x, y) => x - y);
     for (const i of pages) this.forgetText(i);
-    return { pages, count: hits.length };
+    return { pages, count: hits.length + other.count };
   }
 
   /**

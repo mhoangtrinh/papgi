@@ -60,7 +60,8 @@ export function modal(opts: ModalOpts, onOpen?: (root: HTMLElement) => void): Pr
       if (e.key === "Escape") {
         e.stopPropagation();
         done("");
-      } else if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) {
+      } else if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLButtonElement)) {
+        // (Enter on a focused button presses that button, e.g. Cancel)
         const primary = opts.actions.find((a) => a.primary);
         if (primary) {
           e.preventDefault();

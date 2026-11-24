@@ -73,7 +73,7 @@ async function form<T>(title: string, html: string, okLabel: string, onOpen: (ro
   };
   // Enter is handled by the modal on document (capture), so look first from window.
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement) && body.isConnected) check("ok", e);
+    if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLButtonElement) && body.isConnected) check("ok", e);
   };
   window.addEventListener("keydown", onKey, true);
   const v = await modal({ title, body, actions: [{ label: "Cancel", value: "" }, ...extra, { label: okLabel, value: "ok", primary: true }], wide: true }, (root) => {
@@ -231,11 +231,14 @@ export async function headerFooterDialog(pageCount: number, page: { w: number; h
   };
   const paint = (root: HTMLElement) => {
     const c = collect(root);
+    // (the pages that get a number: the chosen ones, less a skipped title page)
+    const chosen = pages.read(root) ?? [...Array(pageCount).keys()];
+    const shown = Math.max(1, chosen.filter((i) => !(c.skipFirst && i === 0)).length);
     const pw = root.querySelector<HTMLElement>(".dt-page")!.clientWidth || 160;
     for (const [corner] of CORNERS) {
       const el = root.querySelector<HTMLElement>(`.dt-${corner}`)!;
       const t = c.items[corner] ?? "";
-      el.textContent = t.replace(/\{page\}/g, String(c.startAt)).replace(/\{pages\}/g, String(pageCount - (c.skipFirst ? 1 : 0) + c.startAt - 1)).replace(/\{date\}/g, date).replace(/\{file\}/g, file);
+      el.textContent = t.replace(/\{page\}/g, String(c.startAt)).replace(/\{pages\}/g, String(shown + c.startAt - 1)).replace(/\{date\}/g, date).replace(/\{file\}/g, file);
       el.style.fontSize = `${Math.max(5, (c.size * pw) / page.w)}px`;
     }
     const size = root.querySelector<HTMLInputElement>('[data-k="size"]')!;

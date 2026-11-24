@@ -45,16 +45,34 @@ export class WorkerEngine extends PdfEngine {
 
   /** A watermark, first fetching a font if Helvetica lacks some of its letters. */
   async addWatermark(o: import("./stamp").WatermarkOptions, fontBase: string): Promise<void> {
-    const file = this.stampFontFile([o.text], o.bold);
-    if (file) await this.loadFonts([file], fontBase).catch(() => {});
-    this.watermark(o);
+    const failed = await this.stampFontReady([o.text], o.bold, fontBase);
+    try {
+      this.watermark(o);
+    } catch (e) {
+      throw failed && /can't write/.test((e as Error).message) ? new Error("Couldn't download the font for these letters. Check the connection and try again.") : e;
+    }
+  }
+
+  /** Fetch the bundled font these texts need, if any. True: it was needed and couldn't be loaded. */
+  private async stampFontReady(texts: string[], bold: boolean, fontBase: string): Promise<boolean> {
+    const file = this.stampFontFile(texts, bold);
+    if (!file) return false;
+    try {
+      await this.loadFonts([file], fontBase);
+      return false;
+    } catch {
+      return true;
+    }
   }
 
   /** Page numbers, header and footer (fetching a font when needed). */
   async addHeaderFooter(o: import("./stamp").HeaderFooterOptions, fontBase: string): Promise<number> {
-    const file = this.stampFontFile(Object.values(o.items).filter((t): t is string => !!t), false);
-    if (file) await this.loadFonts([file], fontBase).catch(() => {});
-    return this.headerFooter(o);
+    const failed = await this.stampFontReady(Object.values(o.items).filter((t): t is string => !!t), false, fontBase);
+    try {
+      return this.headerFooter(o);
+    } catch (e) {
+      throw failed && /can't write/.test((e as Error).message) ? new Error("Couldn't download the font for these letters. Check the connection and try again.") : e;
+    }
   }
 
   /** What's printed in a part of a page on a transparent background (drag preview). */

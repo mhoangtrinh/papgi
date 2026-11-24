@@ -143,16 +143,15 @@ export function addWatermark(m: M, doc: MuPDF.PDFDocument, o: WatermarkOptions, 
 /** Page numbers, headers and footers. Returns how many pages got something. */
 export function addHeaderFooter(m: M, doc: MuPDF.PDFDocument, o: HeaderFooterOptions, fontFor: (text: string) => MuPDF.Font): number {
   const st = new Stamper(m, doc);
-  const total = doc.countPages();
+  // numbered in page order, counting only the pages that get something (not a skipped title page)
+  const numbered = [...new Set(o.pages)].filter((i) => i >= 0 && i < doc.countPages() && !(o.skipFirst && i === 0)).sort((a, b) => a - b);
+  const shown = numbered.length;
   let done = 0;
-  o.pages.forEach((i, k) => {
-    if (o.skipFirst && i === 0) return;
+  numbered.forEach((i, k) => {
     const page = doc.loadPage(i);
     try {
       const b = page.getBounds();
-      // numbered in the order the pages are (a skipped title page isn't counted)
-      const n = o.startAt + k - (o.skipFirst && o.pages.includes(0) ? 1 : 0);
-      const shown = o.skipFirst ? total - 1 : total;
+      const n = o.startAt + k;
       for (const [corner, tpl] of Object.entries(o.items) as [Corner, string][]) {
         if (!tpl?.trim()) continue;
         const text = fillTemplate(tpl, { page: n, pages: shown + o.startAt - 1, date: o.date, file: o.file });
