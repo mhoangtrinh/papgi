@@ -1499,9 +1499,13 @@ try {
     await page.mouse.click(...nc);
     await page.waitForTimeout(300);
     const openNow = await page.locator('.floating[data-kind="note"]:not([hidden])').count();
+    // a click somewhere else on the page leaves it open
+    await page.mouse.click(...(await raw(0, 60, 500)));
+    await page.waitForTimeout(250);
+    const stays = await page.locator('.floating[data-kind="note"]:not([hidden])').count();
     await page.mouse.click(...nc);
     await page.waitForTimeout(300);
-    check("Esc closes a note; clicking it opens it, clicking again closes it", afterEsc === 0 && openNow === 1 && (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0);
+    check("a note's card stays open while you work elsewhere; Esc or a click on the note closes it", afterEsc === 0 && openNow === 1 && stays === 1 && (await page.locator('.floating[data-kind="note"]:not([hidden])').count()) === 0);
     await page.mouse.click(...nc);
     await page.waitForTimeout(300);
     await page.keyboard.press("Delete");

@@ -109,6 +109,10 @@ export class Viewer {
     this.floating = document.createElement("div");
     this.floating.className = "floating";
     this.floating.hidden = true;
+    this.noteCard = document.createElement("div");
+    this.noteCard.className = "floating";
+    this.noteCard.dataset.kind = "note";
+    this.noteCard.hidden = true;
     mount.append(this.el);
 
     this.observer = new IntersectionObserver(
@@ -156,6 +160,7 @@ export class Viewer {
   setDocument(info: DocInfo | null, keepPosition = false): void {
     const keep = keepPosition ? this.current : 0;
     this.closeEditor(false);
+    this.closeNote();
     if (this.para) {
       this.para.ed.destroy();
       this.para = null;
@@ -270,6 +275,7 @@ export class Viewer {
       pv.lines = lines;
       this.setWidgets(pv, widgets);
       this.drawHits(pv);
+      this.syncNote(pv);
       if (this.selected?.page === pv.index) this.drawAnnotSelection();
     } catch {
       pv.dataVersion = 0;
@@ -378,6 +384,7 @@ export class Viewer {
     el.scrollLeft = fx * el.scrollWidth - ax;
     el.scrollTop = fy * el.scrollHeight - ay;
     this.positionFloating();
+    this.placeFloat(this.noteCard);
     this.host.zoomChanged(z);
     this.schedule();
   }
@@ -519,8 +526,8 @@ export class Viewer {
     if (this.tool === "form") return this.fieldDown(pv, p, e);
     if ((this.tool === "select" || this.tool === "area") && this.startResize(pv, p, e)) return;
     const grabAnnot = (a: AnnotInfo) => {
-      // (a click on the note that's already open closes it again)
-      const again = a.kind === "Text" && this.selected?.page === pv.index && this.selected.index === a.index;
+      // (a click on the note whose card is open closes it again)
+      const again = a.kind === "Text" && this.openNote?.page === pv.index && this.openNote.num === a.num;
       this.clearSelection();
       this.selectAnnot({ page: pv.index, index: a.index });
       const drag: Drag = { kind: "move", pv, annot: a, start: p, last: p, x: e.clientX, y: e.clientY, moved: false, ghost: null, again };
@@ -635,6 +642,7 @@ export class Viewer {
         d.moved = true;
         d.pv.el.classList.add("moving");
         this.hideFloating();
+        if (this.openNote?.num === d.annot.num) this.noteCard.hidden = true;
         this.positionGhost(d, e);
         break;
       }
@@ -717,8 +725,10 @@ export class Viewer {
           d.pv.el.classList.remove("moving");
           if (!d.moved) {
             d.ghost?.remove();
-            if (d.again) this.selectAnnot(null);
-            else if (this.selected) this.drawAnnotSelection();
+            if (d.again) {
+              this.selectAnnot(null);
+              this.closeNote();
+            } else if (this.selected) this.drawAnnotSelection();
             return;
           }
           const target = this.pageAt(e.clientX, e.clientY) ?? d.pv;
@@ -1004,6 +1014,7 @@ export class Viewer {
 
   private afterAnnotEdit(pv: PageView, annots: AnnotInfo[]): void {
     pv.annots = annots;
+    this.syncNote(pv);
     // ("Sign here" goes away once something is signed in the box)
     if (pv.widgets?.some((w) => w.kind === "signature")) this.setWidgets(pv, pv.widgets);
     pv.version++;
@@ -1449,26 +1460,31 @@ export class Viewer {
   }
 
   private positionFloating(): void {
-    if (this.floating.hidden) return;
-    const pv = this.pages[Number(this.floating.dataset.page)];
+    this.placeFloat(this.floating);
+  }
+
+  /** Put a menu or card next to the item it belongs to (its page and rect in its data). */
+  private placeFloat(el: HTMLElement): void {
+    if (el.hidden || !el.dataset.rect) return;
+    const pv = this.pages[Number(el.dataset.page)];
     if (!pv) return;
-    const r = this.floating.dataset.rect!.split(",").map(Number);
+    const r = el.dataset.rect.split(",").map(Number);
     let x = ((r[0] + r[2]) / 2 - pv.info.x) * this.zoom;
     const top = (r[1] - pv.info.y) * this.zoom;
     const bottom = (r[3] - pv.info.y) * this.zoom;
     // keep the whole menu on screen (e.g. a box near the page's edge on a phone)
     const vr = this.el.getBoundingClientRect();
     const pr = pv.el.getBoundingClientRect();
-    const half = this.floating.offsetWidth / 2;
+    const half = el.offsetWidth / 2;
     const lo = vr.left - pr.left + 6 + half;
     const hi = vr.right - pr.left - 6 - half;
     x = lo > hi ? lo : Math.min(hi, Math.max(lo, x));
-    this.floating.style.left = `${x}px`;
+    el.style.left = `${x}px`;
     // (a note's card hangs under its icon unless there's no room there)
-    const h = this.floating.offsetHeight;
-    const above = this.floating.dataset.kind === "note" ? bottom + 10 + h > pv.el.clientHeight && top > h + 10 : top > 52;
-    this.floating.style.top = above ? `${top - 8}px` : `${bottom + 8}px`;
-    this.floating.classList.toggle("below", !above);
+    const h = el.offsetHeight;
+    const above = el.dataset.kind === "note" ? bottom + 10 + h > pv.el.clientHeight && top > h + 10 : top > 52;
+    el.style.top = above ? `${top - 8}px` : `${bottom + 8}px`;
+    el.classList.toggle("below", !above);
   }
 
   private showSelectionMenu(): void {
@@ -1496,7 +1512,10 @@ export class Viewer {
   }
 
   private showAnnotMenu(pv: PageView, a: AnnotInfo): void {
-    if (a.kind === "Text") return this.showNoteCard(pv, a);
+    if (a.kind === "Text") {
+      if (this.floating.dataset.kind === "annot") this.hideFloating();
+      return this.showNoteCard(pv, a);
+    }
     const current = rgbToHex(a.color);
     this.showFloatingAt(
       pv,
@@ -1524,39 +1543,76 @@ export class Viewer {
     };
   }
 
+  /** The note whose card is open: it stays open until closed (×, Esc, or a click on the note). */
+  private openNote: { page: number; num: number } | null = null;
+  private noteCard: HTMLDivElement;
+
   /**
    * A chosen note opens like a sticky note: its text on paper of its colour, and just
    * three small buttons (colour, change, delete). Copy / duplicate stay on the keyboard.
    */
   private showNoteCard(pv: PageView, a: AnnotInfo): void {
+    this.openNote = { page: pv.index, num: a.num };
+    this.renderNoteCard(pv, a);
+  }
+
+  closeNote(): void {
+    this.openNote = null;
+    this.noteCard.hidden = true;
+    this.noteCard.remove();
+  }
+
+  /** The open note's card follows its note (moved, recoloured, changed) or goes with it. */
+  private syncNote(pv: PageView): void {
+    if (!this.openNote || this.openNote.page !== pv.index || !pv.annots) return;
+    const a = pv.annots.find((x) => x.num === this.openNote!.num && x.kind === "Text");
+    if (a) this.renderNoteCard(pv, a);
+    else this.closeNote();
+  }
+
+  private renderNoteCard(pv: PageView, a: AnnotInfo): void {
+    const card = this.noteCard;
     const current = rgbToHex(a.color);
-    this.showFloatingAt(
-      pv,
-      a.rect,
-      "note",
-      `<button class="note-close" data-act="close" title="Close (Esc)">${icon("close")}</button>
+    const colorsOpen = !card.hidden && card.dataset.colors === "1" && card.dataset.num === String(a.num);
+    card.innerHTML = `<button class="note-close" data-act="close" title="Close (Esc)">${icon("close")}</button>
        <div class="note-text-shown" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="note-empty">Empty note</span>`}</div>
-       <div class="note-colors" hidden>${PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("")}</div>
+       <div class="note-colors" ${colorsOpen ? "" : "hidden"}>${PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("")}</div>
        <div class="note-bar">
          <button data-act="colors" class="note-dot" style="--c:${current}" title="Colour"></button>
          <span class="note-gap"></span>
          <button data-act="edit" title="Edit note">${icon("edit")}</button>
          <button data-act="delete" title="Delete (Del)">${icon("trash")}</button>
-       </div>`,
-    );
-    this.floating.style.setProperty("--note", current);
-    this.floating.onclick = async (e) => {
+       </div>`;
+    card.style.setProperty("--note", current);
+    card.dataset.page = String(pv.index);
+    card.dataset.rect = a.rect.join(",");
+    card.dataset.num = String(a.num);
+    card.dataset.colors = colorsOpen ? "1" : "";
+    card.hidden = false;
+    pv.el.append(card);
+    this.placeFloat(card);
+    card.onpointerdown = (e) => e.stopPropagation();
+    card.onclick = async (e) => {
       const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-act]");
       if (!b) return;
+      // (the note as it is now)
+      const cur = pv.annots?.find((x) => x.num === a.num);
+      if (!cur) return this.closeNote();
       try {
-        if (b.dataset.act === "close") this.selectAnnot(null);
-        else if (b.dataset.act === "colors") {
-          const row = this.floating.querySelector<HTMLElement>(".note-colors")!;
+        if (b.dataset.act === "close") {
+          if (this.selected?.page === pv.index && this.selected.index === cur.index) this.selectAnnot(null);
+          this.closeNote();
+        } else if (b.dataset.act === "colors") {
+          const row = card.querySelector<HTMLElement>(".note-colors")!;
           row.hidden = !row.hidden;
-          this.positionFloating();
-        } else if (b.dataset.color) this.afterAnnotEdit(pv, await this.host.engine.setAnnotColor(pv.index, a.index, hexToRgb(b.dataset.color)));
-        else if (b.dataset.act === "edit") await this.editNote(pv, a);
-        else if (b.dataset.act === "delete") await this.deleteSelectedAnnot();
+          card.dataset.colors = row.hidden ? "" : "1";
+          this.placeFloat(card);
+        } else if (b.dataset.color) this.afterAnnotEdit(pv, await this.host.engine.setAnnotColor(pv.index, cur.index, hexToRgb(b.dataset.color)));
+        else if (b.dataset.act === "edit") await this.editNote(pv, cur);
+        else if (b.dataset.act === "delete") {
+          this.selectAnnot({ page: pv.index, index: cur.index });
+          await this.deleteSelectedAnnot();
+        }
       } catch (err) {
         toast((err as Error).message, "error");
       }

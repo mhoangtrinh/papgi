@@ -505,6 +505,7 @@ export class App {
       this.closeMenus();
       this.viewer.clearSelection();
       this.viewer.selectAnnot(null);
+      this.viewer.closeNote();
       this.viewer.setArea(null);
       if (this.settings.tool !== "select") this.setTool("select");
       return;

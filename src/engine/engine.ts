@@ -49,6 +49,8 @@ export type AnnotKind = "Highlight" | "Underline" | "StrikeOut" | "Squiggly" | "
 
 export interface AnnotInfo {
   index: number; // index into page.getAnnotations()
+  /** The annotation's object number (stays the same while other items come and go). */
+  num: number;
   kind: AnnotKind;
   rect: Rect;
   color: number[];
@@ -616,7 +618,7 @@ export class PdfEngine {
         const kind = (["Highlight", "Underline", "StrikeOut", "Squiggly", "Ink", "FreeText", "Square", "Circle", "Line", "Polygon", "Text", "Stamp"].includes(type)
           ? type
           : "Other") as AnnotKind;
-        const info: AnnotInfo = { index: i, kind, rect: a.getBounds() as Rect, color: [...a.getColor()], contents: a.getContents() };
+        const info: AnnotInfo = { index: i, num: a.getObject().asIndirect(), kind, rect: a.getBounds() as Rect, color: [...a.getColor()], contents: a.getContents() };
         if (kind === "Stamp" && isArea(a)) info.area = true;
         if (resizable(type)) info.resizable = true;
         if (kind === "Square" || kind === "Circle" || kind === "Polygon" || kind === "Line") info.shape = shapeInfo(a, kind);
