@@ -2241,8 +2241,8 @@ try {
     await page.mouse.click(...at, { button: "right" });
     await page.waitForTimeout(200);
     await page.screenshot({ path: shots + "desktop-right-click.png" });
-    const menu = await page.evaluate(() => { const f = document.querySelector('.floating[data-kind="paste"]:not([hidden])'); return f ? [f.querySelectorAll("input").length, [...f.querySelectorAll("button")].map((b) => b.dataset.act)] : null; });
-    check("right-click: just the menu, no search field", !!menu && menu[0] === 0 && menu[1].includes("paste"), JSON.stringify(menu));
+    const menu = await page.evaluate(() => { const f = document.querySelector('.floating[data-kind="paste"]:not([hidden])'); return f ? [f.querySelectorAll("input, kbd").length, [...f.querySelectorAll("button")].map((b) => b.dataset.act)] : null; });
+    check("right-click: just Paste, no search field or shortcut hint", !!menu && menu[0] === 0 && menu[1].join() === "paste", JSON.stringify(menu));
     await page.keyboard.press("Escape");
     // with the pen tool too
     await page.keyboard.press("p");

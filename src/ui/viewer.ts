@@ -2475,8 +2475,8 @@ export class Viewer {
       pv,
       [p[0], p[1], p[0], p[1]],
       "paste",
-      `${onText ? `<button data-act="copy" class="labelled">${icon("copy")}<span>Copy</span><kbd>Ctrl C</kbd></button>` : ""}
-       <button data-act="paste" class="labelled">${icon("paste")}<span>Paste</span><kbd>Ctrl V</kbd></button>`,
+      `${onText ? `<button data-act="copy" class="labelled">${icon("copy")}<span>Copy</span></button>` : ""}
+       <button data-act="paste" class="labelled">${icon("paste")}<span>Paste</span></button>`,
     );
     // a click or tap anywhere else (or Esc) closes it
     this.dismissPaste?.();

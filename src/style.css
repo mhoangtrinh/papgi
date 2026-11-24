@@ -5105,7 +5105,7 @@ textarea.note-text {
   flex-direction: column;
   align-items: stretch;
   gap: 2px;
-  min-width: 230px;
+  min-width: 120px;
   padding: 6px;
 }
 
@@ -5114,11 +5114,5 @@ textarea.note-text {
   gap: 10px;
   width: 100%;
   padding: 0 10px;
-}
-
-.floating[data-kind="paste"] .labelled kbd {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 11px;
 }
 
