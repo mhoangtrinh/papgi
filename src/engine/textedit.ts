@@ -8,6 +8,7 @@ import type { Point, Quad, Rect } from "../core/geometry";
 import { substituteFor, cleanFontName, isBoldName, isItalicName } from "../core/fontmatch";
 import { layoutParagraph, normalizeRuns, type Align, type Run } from "../core/textlayout";
 import { appendContent, ownResources, isOcrPage, OCR_EM_BOX, OCR_FONT, sampleColors } from "./ocr";
+import { applyRedactions } from "./redact";
 
 type M = typeof MuPDF;
 
@@ -639,7 +640,7 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
     a.setRect([x0 - 0.5, y0 + h * 0.25, x1 + 0.5, y1 - h * 0.25]);
     a.update();
   }
-  page.applyRedactions(false, mupdf.PDFPage.REDACT_IMAGE_NONE, mupdf.PDFPage.REDACT_LINE_ART_NONE, mupdf.PDFPage.REDACT_TEXT_REMOVE);
+  applyRedactions(mupdf, page, mupdf.PDFPage.REDACT_IMAGE_NONE, mupdf.PDFPage.REDACT_LINE_ART_NONE, mupdf.PDFPage.REDACT_TEXT_REMOVE);
 
   // 2) draw the new text (and on scans, paint over the old words first)
   if (nonEmpty || paper) {

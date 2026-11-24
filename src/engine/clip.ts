@@ -10,6 +10,7 @@ import { arrowHeadPoints } from "../core/shapes";
 import { brushRects, brushTouchesOutline, brushTouchesRect, brushTouchesSegment, eraseStroke, inRects, quadCenter } from "../core/erase";
 import { appendContent, ownResources } from "./ocr";
 import { dropOrphanReplies, isReply } from "./comments";
+import { applyRedactions } from "./redact";
 
 type M = typeof MuPDF;
 
@@ -105,7 +106,7 @@ function removeGlyphs(m: M, page: MuPDF.PDFPage, test: (c: Point) => boolean): n
   const a = page.createAnnotation("Redact");
   a.setQuadPoints(quads);
   a.update();
-  page.applyRedactions(false, m.PDFPage.REDACT_IMAGE_NONE, m.PDFPage.REDACT_LINE_ART_NONE, m.PDFPage.REDACT_TEXT_REMOVE);
+  applyRedactions(m, page, m.PDFPage.REDACT_IMAGE_NONE, m.PDFPage.REDACT_LINE_ART_NONE, m.PDFPage.REDACT_TEXT_REMOVE);
   return quads.length;
 }
 
@@ -115,7 +116,7 @@ function clearGraphics(m: M, page: MuPDF.PDFPage, rects: Rect[], text = false): 
   const a = page.createAnnotation("Redact");
   a.setQuadPoints(rects.map(rectQuad));
   a.update();
-  page.applyRedactions(false, m.PDFPage.REDACT_IMAGE_PIXELS, m.PDFPage.REDACT_LINE_ART_REMOVE_IF_COVERED, text ? m.PDFPage.REDACT_TEXT_REMOVE : m.PDFPage.REDACT_TEXT_NONE);
+  applyRedactions(m, page, m.PDFPage.REDACT_IMAGE_PIXELS, m.PDFPage.REDACT_LINE_ART_REMOVE_IF_COVERED, text ? m.PDFPage.REDACT_TEXT_REMOVE : m.PDFPage.REDACT_TEXT_NONE);
 }
 
 /**
