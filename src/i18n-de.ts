@@ -467,6 +467,7 @@ export const DE: Record<string, string> = {
   "The file is too big to sign": "Die Datei ist zu groß zum Signieren",
   "The signature is too big for its place in the file": "Die Signatur ist zu groß für ihren Platz in der Datei",
   "Find a function": "Funktion finden",
+  "Find a function…": "Funktion finden…",
   "Find a function (Ctrl+K)": "Funktion finden (Strg+K)",
   "What do you want to do? e.g. OCR, sign, smaller…": "Was möchten Sie tun? z. B. OCR, unterschreiben, verkleinern…",
   "open a PDF first": "zuerst ein PDF öffnen",

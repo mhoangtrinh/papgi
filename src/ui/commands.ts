@@ -55,7 +55,7 @@ export function findCommands(list: Command[], query: string): Command[] {
 let open: HTMLElement | null = null;
 
 /** Show the search box with the commands; `hasDoc`: a PDF is open. */
-export function showCommands(list: Command[], hasDoc: boolean): void {
+export function showCommands(list: Command[], hasDoc: boolean, query = ""): void {
   if (open) return void open.querySelector<HTMLInputElement>("input")?.focus();
   const back = document.createElement("div");
   back.className = "cmd-back";
@@ -132,8 +132,10 @@ export function showCommands(list: Command[], hasDoc: boolean): void {
   });
   document.addEventListener("keydown", onKey, true);
   document.body.append(back);
+  input.value = query;
   draw();
   input.focus();
+  input.setSelectionRange(query.length, query.length);
 }
 
 export const commandsOpen = () => open !== null;

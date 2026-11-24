@@ -1792,13 +1792,77 @@ textarea.field-input {
 }
 
 /* a crowded top bar keeps its icons, without their words, so the file name has room (app.ts fitStrip) */
-.topbar[data-compact="1"] .brand-btn .brand-name,
-.topbar[data-compact="1"] .menu-label span {
+.topbar:is([data-compact="1"], [data-compact="2"]) .brand-btn .brand-name,
+.topbar:is([data-compact="1"], [data-compact="2"]) .menu-label span {
   display: none;
 }
 
-.topbar[data-compact="1"] .menu-label {
+.topbar:is([data-compact="1"], [data-compact="2"]) .menu-label {
   padding: 0 8px;
+}
+
+/* Find a function: a search field in the top bar (like Word's "Search"), an accented button when crowded */
+.find-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 34px;
+  min-width: 210px;
+  margin: 0 10px;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.find-pill:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  color: var(--text);
+}
+
+.find-pill > .ic {
+  flex: none;
+  width: 19px;
+  height: 19px;
+  color: var(--accent);
+}
+
+.find-pill .lbl {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.find-pill kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: 11px/1.6 inherit;
+  white-space: nowrap;
+}
+
+.topbar[data-compact="2"] .find-pill {
+  min-width: 0;
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  padding: 0;
+  justify-content: center;
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.topbar[data-compact="2"] .find-pill > .ic {
+  width: 21px;
+  height: 21px;
+}
+
+.topbar[data-compact="2"] .find-pill :is(.lbl, kbd) {
+  display: none;
 }
 
 @media (max-width: 760px) {
@@ -1808,6 +1872,24 @@ textarea.field-input {
   .brand-btn .brand-name,
   .brand-btn .caret,
   .menu-label span {
+    display: none;
+  }
+  /* (phones: an accented button) */
+  .find-pill {
+    min-width: 0;
+    width: 34px;
+    height: 34px;
+    margin: 0;
+    padding: 0;
+    justify-content: center;
+    border-color: transparent;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .find-pill > .ic {
+    width: 21px;
+    height: 21px;
+  }
+  .find-pill :is(.lbl, kbd) {
     display: none;
   }
   .menu-label {
@@ -5016,4 +5098,60 @@ textarea.note-text {
   #btn-redo {
     display: none;
   }
+}
+
+/* the right-click menu: Find a function, Copy, Paste (like Word's) */
+.floating[data-kind="paste"] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 230px;
+  padding: 6px;
+}
+
+.floating[data-kind="paste"] .labelled {
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 0 10px;
+}
+
+.floating[data-kind="paste"] .labelled kbd {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ctx-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin-bottom: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: text;
+}
+
+.ctx-find:focus-within {
+  border-color: var(--accent);
+}
+
+.ctx-find > .ic {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.ctx-find input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
 }

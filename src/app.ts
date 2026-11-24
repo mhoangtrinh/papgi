@@ -22,7 +22,7 @@ import { FLOWS } from "./hub/flows";
 import { TOOL_LIST, type ToolId } from "./hub/registry";
 import { rememberFile } from "./recent";
 import type { SigReport } from "./sign/signpdf";
-import type { Command } from "./ui/commands";
+import { showCommands, type Command } from "./ui/commands";
 
 const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "select", label: "Select", key: "V", icon: "select" },
@@ -143,6 +143,7 @@ export class App {
         recognize: () => void this.recognize(),
         saveSettings: () => saveSettings(this.settings),
         scrolled: () => this.sidebar.scrolled(),
+        findFunction: (q) => this.findFunction(q),
         selectionChanged: () => {
           if (this.settings.tool === "select" || this.settings.tool === "area") this.renderOptions();
         },
@@ -236,7 +237,6 @@ export class App {
           </div>
         </div>
         <button class="icon-btn" id="btn-sidebar" title="Pages and contents panel">${icon("sidebar")}</button>
-        <button class="icon-btn" id="btn-find" title="Find a function (Ctrl+K)">${icon("findFn")}</button>
         <div class="menu-wrap">
           <button class="menu-label" id="btn-file" aria-haspopup="menu" title="Open, save, print">${icon("open", "ml-icon")}<span>File</span></button>
           <div class="menu left" id="file-menu" role="menu" hidden>
@@ -274,6 +274,7 @@ export class App {
         <button class="menu-label" id="btn-organize" title="See all pages: drag to reorder, turn, remove, insert">${icon("pages", "ml-icon")}<span>Pages</span></button>
       </div>
       <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name" translate="no"></span><button class="sig-badge" id="sig-badge" hidden></button></div>
+      <button class="find-pill" id="btn-find" title="Find a function (Ctrl+K)">${icon("findFn")}<span class="lbl">Find a function…</span><kbd>Ctrl K</kbd></button>
       <div class="tb-group">
         <button class="icon-btn" id="btn-undo" title="Undo (Ctrl+Z)">${icon("undo")}</button>
         <button class="icon-btn" id="btn-redo" title="Redo (Ctrl+Y)">${icon("redo")}</button>
@@ -656,11 +657,14 @@ export class App {
         strip.dataset.labels = "active";
         strip.dataset.rows = "2";
       }
-      // the top bar: words on the File/Document/Pages buttons only if the file name keeps room
+      // the top bar: words on the File/Document/Pages buttons, then the words of Find a function,
+      // only as long as the file name keeps room
       const top = this.$(".topbar");
-      top.dataset.compact = "0";
       const name = top.querySelector<HTMLElement>(".docname");
-      if (name && this.info && (name.clientWidth < 200 || top.scrollWidth > top.clientWidth + 1)) top.dataset.compact = "1";
+      const crowded = () => top.scrollWidth > top.clientWidth + 1 || (!!name && !!this.info && name.clientWidth < 150);
+      top.dataset.compact = "0";
+      if (crowded()) top.dataset.compact = "1";
+      if (crowded()) top.dataset.compact = "2";
       // the hint, when the whole of it fits (on two rows it's cut short instead)
       strip.dataset.hint = "on";
       if (strip.dataset.rows === "1" && strip.scrollWidth > strip.clientWidth + 1) strip.dataset.hint = "off";
@@ -1717,9 +1721,9 @@ export class App {
 
   // ---------- find a function ----------
 
-  private async findFunction(): Promise<void> {
-    const { showCommands } = await import("./ui/commands");
-    showCommands(this.commands(), !!this.info);
+  /** (at once: typing into the right-click menu's field goes on in the search without a gap) */
+  private findFunction(query = ""): void {
+    showCommands(this.commands(), !!this.info, query);
   }
 
   /** Everything papgi can do, for "Find a function". */

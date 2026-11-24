@@ -2228,6 +2228,42 @@ try {
     check("no errors in the console during the sweep", errs.length === 0, errs.slice(0, 5).join(" | "));
   }
 
+  // ---- Find a function: a field in the top bar, and in the right-click menu ----
+  {
+    await page.evaluate(async () => { for (const t of [...window.papgi.tabs]) { if (t === window.papgi.tab) await window.papgi.engine.markSaved(); t.dirty = false; await window.papgi.closeTab(t); } });
+    await page.evaluate(async () => { const r = await fetch("./samples/pages.pdf"); await window.papgi.openInEditor({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null }); });
+    await waitRendered();
+    await page.keyboard.press("v");
+    const pill = await page.locator("#btn-find").boundingBox();
+    check("the Find a function field is big in the top bar", pill.width >= 200, JSON.stringify(pill));
+    const box = await page.locator(".page").first().boundingBox();
+    const at = [box.x + box.width * 0.5, box.y + 420];
+    await page.mouse.click(...at, { button: "right" });
+    await page.waitForTimeout(200);
+    const focused = await page.evaluate(() => document.activeElement?.closest(".ctx-find") !== null);
+    await page.screenshot({ path: shots + "desktop-right-click.png" });
+    await page.keyboard.type("ocr");
+    await page.waitForSelector(".cmd input");
+    const q = await page.inputValue(".cmd input");
+    const first = await page.textContent(".cmd-item.on .cmd-label");
+    check("right-click: type straight away to find a function", focused && q === "ocr" && /Recognize text/.test(first), JSON.stringify([focused, q, first]));
+    await page.keyboard.press("Escape");
+    // with the pen tool too
+    await page.keyboard.press("p");
+    await page.mouse.click(...at, { button: "right" });
+    await page.waitForTimeout(200);
+    check("right-click works with other tools too (no drawing)", (await page.locator('.floating[data-kind="paste"]:not([hidden])').count()) === 1 && (await page.evaluate(() => window.papgi.engine.listAnnots(0))).length === 0);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    // narrow window: the field becomes an accented button
+    await page.setViewportSize({ width: 900, height: 800 });
+    await page.waitForTimeout(500);
+    const fit = await page.evaluate(() => { const t = document.querySelector(".topbar"); return [t.scrollWidth, t.clientWidth, t.dataset.compact]; });
+    check("narrower: the top bar still fits", fit[0] <= fit[1], JSON.stringify(fit));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(400);
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 

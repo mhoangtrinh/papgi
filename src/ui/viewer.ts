@@ -35,6 +35,8 @@ export interface ViewerHost {
   scrolled?(): void;
   /** An item was selected or deselected (or the selected one changed). */
   selectionChanged?(): void;
+  /** Search papgi's functions (from the right-click menu), starting with `query`. */
+  findFunction?(query: string): void;
   saveSettings(): void;
 }
 
@@ -2443,24 +2445,67 @@ export class Viewer {
   }
 
   /** Right click: Paste here (and the usual menu for an item). */
+  /** Right-click (or a long press): the menu at that spot, like in Word: find a function, copy, paste. */
   private onContextMenu(e: MouseEvent): void {
-    if (this.tool !== "select" && this.tool !== "area") return;
     const pv = this.pageFromEvent(e);
     if (!pv || (e.target as Element).closest(".page-forms > *, .floating, .text-editor, .para-editor")) return;
     const p = this.toPagePoint(pv, e);
-    if (this.annotAt(pv, p) || (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1]))) return;
+    const a = this.annotAt(pv, p);
+    // an item: chosen, with its own menu
+    if (a && (this.tool === "select" || this.tool === "area")) {
+      e.preventDefault();
+      this.selectAnnot({ page: pv.index, index: a.index });
+      this.showAnnotMenu(pv, a);
+      return;
+    }
+    if (this.area?.page === pv.index && inRect(this.area.rect, p[0], p[1])) return;
     e.preventDefault();
-    this.showPasteMenu(pv, p);
+    this.showPasteMenu(pv, p, true);
   }
 
-  /** Stops listening for a click or key that closes the Paste menu. */
+  /** Stops listening for a click or key that closes the right-click menu. */
   private dismissPaste: (() => void) | null = null;
 
-  private showPasteMenu(pv: PageView, p: Point): void {
-    this.clearSelection();
+  /** The right-click menu; `typeHere`: put the cursor in its search field (not with a finger: no keyboard popping up). */
+  private showPasteMenu(pv: PageView, p: Point, typeHere = false): void {
+    // (selected text stays selected when right-clicked: it can be copied)
+    const s = this.selection;
+    const onText = !!s && s.page === pv.index && s.quads.some((q) => inRect([Math.min(q[0], q[4]), Math.min(q[1], q[3]), Math.max(q[2], q[6]), Math.max(q[5], q[7])], p[0], p[1]));
+    if (!onText) this.clearSelection();
     this.selectAnnot(null);
     this.setArea(null);
-    this.showFloatingAt(pv, [p[0], p[1], p[0], p[1]], "paste", `<button data-act="paste" class="labelled">${icon("paste")}<span>Paste</span></button>`);
+    this.showFloatingAt(
+      pv,
+      [p[0], p[1], p[0], p[1]],
+      "paste",
+      `${this.host.findFunction ? `<label class="ctx-find">${icon("findFn")}<input type="text" placeholder="${t("Find a function…")}" aria-label="${t("Find a function")}" autocomplete="off" spellcheck="false"></label>` : ""}
+       ${onText ? `<button data-act="copy" class="labelled">${icon("copy")}<span>Copy</span><kbd>Ctrl C</kbd></button>` : ""}
+       <button data-act="paste" class="labelled">${icon("paste")}<span>Paste</span><kbd>Ctrl V</kbd></button>`,
+    );
+    // typing in the search field opens Find a function with what was typed
+    const input = this.floating.querySelector<HTMLInputElement>(".ctx-find input");
+    if (input) {
+      const go = () => {
+        const q = input.value;
+        this.hideFloating();
+        this.host.findFunction?.(q);
+      };
+      input.addEventListener("input", go);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          go();
+        }
+      });
+      // (with a finger: straight to the search, with its own keyboard)
+      input.addEventListener("pointerdown", (e) => {
+        if (e.pointerType !== "mouse") {
+          e.preventDefault();
+          go();
+        }
+      });
+      if (typeHere) input.focus({ preventScroll: true });
+    }
     // a click or tap anywhere else (or Esc) closes it
     this.dismissPaste?.();
     const away = (e: Event) => {
@@ -2478,9 +2523,11 @@ export class Viewer {
       this.dismissPaste = null;
     };
     this.floating.onclick = (e) => {
-      if (!(e.target as HTMLElement).closest("button")) return;
+      const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
+      if (!b) return;
       this.hideFloating();
-      void this.pasteButton({ page: pv.index, center: p }).catch((err) => toast((err as Error).message, "error"));
+      if (b.dataset.act === "copy") void this.copySelection();
+      else void this.pasteButton({ page: pv.index, center: p }).catch((err) => toast((err as Error).message, "error"));
     };
   }
 
