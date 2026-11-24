@@ -4,6 +4,7 @@
 
 import type * as MuPDF from "mupdf";
 import type { Point, Quad, Rect } from "../core/geometry";
+import { rectHeight, rectWidth } from "../core/geometry";
 import type { Run } from "../core/textlayout";
 import { extractBlocks, fontsNeeded, replaceBlock, type EditBlock, type EditResult, type EditOptions } from "./textedit";
 import { addOcrWords, isOcrPage, OCR_FONT_FILE, type OcrWord } from "./ocr";
@@ -18,8 +19,10 @@ export type { EditBlock, EditResult, EditStyle, EditOptions } from "./textedit";
 export type { OcrWord } from "./ocr";
 export type { ClipInfo } from "./clip";
 import type { TextLine, TocItem } from "../core/toc";
+import { addField, uniqueName, dateFormatOf, deleteWidget, isRequired, placeWidget, redrawWidget, setFieldProps, type FieldProps, type NewFieldKind } from "./forms";
 import { addHeaderFooter, addWatermark, pickFont, type HeaderFooterOptions, type WatermarkOptions } from "./stamp";
 export type { HeaderFooterOptions, WatermarkOptions, Corner } from "./stamp";
+export type { FieldProps, NewFieldKind } from "./forms";
 import { dashPattern, isLineKind, shapeGeometry, type LineStyle, type ShapeKind, type ShapeStyle } from "../core/shapes";
 
 type M = typeof MuPDF;
@@ -73,6 +76,10 @@ export interface WidgetInfo {
   readOnly: boolean;
   maxLen: number;
   fontSize: number;
+  /** Must be filled in. */
+  required: boolean;
+  /** Date fields: how the date is written (e.g. "dd.mm.yyyy"); "" for other fields. */
+  dateFormat: string;
 }
 
 export interface SearchHit {
@@ -540,7 +547,7 @@ export class PdfEngine {
       if (!this.contentCache.has(key)) base.destroy();
       const dev = new m.DrawDevice(m.Matrix.identity, pix);
       page.runPageAnnots(dev, mat);
-      page.runPageWidgets(dev, mat);
+      runWidgets(page, dev, mat);
       dev.close();
       dev.destroy();
       const stride = pix.getStride();
@@ -843,7 +850,7 @@ export class PdfEngine {
         const mat = m.Matrix.concat(m.Matrix.translate(-rect[0], -rect[1]), m.Matrix.scale(scale, scale));
         if (content) page.runPageContents(dev, mat);
         page.runPageAnnots(dev, mat);
-        page.runPageWidgets(dev, mat);
+        runWidgets(page, dev, mat);
         dev.close();
         dev.destroy();
         return unpremultiply(pix);
@@ -1393,6 +1400,8 @@ export class PdfEngine {
       readOnly: w.isReadOnly(),
       maxLen: kind === "text" ? w.getMaxLen() : 0,
       fontSize,
+      required: isRequired(w.getObject()),
+      dateFormat: kind === "text" ? dateFormatOf(w.getObject()) : "",
     };
   }
 
@@ -1426,9 +1435,185 @@ export class PdfEngine {
     return this.listWidgets(index);
   }
 
+  // ---------- making form fields ----------
+
+  /** Add a form field (rect in page space). Returns the page's fields and the new one's index. */
+  addField(index: number, kind: NewFieldKind, rect: Rect, opts: FieldProps & { group?: string | null; baseName?: string; signLabel?: string } = {}): { widgets: WidgetInfo[]; index: number; name: string } {
+    const doc = this.requireDoc();
+    let made = { num: 0, name: "" };
+    this.journaled("Add field", () => {
+      made = this.withPage(index, (page) => addField(this.mupdf, doc, page, kind, rect, opts));
+    }, []);
+    const widgets = this.listWidgets(index);
+    const at = this.withPage(index, (page) => page.getWidgets().findIndex((x) => x.getObject().asIndirect() === made.num));
+    return { widgets, index: at, name: made.name };
+  }
+
+  /** Move or resize a field (rect in page space). */
+  setFieldRect(index: number, widget: number, rect: Rect): WidgetInfo[] {
+    const doc = this.requireDoc();
+    if (rectWidth(rect) < 4 || rectHeight(rect) < 4) throw new Error("That's too small for a field");
+    this.op("Move field", index, (page) => {
+      const w = page.getWidgets()[widget];
+      if (!w) return false;
+      placeWidget(this.mupdf, doc, page, w, rect);
+    });
+    return this.listWidgets(index);
+  }
+
+  /** Change a field's name, choices, date format, required… */
+  setFieldProps(index: number, widget: number, props: FieldProps): WidgetInfo[] {
+    const doc = this.requireDoc();
+    this.op("Field settings", index, (page) => {
+      const w = page.getWidgets()[widget];
+      if (!w) return false;
+      if (!setFieldProps(doc, w, props)) return false;
+      redrawWidget(doc, w);
+    });
+    return this.listWidgets(index);
+  }
+
+  deleteField(index: number, widget: number): WidgetInfo[] {
+    const doc = this.requireDoc();
+    this.op("Delete field", index, (page) => {
+      const w = page.getWidgets()[widget];
+      if (!w) return false;
+      deleteWidget(doc, page, w);
+    });
+    return this.listWidgets(index);
+  }
+
+  /** A copy of a field just below (or beside) it, with a new name; radio buttons join their group. */
+  duplicateField(index: number, widget: number): { widgets: WidgetInfo[]; index: number; name: string } {
+    const info = this.listWidgets(index)[widget];
+    if (!info) throw new Error("No such field");
+    const kind: NewFieldKind | null =
+      info.kind === "text" ? (info.dateFormat ? "date" : info.multiline ? "multiline" : "text") : info.kind === "checkbox" || info.kind === "radio" || info.kind === "combobox" || info.kind === "signature" ? info.kind : null;
+    if (!kind) throw new Error("This kind of field can't be copied");
+    const page = this.pageInfo(index);
+    const h = rectHeight(info.rect);
+    const w = rectWidth(info.rect);
+    const gap = 6;
+    let r: Rect = [info.rect[0], info.rect[3] + gap, info.rect[2], info.rect[3] + gap + h];
+    if (r[3] > page.y + page.h) r = [info.rect[2] + gap, info.rect[1], info.rect[2] + gap + w, info.rect[3]];
+    return this.addField(index, kind, r, {
+      group: kind === "radio" ? info.name : null,
+      options: info.options,
+      required: info.required,
+      dateFormat: info.dateFormat || undefined,
+      fontSize: info.fontSize,
+      name: kind === "radio" ? undefined : uniqueName(this.requireDoc(), info.name.replace(/\s*\d+$/, "") || "Field"),
+    });
+  }
+
   /** Burn annotations and form fields into the page content (no longer editable). */
   flatten(): DocInfo {
     return this.docOp("Flatten", (doc) => doc.bake(true, true));
+  }
+
+  // ---------- crop ----------
+
+  /** A page's visible part and its whole sheet, both as seen (page space). */
+  pageBoxes(index: number): { crop: Rect; media: Rect; cropped: boolean } {
+    const m = this.mupdf;
+    return this.withPage(index, (page) => {
+      const obj = page.getObject();
+      const mb = boxOf(obj.getInheritable("MediaBox")) ?? [0, 0, 612, 792];
+      const media = normRect(m.Rect.transform(mb, page.getTransform()) as Rect);
+      const crop = page.getBounds() as Rect;
+      const cb = boxOf(obj.getInheritable("CropBox"));
+      return { crop, media, cropped: !!cb && Math.abs(rectWidth(crop) * rectHeight(crop) - rectWidth(media) * rectHeight(media)) > 1 };
+    });
+  }
+
+  /** Where something is printed on a page, as seen (null: the page is blank). */
+  contentBox(index: number): Rect | null {
+    const m = this.mupdf;
+    return this.withPage(index, (page) => {
+      const b = page.getBounds();
+      const scale = Math.min(1, 1200 / Math.max(rectWidth(b as Rect), rectHeight(b as Rect)));
+      const pix = page.toPixmap(m.Matrix.concat(m.Matrix.translate(-b[0], -b[1]), m.Matrix.scale(scale, scale)), m.ColorSpace.DeviceRGB, false, true);
+      try {
+        const w = pix.getWidth();
+        const h = pix.getHeight();
+        const n = pix.getNumberOfComponents() + (pix.getAlpha() ? 1 : 0);
+        const stride = pix.getStride();
+        const px = pix.getPixels();
+        let x0 = w;
+        let y0 = h;
+        let x1 = -1;
+        let y1 = -1;
+        for (let y = 0; y < h; y++)
+          for (let x = 0; x < w; x++) {
+            const i = y * stride + x * n;
+            if (px[i] < 240 || px[i + 1] < 240 || px[i + 2] < 240) {
+              if (x < x0) x0 = x;
+              if (x > x1) x1 = x;
+              if (y < y0) y0 = y;
+              if (y > y1) y1 = y;
+            }
+          }
+        if (x1 < 0) return null;
+        return [b[0] + x0 / scale, b[1] + y0 / scale, b[0] + (x1 + 1) / scale, b[1] + (y1 + 1) / scale];
+      } finally {
+        pix.destroy();
+      }
+    });
+  }
+
+  /**
+   * Crop pages (one undo step). `margins`: [left, top, right, bottom] in points to cut off
+   * each page as seen; `trim`: cut each page to what's printed on it plus this much space;
+   * `reset`: show the whole sheet again.
+   */
+  cropPages(pages: number[], spec: { margins: [number, number, number, number] } | { trim: number } | { reset: true }): DocInfo & { changed: number } {
+    const m = this.mupdf;
+    const doc = this.requireDoc();
+    const list = [...new Set(pages)].filter((i) => i >= 0 && i < doc.countPages());
+    if (!list.length) throw new Error("Choose the pages to crop");
+    const name = "reset" in spec ? "Remove crop" : "Crop";
+    let changed = 0;
+    this.journaled(name, () => {
+      for (const i of list) {
+        const page = doc.loadPage(i);
+        try {
+          const obj = page.getObject();
+          if ("reset" in spec) {
+            if (!obj.get("CropBox").isNull() || !obj.getInheritable("CropBox").isNull()) {
+              const mb = boxOf(obj.getInheritable("MediaBox"));
+              if (mb) obj.put("CropBox", mb);
+              changed++;
+            }
+            continue;
+          }
+          const b = page.getBounds() as Rect;
+          let seen: Rect;
+          if ("trim" in spec) {
+            const c = this.contentBox(i);
+            if (!c) continue;
+            seen = [Math.max(b[0], c[0] - spec.trim), Math.max(b[1], c[1] - spec.trim), Math.min(b[2], c[2] + spec.trim), Math.min(b[3], c[3] + spec.trim)];
+          } else {
+            const [l, t, r, bo] = spec.margins.map((v) => Math.max(0, v));
+            seen = [b[0] + l, b[1] + t, b[2] - r, b[3] - bo];
+          }
+          if (rectWidth(seen) < 36 || rectHeight(seen) < 36) throw new Error(`Page ${i + 1} would be too small (less than about 1 cm)`);
+          if (Math.abs(seen[0] - b[0]) + Math.abs(seen[1] - b[1]) + Math.abs(seen[2] - b[2]) + Math.abs(seen[3] - b[3]) < 0.01) continue;
+          // as seen -> PDF space, inside the sheet
+          const pdf = normRect(m.Rect.transform(seen, m.Matrix.invert(page.getTransform())) as Rect);
+          const mb = boxOf(obj.getInheritable("MediaBox")) ?? pdf;
+          const r: Rect = [Math.max(pdf[0], mb[0]), Math.max(pdf[1], mb[1]), Math.min(pdf[2], mb[2]), Math.min(pdf[3], mb[3])];
+          obj.put("CropBox", r.map((v) => Math.round(v * 100) / 100));
+          // (boxes that must lie inside the crop box)
+          for (const k of ["TrimBox", "ArtBox", "BleedBox"]) obj.delete(k);
+          changed++;
+        } finally {
+          page.destroy();
+        }
+      }
+      return changed > 0;
+    });
+    this.clearText();
+    return { ...this.info(), changed };
   }
 
   // ---------- pages ----------
@@ -1721,3 +1906,26 @@ interface UndoStep {
   size: number;
 }
 
+/** A PDF box ([x0 y0 x1 y1]) as a normalized rect, or null. */
+function boxOf(o: MuPDF.PDFObject): Rect | null {
+  if (!o.isArray() || o.length !== 4) return null;
+  const v = [0, 1, 2, 3].map((i) => o.get(i).asNumber());
+  return v.every(Number.isFinite) ? normRect(v as Rect) : null;
+}
+
+function normRect(r: Rect | number[]): Rect {
+  return [Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])];
+}
+
+/**
+ * Draw a page's form fields. An empty signature box is left out: MuPDF would draw its own
+ * red "SIGN" tag over it (the viewer shows a "Sign here" box instead).
+ */
+function runWidgets(page: MuPDF.PDFPage, dev: MuPDF.Device, mat: MuPDF.Matrix): void {
+  for (const w of page.getWidgets()) {
+    const flags = w.getFlags();
+    if (flags & (2 | 32)) continue; // hidden, not shown on screen
+    if (w.getFieldType() === "signature" && w.getObject().get("V").isNull()) continue;
+    w.run(dev, mat);
+  }
+}

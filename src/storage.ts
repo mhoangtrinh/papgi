@@ -5,7 +5,7 @@ import { SHAPE_KINDS, isLineKind, type LineStyle, type ShapeKind, type ShapeStyl
 export type { ShapeKind, LineStyle } from "./core/shapes";
 
 export type Theme = "auto" | "light" | "dark";
-export type Tool = "select" | "area" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign" | "eraser" | "note";
+export type Tool = "select" | "area" | "edit" | "highlight" | "pen" | "text" | "shape" | "sign" | "eraser" | "note" | "form";
 export type MarkKind = "Highlight" | "Underline" | "StrikeOut";
 
 /** A signature made from a picture: transparent PNG as a data URL, with its pixel size. */
@@ -56,7 +56,12 @@ export interface Settings {
   eraserAll: boolean;
   /** The sidebar shows the table of contents instead of the pages. */
   sideToc: boolean;
+  /** The kind of field the Form tool adds. */
+  fieldKind: FieldKind;
 }
+
+export const FIELD_KINDS = ["text", "multiline", "checkbox", "radio", "combobox", "date", "signature"] as const;
+export type FieldKind = (typeof FIELD_KINDS)[number];
 
 const KEY = "papgi.settings.v1";
 const OLD_KEYS = ["pdf-studio.settings.v1"]; // the app's earlier name
@@ -75,6 +80,7 @@ export const DEFAULTS: Settings = {
     sign: "#1a3a8f",
     eraser: "#1c1c1c",
     note: "#ffd400",
+    form: "#2f6fed",
   },
   penWidth: 2,
   shapeWidth: 2,
@@ -96,6 +102,7 @@ export const DEFAULTS: Settings = {
   eraserSize: 16,
   eraserAll: false,
   sideToc: false,
+  fieldKind: "text",
 };
 
 export function loadSettings(): Settings {
@@ -133,6 +140,7 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   if (!["solid", "dashed", "dotted", "cloudy"].includes(out.shapeLine)) out.shapeLine = "solid";
   out.shapeOpacity = typeof out.shapeOpacity === "number" && out.shapeOpacity >= 0.1 && out.shapeOpacity <= 1 ? out.shapeOpacity : 1;
   out.sideToc = out.sideToc === true;
+  if (!FIELD_KINDS.includes(out.fieldKind)) out.fieldKind = "text";
   out.eraserSize = typeof out.eraserSize === "number" && out.eraserSize >= 2 && out.eraserSize <= 80 ? out.eraserSize : DEFAULTS.eraserSize;
   out.sidebarZoom = typeof out.sidebarZoom === "number" && out.sidebarZoom > 0 && out.sidebarZoom < 4000 ? Math.round(out.sidebarZoom) : 0;
   out.sidebarWidth = typeof out.sidebarWidth === "number" && out.sidebarWidth > 0 && out.sidebarWidth < 4000 ? Math.round(out.sidebarWidth) : 0;

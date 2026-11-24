@@ -1,4 +1,5 @@
 // App shell: toolbar, files, keyboard shortcuts, and wiring between engine, viewer and sidebar.
+import { lang, langSetting, setLangSetting, t, type LangSetting } from "./i18n";
 import { createEngine, type Engine } from "./engine/client";
 import type { DocInfo, SearchHit } from "./engine/engine";
 import { Viewer, PALETTE } from "./ui/viewer";
@@ -9,6 +10,7 @@ import { signatureDialog } from "./ui/signature-dialog";
 import { ocrDialog, runOcr } from "./ui/ocr";
 import { Organize } from "./ui/organize";
 import { ShapeOptions } from "./ui/shape-options";
+import { cropDialog } from "./ui/crop";
 import { headerFooterDialog, passwordDialog, redactTextDialog, watermarkDialog } from "./ui/doc-tools";
 import { canPrintPdfNatively, printPdfBytes, printAsImages } from "./ui/print";
 import { loadSettings, saveSettings, newSignatureId, MAX_SIGNATURES, type Settings, type Tool, type Theme, type SavedSignature } from "./storage";
@@ -29,6 +31,7 @@ const TOOLS: { id: Tool; label: string; key: string; icon: string }[] = [
   { id: "text", label: "Text box", key: "T", icon: "text" },
   { id: "shape", label: "Shapes", key: "R", icon: "shape" },
   { id: "note", label: "Note", key: "N", icon: "note" },
+  { id: "form", label: "Form", key: "F", icon: "form" },
   { id: "eraser", label: "Eraser", key: "X", icon: "eraser" },
   { id: "sign", label: "Sign", key: "S", icon: "sign" },
 ];
@@ -199,6 +202,7 @@ export class App {
             <button data-menu="print" data-needs-doc>${icon("print")}Print…<kbd>Ctrl P</kbd></button>
             <hr>
             <button data-menu="keys">${icon("keyboard")}Keyboard shortcuts</button>
+            <button data-menu="lang">${icon("globe")}Language: ${lang === "de" ? "Deutsch" : "English"}</button>
             <button data-menu="about">${icon("file")}About papgi</button>
           </div>
         </div>
@@ -209,6 +213,7 @@ export class App {
             <button data-menu="ocr" data-needs-doc>${icon("scan")}Recognize text (OCR)…</button>
             <button data-menu="signature">${icon("sign")}Add a signature…</button>
             <button data-menu="insert" data-needs-doc>${icon("insert")}Insert PDF at end…</button>
+            <button data-menu="crop" data-needs-doc>${icon("crop")}Crop pages…</button>
             <button data-menu="picture" data-needs-doc>${icon("image")}Add a picture…</button>
             <button data-menu="watermark" data-needs-doc>${icon("watermark")}Watermark…</button>
             <button data-menu="numbers" data-needs-doc>${icon("pageNum")}Page numbers, header &amp; footer…</button>
@@ -221,7 +226,7 @@ export class App {
         </div>
         <button class="menu-label" id="btn-organize" title="See all pages: drag to reorder, turn, remove, insert">${icon("pages", "ml-icon")}<span>Pages</span></button>
       </div>
-      <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name"></span></div>
+      <div class="docname" id="docname"><span class="dirty-dot" title="Unsaved changes"></span><span class="name" translate="no"></span></div>
       <div class="tb-group">
         <button class="icon-btn" id="btn-undo" title="Undo (Ctrl+Z)">${icon("undo")}</button>
         <button class="icon-btn" id="btn-redo" title="Redo (Ctrl+Y)">${icon("redo")}</button>
@@ -459,7 +464,10 @@ export class App {
       return;
     }
     if (mod && k === "d") {
-      if (this.viewer.selectedAnnot()) {
+      if (this.viewer.selectedField()) {
+        e.preventDefault();
+        void this.viewer.duplicateField().catch((err) => toast(err.message, "error"));
+      } else if (this.viewer.selectedAnnot()) {
         e.preventDefault();
         void this.viewer.duplicate().catch((err) => toast(err.message, "error"));
       }
@@ -485,7 +493,10 @@ export class App {
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {
-      if (this.viewer.selectedAnnot()) {
+      if (this.viewer.selectedField()) {
+        e.preventDefault();
+        void this.viewer.deleteSelectedField().catch((err) => toast(err.message, "error"));
+      } else if (this.viewer.selectedAnnot()) {
         e.preventDefault();
         void this.viewer.deleteSelectedAnnot().catch((err) => toast(err.message, "error"));
       } else if (this.viewer.hasArea()) {
@@ -563,6 +574,16 @@ export class App {
       case "shape":
         html = this.shapeOpts.html(true);
         break;
+      case "form": {
+        const kinds: [string, string, string][] = [["text", "fText", "Text"], ["multiline", "fMulti", "Several lines"], ["checkbox", "fCheck", "Check box"], ["radio", "fRadio", "Radio button"], ["combobox", "fCombo", "Drop-down"], ["date", "fDate", "Date"], ["signature", "fSign", "Signature"]];
+        const cur = kinds.find((k) => k[0] === s.fieldKind)!;
+        html =
+          seg("field", kinds, s.fieldKind) +
+          `<span class="field-kind-label">${cur[2]}</span>` +
+          (s.fieldKind === "radio" ? `<button class="btn flat small" data-act="radio-group" title="The next radio button starts a new choice">${icon("plus")}<span>New group</span></button>` : "") +
+          `<span class="muted hint">${s.fieldKind === "radio" ? "Click to add buttons to one choice" : "Click or drag on the page to add a field"} · click a field to move, resize or change it</span>`;
+        break;
+      }
       case "note":
         html = swatches() + `<span class="muted hint">Click to add a sticky note · click a note to read or change it</span>`;
         break;
@@ -616,6 +637,13 @@ export class App {
     else if (b.dataset.mark) s.markKind = b.dataset.mark as Settings["markKind"];
     else if (b.dataset.sigid) s.activeSignature = b.dataset.sigid;
     else if (b.dataset.erase) s.eraserAll = b.dataset.erase === "1";
+    else if (b.dataset.field) {
+      if (s.fieldKind !== b.dataset.field) this.viewer.newRadioGroup();
+      s.fieldKind = b.dataset.field as Settings["fieldKind"];
+    } else if (b.dataset.act === "radio-group") {
+      this.viewer.newRadioGroup();
+      return void toast("The next radio button starts a new group");
+    }
     else if (b.dataset.act === "paste") return void this.viewer.pasteButton(null).catch((err) => toast(err.message, "error"));
     else if (b.dataset.act === "sig-add") return void this.addSignature();
     else if (b.dataset.act === "sig-edit") return void this.editSignature();
@@ -812,6 +840,7 @@ export class App {
       case "saveas": return void this.saveCopy();
       case "insert": return void (this.info && this.insertPdf(this.info.pageCount));
       case "flatten": return void this.flatten();
+      case "crop": return void this.crop();
       case "picture": return void this.viewer.pickPicture().catch((err) => toast(err.message, "error"));
       case "watermark": return void this.watermark();
       case "numbers": return void this.pageNumbers();
@@ -822,6 +851,7 @@ export class App {
       case "print": return void this.print();
       case "signature": return void this.addSignature();
       case "keys": return showShortcuts();
+      case "lang": return void this.chooseLanguage();
       case "about":
         return void modal({
           title: "About papgi",
@@ -928,7 +958,7 @@ export class App {
     await this.viewer.closeParagraph(true);
     try {
       const bytes = await this.busy(this.engine.save(false));
-      const name = `${baseName(this.file.name)} (copy).pdf`;
+      const name = `${baseName(this.file.name)} (${t("copy")}).pdf`;
       await saveAs(bytes, name);
       toast(`Downloaded ${name}`);
       const note = await this.engine.takeNote();
@@ -1078,6 +1108,21 @@ export class App {
     await this.pageOp(this.engine.flatten());
   }
 
+  // ---------- language ----------
+
+  private async chooseLanguage(): Promise<void> {
+    const cur = langSetting();
+    const opts: [LangSetting, string][] = [["auto", "Automatic (from the browser)"], ["en", "English"], ["de", "Deutsch"]];
+    const body = `<p class="muted">The page reloads in the chosen language. Unsaved changes stay until you close the file.</p><div class="lang-list" role="radiogroup">${opts
+      .map(([v, label]) => `<button class="lang-opt ${v === cur ? "on" : ""}" data-v="${v}" role="radio" aria-checked="${v === cur}"><span ${v === "auto" ? "" : 'translate="no"'}>${label}</span></button>`)
+      .join("")}</div>`;
+    const v = (await modal({ title: "Language", body, actions: [{ label: "Cancel", value: "" }] })) as LangSetting | "";
+    if (!v || v === cur) return;
+    if (this.dirty && !(await confirmDialog("Reload now?", "You have unsaved changes. Save first, or they will be lost.", "Reload anyway", true))) return;
+    setLangSetting(v);
+    location.reload();
+  }
+
   // ---------- document tools ----------
 
   private currentPage(): number {
@@ -1093,6 +1138,20 @@ export class App {
     } catch (e) {
       toast(friendlyError((e as Error).message), "error");
     }
+  }
+
+  private async crop(): Promise<void> {
+    if (!this.info) return;
+    const r = await cropDialog(this.engine, this.currentPage(), this.info.pageCount);
+    if (!r) return;
+    const job = this.engine.cropPages(r.pages, r.spec);
+    // (pages change size: stay on the same page)
+    await this.pageOp(job, [], this.currentPage());
+    const res = await job.catch(() => null);
+    if (!res) return;
+    const n = res.changed;
+    const pages = `${n} page${n === 1 ? "" : "s"}`;
+    toast(!n ? "Nothing to change on these pages" : "reset" in r.spec ? `Crop removed from ${pages}` : `Cropped ${pages}. Undo with Ctrl+Z`);
   }
 
   private async watermark(): Promise<void> {

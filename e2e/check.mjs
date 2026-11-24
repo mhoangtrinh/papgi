@@ -22,6 +22,16 @@ await new Promise((res, rej) => {
 
 process.on("exit", () => server.kill());
 const results = [];
+// COLLECT=1: write every interface text shown (for the translations) to shots/strings.json
+const collected = new Set();
+const collecting = !!process.env.COLLECT;
+const collectIn = async (c) => {
+  if (!collecting) return;
+  await c.addInitScript(() => (window.__papgiCollect = true));
+  await c.exposeFunction("__papgiSeenOut", (s) => collected.add(s));
+  await c.exposeFunction("__papgiMissingOut", (s) => collected.add(s));
+};
+process.on("exit", () => collecting && fs.writeFileSync(shots + "strings.json", JSON.stringify([...collected].sort(), null, 1)));
 const check = (name, ok, extra = "") => {
   results.push({ name, ok });
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? "  " + extra : ""}`);
@@ -32,7 +42,8 @@ const local = "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome";
 const browser = await chromium.launch(fs.existsSync(local) && !process.env.PW_DEFAULT ? { executablePath: local } : {});
 try {
   // ---------------- desktop ----------------
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, colorScheme: "light", deviceScaleFactor: 1 });
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, colorScheme: "light", deviceScaleFactor: 1, locale: process.env.LOCALE || "en-US" });
+  await collectIn(ctx);
   await ctx.addInitScript(() => {
     // Force the download fallback so saves can be captured.
     delete window.showSaveFilePicker;
@@ -1504,12 +1515,163 @@ try {
     await page.keyboard.press("v");
   }
 
+  // ---- crop pages, and making form fields ----
+  {
+    await page.evaluate(async () => {
+      window.papgi["dirty"] = false;
+      const r = await fetch("./samples/pages.pdf");
+      await window.papgi.open({ name: "pages.pdf", bytes: new Uint8Array(await r.arrayBuffer()), handle: null });
+    });
+    await waitRendered();
+    await page.evaluate(() => { window.papgi.viewer.setZoom(0.75); document.querySelector(".viewer").scrollTop = 0; });
+    await page.waitForTimeout(500);
+    const docMenu = async (item) => {
+      await page.click("#btn-doc");
+      await page.click(`#doc-menu [data-menu="${item}"]`);
+      await page.waitForSelector(".modal");
+    };
+    const h0 = (await engine("info")).pages.map((p) => p.h);
+    // crop: drag the top edge down, all pages
+    await docMenu("crop");
+    await page.waitForSelector(".crop-stage canvas");
+    await page.waitForTimeout(300);
+    const hn = await page.locator('.crop-h[data-h="n"]').boundingBox();
+    await page.mouse.move(hn.x + hn.width / 2, hn.y + hn.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(hn.x + hn.width / 2, hn.y + 40, { steps: 5 });
+    await page.mouse.up();
+    const topMm = Number(await page.inputValue('.modal [data-side="top"]'));
+    check("crop: dragging the box's top edge sets the top margin", topMm > 20, String(topMm));
+    await page.selectOption('.modal [data-k="target"]', "all");
+    await page.screenshot({ path: shots + "desktop-crop-dialog.png" });
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForSelector(".modal", { state: "detached" });
+    await page.waitForTimeout(700);
+    let hs = (await engine("info")).pages.map((p) => p.h);
+    check("crop: the view stays on the page you were on", (await page.inputValue("#page-input")) === "1");
+    check("crop: every page loses the same strip; one undo step", hs.every((h, i) => Math.abs(h0[i] - h - topMm * 2.835) < 4) && (await engine("state")).undoName === "Crop", hs.map(Math.round).join(","));
+    // trim page 1 to what's printed, then remove the crop again
+    await docMenu("crop");
+    await page.click('.modal [data-act="trim"]');
+    await page.waitForTimeout(300);
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForTimeout(700);
+    hs = (await engine("info")).pages.map((p) => p.h);
+    check("crop: Trim white margins cuts a page down to its content", hs[0] < h0[0] * 0.4, hs.map(Math.round).join(","));
+    await docMenu("crop");
+    check("crop: a cropped page offers Remove crop", (await page.locator('.modal [data-v="reset"]').count()) === 1);
+    await page.selectOption('.modal [data-k="target"]', "all");
+    await page.click('.modal [data-v="reset"]');
+    await page.waitForTimeout(700);
+    hs = (await engine("info")).pages.map((p) => p.h);
+    check("crop: Remove crop shows whole pages again", hs.every((h, i) => Math.abs(h - h0[i]) < 1), hs.map(Math.round).join(","));
+    await page.screenshot({ path: shots + "desktop-uncropped.png" });
+
+    // form fields: the Form tool (F)
+    await page.evaluate(() => (document.querySelector(".viewer").scrollTop = 0));
+    await page.waitForTimeout(200);
+    await page.keyboard.press("f");
+    check("Form tool: a field kind picker", (await page.locator("#options [data-field]").count()) === 7);
+    const place = async (kind, x, y, to) => {
+      await page.click(`#options [data-field="${kind}"]`);
+      const a = await raw(0, x, y);
+      if (to) {
+        await page.mouse.move(...a);
+        await page.mouse.down();
+        await page.mouse.move(...(await raw(0, ...to)), { steps: 5 });
+        await page.mouse.up();
+      } else await page.mouse.click(...a);
+      await page.waitForTimeout(450);
+    };
+    await place("text", 80, 300);
+    await place("multiline", 80, 340, [300, 400]);
+    await place("checkbox", 90, 430);
+    await place("radio", 90, 460);
+    await place("radio", 140, 460);
+    await place("combobox", 80, 500);
+    await place("date", 80, 540);
+    await place("signature", 80, 580);
+    let ws = await engine("listWidgets", 0);
+    await page.screenshot({ path: shots + "desktop-form-tool.png" });
+    check("Form tool: text, several lines, check box, radio pair, drop-down, date, signature", ws.map((w) => w.kind).join() === "text,text,checkbox,radio,radio,combobox,text,signature" && ws[3].name === ws[4].name && ws[1].multiline && !!ws[6].dateFormat, ws.map((w) => `${w.kind}:${w.name}`).join(" "));
+    check("Form tool: new fields are numbered by kind", ws[0].name === "Text 1" && ws[1].name === "Text 2" && ws[2].name === "Check box 1");
+    check("Form tool: fields show their names", (await page.locator(".page .fieldname").count()) >= 8);
+    await page.screenshot({ path: shots + "desktop-form-tool.png" });
+    // drag a field somewhere else, resize it by its corner
+    const t0 = ws[0].rect;
+    const c0 = await raw(0, (t0[0] + t0[2]) / 2, (t0[1] + t0[3]) / 2);
+    await page.mouse.move(...c0);
+    await page.mouse.down();
+    await page.mouse.move(c0[0] + 120, c0[1] - 90, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    const t1 = (await engine("listWidgets", 0))[0].rect;
+    const zoom = await page.evaluate(() => window.papgi.viewer.zoom);
+    check("Form tool: drag moves a field", Math.abs(t1[0] - t0[0] - 120 / zoom) < 3 && Math.abs(t1[1] - t0[1] + 90 / zoom) < 3, JSON.stringify(t1));
+    const se = await raw(0, t1[2] + 3 / zoom, t1[3] + 3 / zoom);
+    await page.mouse.move(...se);
+    await page.mouse.down();
+    await page.mouse.move(se[0] + 60, se[1] + 20, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    const t2 = (await engine("listWidgets", 0))[0].rect;
+    check("Form tool: a corner resizes a field", t2[2] - t1[2] > 50 / zoom * 0.9 && t2[3] - t1[3] > 10, JSON.stringify(t2));
+    // settings: rename the drop-down and give it choices
+    const dd = ws[5].rect;
+    await page.mouse.click(...(await raw(0, (dd[0] + dd[2]) / 2, (dd[1] + dd[3]) / 2)));
+    await page.waitForTimeout(250);
+    await page.click('.floating[data-kind="field"] button[data-act="props"]');
+    await page.waitForSelector('.modal [data-k="options"]');
+    await page.fill('.modal [data-k="name"]', "Colour");
+    await page.fill('.modal [data-k="options"]', "Red\nGreen\nBlue");
+    await page.check('.modal [data-k="required"]');
+    await page.screenshot({ path: shots + "desktop-field-settings.png" });
+    await page.click('.modal [data-v="ok"]');
+    await page.waitForTimeout(500);
+    const w5 = (await engine("listWidgets", 0))[5];
+    check("field settings: name, choices, required", w5.name === "Colour" && w5.options.join() === "Red,Green,Blue" && w5.required, JSON.stringify([w5.name, w5.options, w5.required]));
+    // Ctrl+D copies the selected field, Delete removes it
+    await page.keyboard.press("Control+d");
+    await page.waitForTimeout(500);
+    const n1 = (await engine("listWidgets", 0)).length;
+    await page.keyboard.press("Delete");
+    await page.waitForTimeout(500);
+    check("Form tool: Ctrl+D copies a field, Delete removes it", n1 === 9 && (await engine("listWidgets", 0)).length === 8);
+    // fill the new form with the Select tool
+    await page.keyboard.press("v");
+    await page.waitForTimeout(300);
+    check("Select tool: new fields can be filled, signature box says Sign here", (await page.locator(".page-forms .field-input").count()) >= 4 && (await page.locator(".page-forms .field-sign").count()) === 1);
+    await page.locator(".page-forms input.field-input:not(.field-date)").first().fill("Hoang");
+    await page.keyboard.press("Enter");
+    await page.locator(".page-forms .field-check.radio").nth(1).click();
+    await page.locator(".page-forms select.field-input").selectOption("Green");
+    await page.waitForTimeout(400);
+    await page.locator(".page-forms input.field-date").fill("2026-11-24");
+    await page.waitForTimeout(600);
+    const vals = (await engine("listWidgets", 0)).map((w) => w.value);
+    const fmt = (await engine("listWidgets", 0))[6].dateFormat;
+    check("filling: text, radio, drop-down, date (written in the field's format)", vals[0] === "Hoang" && vals[4] !== "Off" && vals[5] === "Green" && vals[6] === fmt.replace("yyyy", "2026").replace("mm", "11").replace("dd", "24"), JSON.stringify(vals));
+    await page.locator(".page-forms .field-sign").click();
+    await page.waitForSelector(".modal", { timeout: 5000 });
+    check("Sign here asks for a signature when there's none yet", (await page.locator(".modal").count()) === 1);
+    await page.keyboard.press("Escape");
+    await page.screenshot({ path: shots + "desktop-form-filled.png" });
+    // saved: real form fields with the values
+    const [fdl] = await Promise.all([page.waitForEvent("download"), page.keyboard.press("Control+s")]);
+    await fdl.saveAs(shots + "saved-form.pdf");
+    const fdoc = mupdf.Document.openDocument(fs.readFileSync(shots + "saved-form.pdf"), "application/pdf");
+    const fw = fdoc.loadPage(0).getWidgets().map((w) => [w.getFieldType(), w.getName(), w.getValue()]);
+    check("saved: the new fields are real form fields with their values", fw.length === 8 && fw[0][2] === "Hoang" && fw[5][1] === "Colour" && fw[5][2] === "Green" && fdoc.getTrailer().get("Root", "AcroForm", "Fields").length === 7, JSON.stringify(fw));
+    await page.keyboard.press("v");
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 
   // ---------------- phone ----------------
   for (const scheme of ["light", "dark"]) {
     const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, colorScheme: scheme });
+    await collectIn(pctx);
     const pp = await pctx.newPage();
     const perr = [];
     pp.on("pageerror", (e) => perr.push(e.message));

@@ -1,4 +1,5 @@
 // The document view: pages, rendering, zoom, tools and form fields.
+import { t } from "../i18n";
 import type { DocInfo, PageInfo, AnnotInfo, WidgetInfo, SearchHit, EditBlock, ClipInfo } from "../engine/engine";
 import { fromPasteEvent, pictureBytes, readClipboard, writeClipboardText, type ClipboardContent } from "./clipboard";
 import { editorRaise, loadTextBoxFont } from "./textbox-metrics";
@@ -8,10 +9,11 @@ import type { Settings, Tool, SavedSignature } from "../storage";
 import { hexToRgb, rgbToHex, shapeStyle } from "../storage";
 import { arrowHeadPoints, dashPattern, isLineKind, shapeBigEnough, shapeGeometry, type ShapeKind, type ShapeStyle } from "../core/shapes";
 import {
-  type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight,
+  type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight, strokesBounds,
 } from "../core/geometry";
+import { defaultFieldSize } from "../engine/forms";
 import { icon } from "./icons";
-import { noteDialog, esc } from "./doc-tools";
+import { noteDialog, esc, fieldDialog } from "./doc-tools";
 import { toast } from "./dialogs";
 import { dataUrlBytes } from "./signature-dialog";
 
@@ -71,7 +73,9 @@ type Drag =
   | { kind: "area"; pv: PageView; start: Point; last: Point }
   | { kind: "areamove"; pv: PageView; rect: Rect; start: Point; last: Point; x: number; y: number; moved: boolean; ghost: HTMLCanvasElement | null; content: boolean }
   | { kind: "erase"; pv: PageView; points: Point[] }
-  | { kind: "resize"; pv: PageView; annot: AnnotInfo; corner: number; rect: Rect; next: Rect; keep: boolean; ghost: HTMLCanvasElement | null };
+  | { kind: "resize"; pv: PageView; annot: AnnotInfo; corner: number; rect: Rect; next: Rect; keep: boolean; ghost: HTMLCanvasElement | null }
+  | { kind: "fieldnew"; pv: PageView; start: Point; last: Point; x: number; y: number }
+  | { kind: "fieldmove"; pv: PageView; w: WidgetInfo; corner: number; start: Point; next: Rect; moved: boolean; x: number; y: number };
 
 export class Viewer {
   readonly el: HTMLDivElement;
@@ -194,6 +198,7 @@ export class Viewer {
     // after undo/redo an item number may mean another item (or none): start fresh
     this.selectAnnot(null);
     this.setArea(null);
+    this.selectField(null);
     this.schedule();
   }
 
@@ -207,7 +212,7 @@ export class Viewer {
     svg.classList.add("page-overlay");
     svg.setAttribute("viewBox", `${info.x} ${info.y} ${info.w} ${info.h}`);
     svg.setAttribute("preserveAspectRatio", "none");
-    svg.innerHTML = `<g class="g-hits"></g><g class="g-sel"></g><g class="g-hover"></g><g class="g-annsel"></g><g class="g-area"></g><g class="g-preview"></g>`;
+    svg.innerHTML = `<g class="g-hits"></g><g class="g-sel"></g><g class="g-hover"></g><g class="g-fields"></g><g class="g-annsel"></g><g class="g-area"></g><g class="g-preview"></g>`;
     const forms = document.createElement("div");
     forms.className = "page-forms";
     const label = document.createElement("div");
@@ -435,8 +440,10 @@ export class Viewer {
     if (tool !== "select") this.clearSelection();
     if (tool !== "select" && tool !== "area") this.selectAnnot(null);
     if (tool !== "area") this.setArea(null);
+    if (tool !== "form") this.selectField(null);
     for (const pv of this.pages) pv.svg.querySelector(".erase-cursor")?.remove();
     this.pagesEl.dataset.tool = tool;
+    for (const pv of this.pages) this.drawFieldOutlines(pv);
   }
 
   private pageFromEvent(e: { target: EventTarget | null }): PageView | null {
@@ -509,6 +516,7 @@ export class Viewer {
     const p = this.toPagePoint(pv, e);
     const capture = () => (e.target as Element).setPointerCapture?.(e.pointerId);
 
+    if (this.tool === "form") return this.fieldDown(pv, p, e);
     if ((this.tool === "select" || this.tool === "area") && this.startResize(pv, p, e)) return;
     const grabAnnot = (a: AnnotInfo) => {
       this.clearSelection();
@@ -661,6 +669,16 @@ export class Viewer {
       }
       case "resize":
         this.moveResize(d, p, e.shiftKey);
+        break;
+      case "fieldnew":
+        d.last = p;
+        if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) {
+          const r = normRect(d.start[0], d.start[1], p[0], p[1]);
+          d.pv.svg.querySelector(".g-preview")!.innerHTML = `<rect x="${r[0]}" y="${r[1]}" width="${rectWidth(r)}" height="${rectHeight(r)}" class="fieldnew"/>`;
+        }
+        break;
+      case "fieldmove":
+        this.fieldMove(d, p, e);
         break;
       case "erase": {
         const pts = (e.getCoalescedEvents?.() ?? [e]).map((ce) => this.toPagePoint(d.pv, ce));
@@ -865,6 +883,15 @@ export class Viewer {
           }
           break;
         }
+        case "fieldnew":
+          this.clearPreview(d.pv, false);
+          await this.fieldNew(d, Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6);
+          break;
+        case "fieldmove":
+          if (!d.moved) return void this.drawFieldSelection();
+          this.afterFieldEdit(d.pv, await this.host.busy(this.host.engine.setFieldRect(d.pv.index, d.w.index, d.next)));
+          this.selectField({ page: d.pv.index, index: d.w.index });
+          break;
         case "click": {
           if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6) return;
           if (this.tool === "text") {
@@ -872,7 +899,9 @@ export class Viewer {
             if (a?.kind === "FreeText") this.openEditor(d.pv, a);
             else this.openEditor(d.pv, null, d.start);
           } else if (this.tool === "sign") {
-            await this.placeSignature(d.pv, d.start);
+            const f = this.fieldAt(d.pv, d.start);
+            if (f?.kind === "signature") await this.signField(d.pv, f);
+            else await this.placeSignature(d.pv, d.start);
           } else if (this.tool === "edit") {
             await this.openParagraph(d.pv, d.start, e.clientX, e.clientY);
           } else if (this.tool === "note") {
@@ -971,6 +1000,8 @@ export class Viewer {
 
   private afterAnnotEdit(pv: PageView, annots: AnnotInfo[]): void {
     pv.annots = annots;
+    // ("Sign here" goes away once something is signed in the box)
+    if (pv.widgets?.some((w) => w.kind === "signature")) this.setWidgets(pv, pv.widgets);
     pv.version++;
     pv.dataVersion = pv.version;
     pv.blocks = null;
@@ -1358,7 +1389,7 @@ export class Viewer {
     this.floating.remove();
   }
 
-  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot" | "edit" | "area" | "paste", html: string): void {
+  private showFloatingAt(pv: PageView, r: Rect, kind: "text" | "annot" | "edit" | "area" | "paste" | "field", html: string): void {
     this.floating.innerHTML = html;
     this.floating.onpointerdown = null;
     this.floating.dataset.kind = kind;
@@ -1421,7 +1452,7 @@ export class Viewer {
       a.rect,
       "annot",
       `${a.kind === "Stamp" || a.area || a.shape ? "" : PALETTE.map((c) => `<button class="swatch ${c === current ? "on" : ""}" data-color="${c}" style="--c:${c}" title="Colour"></button>`).join("") + `<span class="sep"></span>`}
-       ${a.kind === "Text" ? `<span class="note-peek" data-act="edit" title="Read or change the note">${a.contents ? esc(a.contents) : `<span class="muted">Empty note</span>`}</span>` : ""}
+       ${a.kind === "Text" ? `<span class="note-peek" data-act="edit" title="Read or change the note">${a.contents ? `<span translate="no">${esc(a.contents)}</span>` : `<span class="muted">Empty note</span>`}</span>` : ""}
        ${a.kind === "FreeText" || a.kind === "Text" ? `<button data-act="edit" title="${a.kind === "Text" ? "Edit note" : "Edit text"}">${icon("edit")}</button>` : ""}
        <button data-act="copy" title="Copy (Ctrl+C)">${icon("copy")}</button>
        <button data-act="duplicate" title="Duplicate (Ctrl+D)">${icon("duplicate")}</button>
@@ -1442,6 +1473,259 @@ export class Viewer {
         toast((err as Error).message, "error");
       }
     };
+  }
+
+  // ---------- making form fields ----------
+
+  private fieldSel: { page: number; index: number } | null = null;
+  /** The radio group new radio buttons join (null: a new group). */
+  private radioGroup: string | null = null;
+
+  newRadioGroup(): void {
+    this.radioGroup = null;
+  }
+
+  selectedField(): { page: number; w: WidgetInfo } | null {
+    if (!this.fieldSel) return null;
+    const w = this.pages[this.fieldSel.page]?.widgets?.[this.fieldSel.index];
+    return w ? { page: this.fieldSel.page, w } : null;
+  }
+
+  selectField(sel: { page: number; index: number } | null): void {
+    if (this.fieldSel) this.pages[this.fieldSel.page]?.svg.querySelector(".g-annsel")?.replaceChildren();
+    this.fieldSel = sel;
+    if (this.floating.dataset.kind === "field") this.hideFloating();
+    if (sel) {
+      this.selectAnnot(null);
+      this.drawFieldSelection();
+    }
+  }
+
+  private drawFieldSelection(): void {
+    const cur = this.selectedField();
+    if (!cur) {
+      if (this.fieldSel) {
+        this.pages[this.fieldSel.page]?.svg.querySelector(".g-annsel")?.replaceChildren();
+        if (this.floating.dataset.kind === "field") this.hideFloating();
+        this.fieldSel = null;
+      }
+      return;
+    }
+    const pv = this.pages[cur.page];
+    this.drawSelectionBox(pv, cur.w.rect, true);
+    this.showFieldMenu(pv, cur.w);
+  }
+
+  /** The Form tool shows every field's box and name. */
+  private drawFieldOutlines(pv: PageView): void {
+    const g = pv.svg.querySelector(".g-fields");
+    if (!g) return;
+    if (this.tool !== "form" || !pv.widgets?.length) return void g.replaceChildren();
+    const fs = 7;
+    g.innerHTML = pv.widgets
+      .map((w) => {
+        const r = w.rect;
+        const label = w.kind === "radio" ? `${w.name} ◉` : w.name;
+        return `<rect x="${r[0]}" y="${r[1]}" width="${rectWidth(r)}" height="${rectHeight(r)}" class="fieldbox"/>` +
+          `<text x="${r[0]}" y="${r[1] - 1.5}" font-size="${fs}" class="fieldname">${esc(label)}</text>`;
+      })
+      .join("");
+  }
+
+  private fieldAt(pv: PageView, p: Point): WidgetInfo | null {
+    const pad = 3 / this.zoom;
+    let best: WidgetInfo | null = null;
+    for (const w of pv.widgets ?? []) {
+      if (!inRect(w.rect, p[0], p[1], pad)) continue;
+      if (!best || rectWidth(w.rect) * rectHeight(w.rect) < rectWidth(best.rect) * rectHeight(best.rect)) best = w;
+    }
+    return best;
+  }
+
+  private fieldDown(pv: PageView, p: Point, e: PointerEvent): void {
+    const cur = this.selectedField();
+    let corner = -1;
+    if (cur && cur.page === pv.index) {
+      const pad = 3 / this.zoom;
+      const r = cur.w.rect;
+      const reach = (navigator.maxTouchPoints > 0 ? 16 : 8) / this.zoom;
+      corner = this.corners([r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]).findIndex(([x, y]) => Math.abs(p[0] - x) <= reach && Math.abs(p[1] - y) <= reach);
+    }
+    const w = corner >= 0 ? cur!.w : this.fieldAt(pv, p);
+    if (w) {
+      this.selectField({ page: pv.index, index: w.index });
+      this.drag = { kind: "fieldmove", pv, w, corner, start: p, next: [...w.rect] as Rect, moved: false, x: e.clientX, y: e.clientY };
+    } else {
+      this.selectField(null);
+      this.drag = { kind: "fieldnew", pv, start: p, last: p, x: e.clientX, y: e.clientY };
+    }
+    // (the page itself: what was under the pointer may just have been redrawn)
+    try {
+      pv.el.setPointerCapture(e.pointerId);
+    } catch {
+      /* the pointer is already gone */
+    }
+    e.preventDefault();
+  }
+
+  private fieldMove(d: Extract<Drag, { kind: "fieldmove" }>, p: Point, e: PointerEvent): void {
+    if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) return;
+    d.moved = true;
+    this.hideFloating();
+    const r = d.w.rect;
+    const pg = d.pv.info;
+    if (d.corner < 0) {
+      // keep it on the page
+      const dx = Math.max(pg.x - r[0], Math.min(pg.x + pg.w - r[2], p[0] - d.start[0]));
+      const dy = Math.max(pg.y - r[1], Math.min(pg.y + pg.h - r[3], p[1] - d.start[1]));
+      d.next = [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy];
+    } else {
+      const opp = this.corners(r)[(d.corner + 2) % 4];
+      const q: Point = [Math.max(pg.x, Math.min(pg.x + pg.w, p[0])), Math.max(pg.y, Math.min(pg.y + pg.h, p[1]))];
+      const min = 6;
+      const x1 = Math.abs(q[0] - opp[0]) < min ? opp[0] + (q[0] >= opp[0] ? min : -min) : q[0];
+      const y1 = Math.abs(q[1] - opp[1]) < min ? opp[1] + (q[1] >= opp[1] ? min : -min) : q[1];
+      d.next = normRect(opp[0], opp[1], x1, y1);
+    }
+    this.drawSelectionBox(d.pv, d.next, true);
+  }
+
+  private async fieldNew(d: Extract<Drag, { kind: "fieldnew" }>, dragged: boolean): Promise<void> {
+    const kind = this.host.settings.fieldKind;
+    const pg = d.pv.info;
+    let r: Rect;
+    if (dragged) {
+      r = normRect(d.start[0], d.start[1], d.last[0], d.last[1]);
+      if (kind === "checkbox" || kind === "radio") {
+        // (a square, as big as the smaller side)
+        const s = Math.max(8, Math.min(rectWidth(r), rectHeight(r)));
+        r = [r[0], r[1], r[0] + s, r[1] + s];
+      }
+      if (rectWidth(r) < 6 || rectHeight(r) < 6) return;
+    } else {
+      const [w, h] = defaultFieldSize(kind);
+      const small = kind === "checkbox" || kind === "radio";
+      const x = small ? d.start[0] - w / 2 : d.start[0];
+      const y = d.start[1] - h / 2;
+      r = [x, y, x + w, y + h];
+    }
+    // on the page
+    const dx = Math.max(pg.x - r[0], Math.min(0, pg.x + pg.w - r[2]));
+    const dy = Math.max(pg.y - r[1], Math.min(0, pg.y + pg.h - r[3]));
+    r = [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy];
+    const lang = navigator.language || "";
+    const dateFormat = /^en-US/i.test(lang) ? "mm/dd/yyyy" : /^en/i.test(lang) ? "dd/mm/yyyy" : "dd.mm.yyyy";
+    const res = await this.host.busy(
+      this.host.engine.addField(d.pv.index, kind, r, {
+        group: kind === "radio" ? this.radioGroup : null,
+        dateFormat,
+        // (named in the interface language: "Text 1", "Kontrollkästchen 1"…)
+        baseName: t(FIELD_BASE[kind]),
+        signLabel: t("Sign here"),
+      }),
+    );
+    if (kind === "radio") this.radioGroup = res.name;
+    this.afterFieldEdit(d.pv, res.widgets);
+    this.selectField({ page: d.pv.index, index: res.index });
+    this.host.selectionChanged?.();
+  }
+
+  private afterFieldEdit(pv: PageView, widgets: WidgetInfo[]): void {
+    this.setWidgets(pv, widgets);
+    pv.version++;
+    pv.dataVersion = pv.version;
+    this.schedule();
+    this.host.edited(null, [pv.index]);
+  }
+
+  private showFieldMenu(pv: PageView, w: WidgetInfo): void {
+    const kinds: Record<string, string> = { text: w.dateFormat ? "Date" : w.multiline ? "Multi-line text" : "Text", checkbox: "Check box", radio: "Radio button", combobox: "Drop-down", listbox: "List", signature: "Signature", button: "Button" };
+    this.showFloatingAt(
+      pv,
+      w.rect,
+      "field",
+      `<span class="field-peek" data-act="props" title="Field settings"><b translate="no">${esc(w.name)}</b><span class="muted">${kinds[w.kind] ?? ""}${w.required ? " · required" : ""}</span></span>
+       <button data-act="props" title="Field settings">${icon("edit")}</button>
+       <button data-act="duplicate" title="Duplicate (Ctrl+D)">${icon("duplicate")}</button>
+       <button data-act="delete" title="Delete (Del)">${icon("trash")}</button>`,
+    );
+    this.floating.onclick = async (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>("[data-act]");
+      if (!b) return;
+      try {
+        if (b.dataset.act === "props") await this.editField(pv, w);
+        else if (b.dataset.act === "duplicate") await this.duplicateField();
+        else if (b.dataset.act === "delete") await this.deleteSelectedField();
+      } catch (err) {
+        toast((err as Error).message, "error");
+      }
+    };
+  }
+
+  private async editField(pv: PageView, w: WidgetInfo): Promise<void> {
+    const r = await fieldDialog(w);
+    if (!r) return;
+    if (r === "delete") {
+      this.selectField({ page: pv.index, index: w.index });
+      await this.deleteSelectedField();
+      return;
+    }
+    this.afterFieldEdit(pv, await this.host.busy(this.host.engine.setFieldProps(pv.index, w.index, r)));
+    if (w.kind === "radio" && r.name) this.radioGroup = r.name;
+    this.selectField({ page: pv.index, index: w.index });
+  }
+
+  async deleteSelectedField(): Promise<boolean> {
+    const cur = this.selectedField();
+    if (!cur) return false;
+    const pv = this.pages[cur.page];
+    this.selectField(null);
+    this.afterFieldEdit(pv, await this.host.busy(this.host.engine.deleteField(cur.page, cur.w.index)));
+    return true;
+  }
+
+  async duplicateField(): Promise<boolean> {
+    const cur = this.selectedField();
+    if (!cur) return false;
+    const pv = this.pages[cur.page];
+    const res = await this.host.busy(this.host.engine.duplicateField(cur.page, cur.w.index));
+    if (cur.w.kind === "radio") this.radioGroup = res.name;
+    this.afterFieldEdit(pv, res.widgets);
+    this.selectField({ page: cur.page, index: res.index });
+    return true;
+  }
+
+  /** Whether something (a signature) has been put in a signature box. */
+  private signedField(pv: PageView, w: WidgetInfo): boolean {
+    if (w.value) return true;
+    const cx = (w.rect[0] + w.rect[2]) / 2;
+    const cy = (w.rect[1] + w.rect[3]) / 2;
+    return (pv.annots ?? []).some((a) => (a.kind === "Stamp" || a.kind === "Ink") && !a.area && inRect(a.rect, cx, cy, 0));
+  }
+
+  /** Put the current signature into a signature box, as big as fits. */
+  private async signField(pv: PageView, w: WidgetInfo): Promise<void> {
+    if (!this.host.activeSignature() && !(await this.host.needSignature())) return;
+    const sig = this.host.activeSignature();
+    if (!sig) return;
+    const pad = Math.min(4, rectHeight(w.rect) * 0.1);
+    const bw = rectWidth(w.rect) - 2 * pad;
+    const bh = rectHeight(w.rect) - 2 * pad;
+    const cx = (w.rect[0] + w.rect[2]) / 2;
+    const cy = (w.rect[1] + w.rect[3]) / 2;
+    if (sig.kind === "image") {
+      const aspect = sig.image.w / sig.image.h;
+      const sw = Math.min(bw, bh * aspect);
+      const sh = sw / aspect;
+      this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.addImageStamp(pv.index, [cx - sw / 2, cy - sh / 2, cx + sw / 2, cy + sh / 2], dataUrlBytes(sig.image.src))));
+    } else {
+      const b = strokesBounds(sig.strokes);
+      if (!b) return;
+      const aspect = Math.max(rectWidth(b), 1e-6) / Math.max(rectHeight(b), 1e-6);
+      const sw = Math.min(bw, bh * aspect);
+      const strokes = placeStrokes(sig.strokes, cx, cy, sw);
+      this.afterAnnotEdit(pv, await this.host.busy(this.host.engine.addInk(pv.index, strokes, hexToRgb(this.host.settings.colors.sign), Math.max(0.6, (1.6 * sw) / 150))));
+    }
   }
 
   // ---------- sticky notes ----------
@@ -2017,10 +2301,12 @@ export class Viewer {
     const focusKey = focused?.closest(".page-forms") === pv.forms ? focused.dataset.key : undefined;
     pv.forms.replaceChildren(
       ...widgets
-        .filter((w) => w.kind !== "button" && w.kind !== "signature")
+        .filter((w) => w.kind !== "button" && (w.kind !== "signature" || !this.signedField(pv, w)))
         .map((w) => this.widgetElement(pv, w)),
     );
     if (focusKey) pv.forms.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
+    this.drawFieldOutlines(pv);
+    if (this.fieldSel?.page === pv.index) this.drawFieldSelection();
   }
 
   private widgetElement(pv: PageView, w: WidgetInfo): HTMLElement {
@@ -2033,6 +2319,8 @@ export class Viewer {
       el.style.setProperty("--fs", String(w.fontSize || Math.min(12, rectHeight(w.rect) * 0.62)));
       el.dataset.key = String(w.index);
       el.title = w.name;
+      // (field names and choices are the document's, not the app's)
+      if (w.kind !== "signature") el.setAttribute("translate", "no");
       return el;
     };
     const eng = this.host.engine;
@@ -2047,6 +2335,26 @@ export class Viewer {
         })
         .catch((err) => toast(err.message, "error"));
 
+    if (w.kind === "signature") {
+      const el = document.createElement("button");
+      el.className = "field-sign";
+      el.innerHTML = `${icon("sign")}<span>Sign here</span>`;
+      el.addEventListener("click", () => void this.signField(pv, w).catch((err) => toast((err as Error).message, "error")));
+      return place(el);
+    }
+    if (w.kind === "text" && w.dateFormat && !w.readOnly) {
+      // a date picker; the PDF gets the date written its way (e.g. 24.11.2026)
+      const el = document.createElement("input");
+      el.type = "date";
+      el.className = "field-input field-date";
+      el.value = parseDate(w.value, w.dateFormat);
+      el.setAttribute("aria-label", w.name);
+      el.addEventListener("change", () => {
+        const v = formatDate(el.value, w.dateFormat);
+        if (v !== w.value) void commit(eng.setFieldText(pv.index, w.index, v));
+      });
+      return place(el);
+    }
     if (w.kind === "text") {
       const el = w.multiline ? document.createElement("textarea") : document.createElement("input");
       el.className = "field-input";
@@ -2139,3 +2447,24 @@ export function shapeSvg(kind: ShapeKind, a: Point, b: Point, st: ShapeStyle, sq
   const solid = attrs.replace(/stroke-dasharray="[^"]*"/, "");
   return `<path d="M${p.join(",")} L${q.join(",")}" ${attrs} stroke-linecap="round"/>` + (heads ? `<path d="${heads}" ${solid} stroke-linecap="round"/>` : "");
 }
+
+/** "24.11.2026" (in the field's format) -> "2026-11-24" for a date input; "" if it doesn't parse. */
+export function parseDate(text: string, fmt: string): string {
+  const order = fmt.toLowerCase().match(/d+|m+|y+/g) ?? [];
+  const nums = text.match(/\d+/g) ?? [];
+  if (order.length !== 3 || nums.length !== 3) return "";
+  const v: Record<string, number> = {};
+  order.forEach((k, i) => (v[k[0]] = Number(nums[i])));
+  const y = v.y < 100 ? 2000 + v.y : v.y;
+  if (!(v.m >= 1 && v.m <= 12 && v.d >= 1 && v.d <= 31 && y > 999)) return "";
+  return `${y}-${String(v.m).padStart(2, "0")}-${String(v.d).padStart(2, "0")}`;
+}
+
+/** "2026-11-24" -> the field's format, e.g. "24.11.2026". */
+export function formatDate(iso: string, fmt: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return "";
+  return fmt.replace(/yyyy/i, m[1]).replace(/mm/i, m[2]).replace(/dd/i, m[3]);
+}
+
+const FIELD_BASE: Record<string, string> = { text: "Text", multiline: "Text", checkbox: "Check box", radio: "Choice", combobox: "Drop-down", date: "Date", signature: "Signature" };

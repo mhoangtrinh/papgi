@@ -90,7 +90,7 @@ export class Sidebar {
         <button role="tab" data-tab="pages" class="on" aria-selected="true" title="Pages">${icon("pages")}<span>Pages</span></button>
         <button role="tab" data-tab="toc" aria-selected="false" title="Contents: bookmarks or headings">${icon("toc")}<span>Contents</span></button>
       </div>
-      <div class="toc" hidden><div class="toc-note muted"></div><div class="toc-list" role="list"></div></div>
+      <div class="toc" hidden><div class="toc-note muted"></div><div class="toc-list" role="list" translate="no"></div></div>
       <div class="side-actions" role="toolbar" aria-label="Page actions">
         <button class="icon-btn" data-act="rotL" title="Rotate left">${icon("rotL")}</button>
         <button class="icon-btn" data-act="rotR" title="Rotate right">${icon("rotR")}</button>

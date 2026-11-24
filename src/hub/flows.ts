@@ -1,5 +1,6 @@
 // The stand-alone tools' settings and what they do. The page around them (file list, options,
 // result) is in flow-view.ts; the PDF work happens in the engine worker (engine/tools.ts).
+import { t } from "../i18n";
 import type { Engine } from "../engine/client";
 import type { CompressResult, OutFile } from "../engine/tools";
 import { parseGroups } from "../core/pages";
@@ -174,7 +175,7 @@ export const FLOWS: Record<string, FlowDef> = {
       return {
         files: [
           {
-            name: `${stem(items[0].name)} (merged).pdf`,
+            name: `${stem(items[0].name)} (${t("merged")}).pdf`,
             bytes,
             type: "application/pdf",
           },
@@ -302,7 +303,7 @@ export const FLOWS: Record<string, FlowDef> = {
         before += r.before;
         after += r.after;
         files.push({
-          name: `${stem(items[i].name)} (compressed).pdf`,
+          name: `${stem(items[i].name)} (${t("compressed")}).pdf`,
           bytes: r.bytes,
           type: "application/pdf",
         });
@@ -371,7 +372,7 @@ export const FLOWS: Record<string, FlowDef> = {
         { page, margin: page === "fit" ? 0 : Number(opts.margin) },
       );
       const name =
-        pics.length === 1 ? `${stem(pics[0].name)}.pdf` : "Images.pdf";
+        pics.length === 1 ? `${stem(pics[0].name)}.pdf` : `${t("Images")}.pdf`;
       return {
         files: [{ name, bytes, type: "application/pdf" }],
         note: plural(pics.length, "page"),

@@ -1,6 +1,8 @@
 // Dialogs for whole-document tools: password, watermark, page numbers / header & footer,
 // redacting a text everywhere.
-import type { Corner, HeaderFooterOptions, WatermarkOptions } from "../engine/engine";
+import { t } from "../i18n";
+import type { Corner, FieldProps, HeaderFooterOptions, WatermarkOptions, WidgetInfo } from "../engine/engine";
+import { DATE_FORMATS } from "../engine/forms";
 import { parseRange } from "../core/pages";
 import { hexToRgb } from "../storage";
 import { modal } from "./dialogs";
@@ -30,7 +32,7 @@ function remember<T extends object>(key: string, defaults: T): { get(): T; set(v
 }
 
 /** "All pages" or a range like "1-3, 5": the field and how to read it. */
-function pagesField(count: number): { html: string; read(root: HTMLElement): number[] | null } {
+export function pagesField(count: number): { html: string; read(root: HTMLElement): number[] | null } {
   return {
     html: `<label class="dt-row"><span>Pages</span><input class="field" data-k="pages" placeholder="All pages (or e.g. 1-3, 5)" autocomplete="off"></label>`,
     read(root) {
@@ -41,7 +43,7 @@ function pagesField(count: number): { html: string; read(root: HTMLElement): num
 }
 
 /** On phones, don't pop up the keyboard for a dialog that's mostly sliders and choices. */
-function noKeyboard(): void {
+export function noKeyboard(): void {
   if (matchMedia("(pointer: coarse)").matches) requestAnimationFrame(() => (document.activeElement as HTMLElement | null)?.blur());
 }
 
@@ -52,13 +54,13 @@ function bad(root: HTMLElement, msg: string): void {
 }
 
 /** A wrong input: the message to show (the dialog stays open). */
-class Bad {
+export class Bad {
   constructor(readonly msg: string) {}
 }
-const no = (msg: string) => new Bad(msg);
+export const no = (msg: string) => new Bad(msg);
 
 /** Keeps a modal open on its buttons while the input is wrong. */
-async function form<T>(title: string, html: string, okLabel: string, onOpen: (root: HTMLElement) => void, read: (root: HTMLElement, action: string) => T | Bad, extra: { label: string; value: string; danger?: boolean }[] = []): Promise<{ value: T; action: string } | null> {
+export async function form<T>(title: string, html: string, okLabel: string, onOpen: (root: HTMLElement) => void, read: (root: HTMLElement, action: string) => T | Bad, extra: { label: string; value: string; danger?: boolean }[] = []): Promise<{ value: T; action: string } | null> {
   const body = document.createElement("div");
   body.className = "dt";
   body.innerHTML = html + `<p class="dt-error" role="alert" hidden></p>`;
@@ -120,7 +122,7 @@ export async function passwordDialog(state: { locked: boolean }): Promise<{ user
 
 // ---------- watermark ----------
 
-const wmStore = remember("watermark", { text: "CONFIDENTIAL", size: 64, color: "#e5484d", opacity: 30, angle: 45, bold: true });
+const wmStore = remember("watermark", { text: t("CONFIDENTIAL"), size: 64, color: "#e5484d", opacity: 30, angle: 45, bold: true });
 
 export async function watermarkDialog(pageCount: number, page: { w: number; h: number }): Promise<WatermarkOptions | null> {
   const v = wmStore.get();
@@ -134,7 +136,7 @@ export async function watermarkDialog(pageCount: number, page: { w: number; h: n
     `<div class="dt-row"><span>Direction</span><div class="seg text-seg" role="radiogroup"><button type="button" data-angle="45" class="${v.angle === 45 ? "on" : ""}">Diagonal</button><button type="button" data-angle="0" class="${v.angle === 0 ? "on" : ""}">Across</button></div></div>` +
     `<div class="dt-row"><span>Colour</span><div class="dt-colors">${["#e5484d", "#1c1c1c", "#8a8a8a", "#2f6fed", "#5fd068"].map((c) => `<button type="button" class="swatch ${c === v.color ? "on" : ""}" data-color="${c}" style="--c:${c}" title="${c}"></button>`).join("")}<label class="dt-check"><input type="checkbox" data-k="bold" ${v.bold ? "checked" : ""}> Bold</label></div></div>` +
     pages.html +
-    `</div><div class="dt-preview" style="--ratio:${ratio}"><div class="dt-page"><span class="dt-wm"></span></div></div></div>`;
+    `</div><div class="dt-preview" style="--ratio:${ratio}"><div class="dt-page"><span class="dt-wm" translate="no"></span></div></div></div>`;
   let angle = v.angle;
   let color = v.color;
   const paint = (root: HTMLElement) => {
@@ -207,7 +209,11 @@ export async function headerFooterDialog(pageCount: number, page: { w: number; h
   const pages = pagesField(pageCount);
   const html =
     `<div class="dt-split"><div class="dt-fields">` +
-    `<label class="dt-row"><span>Numbers</span><select class="field" data-k="format"><option value="">No page numbers</option>${FORMATS.map(([f, label]) => `<option value="${esc(f)}" ${f === v.format ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>` +
+    `<label class="dt-row"><span>Numbers</span><select class="field" data-k="format"><option value="">No page numbers</option>${FORMATS.map(([en, label]) => {
+      // (the words in the stamped text follow the interface language: "Seite 1 von 9")
+      const f = t(en);
+      return `<option value="${esc(f)}" ${f === v.format || en === v.format ? "selected" : ""}>${esc(label)}</option>`;
+    }).join("")}</select></label>` +
     `<label class="dt-row"><span>Where</span><select class="field" data-k="where">${CORNERS.map(([c, label]) => `<option value="${c}" ${c === v.where ? "selected" : ""}>${label}</option>`).join("")}</select></label>` +
     `<label class="dt-row"><span>Header</span><input class="field" data-k="header" value="${esc(v.header)}" placeholder="Text at the top (centre), optional"></label>` +
     `<label class="dt-row"><span>Footer</span><input class="field" data-k="footer" value="${esc(v.footer)}" placeholder="Text at the bottom (left), optional"></label>` +
@@ -216,7 +222,7 @@ export async function headerFooterDialog(pageCount: number, page: { w: number; h
     `<label class="dt-row"><span>Start at</span><input class="field dt-num" type="number" min="0" max="9999" data-k="startAt" value="${v.startAt}"></label>` +
     `<label class="dt-row dt-checkrow"><input type="checkbox" data-k="skipFirst" ${v.skipFirst ? "checked" : ""}> Nothing on the first page (a title page)</label>` +
     pages.html +
-    `</div><div class="dt-preview" style="--ratio:${page.h / page.w}"><div class="dt-page">${CORNERS.map(([c]) => `<span class="dt-hf dt-${c}"></span>`).join("")}</div></div></div>`;
+    `</div><div class="dt-preview" style="--ratio:${page.h / page.w}"><div class="dt-page">${CORNERS.map(([c]) => `<span class="dt-hf dt-${c}" translate="no"></span>`).join("")}</div></div></div>`;
   const date = new Date().toLocaleDateString();
   const collect = (root: HTMLElement) => {
     const get = (k: string) => root.querySelector<HTMLInputElement>(`[data-k="${k}"]`)!;
@@ -332,4 +338,53 @@ export async function noteDialog(text: string, isNew: boolean): Promise<string |
   );
   if (v === "delete") return "delete";
   return v === "ok" ? value : null;
+}
+
+// ---------- form field settings ----------
+
+export async function fieldDialog(w: WidgetInfo): Promise<FieldProps | "delete" | null> {
+  const isText = w.kind === "text";
+  const isDate = isText && !!w.dateFormat;
+  const sized = w.kind === "text" || w.kind === "combobox";
+  const html =
+    `<label class="dt-row"><span>${w.kind === "radio" ? "Group name" : "Name"}</span><input class="field" data-k="name" value="${esc(w.name)}" autocomplete="off"></label>` +
+    (w.kind === "radio" ? `<p class="muted dt-note">All radio buttons with this name are one choice: picking one clears the others.</p>` : "") +
+    (w.kind === "combobox" || w.kind === "listbox"
+      ? `<label class="dt-row dt-top"><span>Choices</span><textarea class="field note-text" data-k="options" rows="5" placeholder="One per line">${esc(w.options.join("\n"))}</textarea></label>`
+      : "") +
+    (isDate ? `<label class="dt-row"><span>Format</span><select class="field" data-k="date">${DATE_FORMATS.map((f) => `<option ${f === w.dateFormat ? "selected" : ""}>${f}</option>`).join("")}</select></label>` : "") +
+    (sized
+      ? `<label class="dt-row"><span>Text size</span><select class="field" data-k="size">${[0, 8, 9, 10, 11, 12, 14, 16].map((n) => `<option value="${n}" ${n === Math.round(w.fontSize) ? "selected" : ""}>${n ? `${n} pt` : "Fit the box"}</option>`).join("")}</select></label>`
+      : "") +
+    (isText && !isDate ? `<label class="dt-row dt-checkrow"><input type="checkbox" data-k="multiline" ${w.multiline ? "checked" : ""}> Several lines</label>` : "") +
+    `<label class="dt-row dt-checkrow"><input type="checkbox" data-k="required" ${w.required ? "checked" : ""}> Must be filled in</label>`;
+  const r = await form<FieldProps>(
+    "Field settings",
+    html,
+    "Save",
+    () => {},
+    (root, action) => {
+      const get = <T extends HTMLElement = HTMLInputElement>(k: string) => root.querySelector<T>(`[data-k="${k}"]`);
+      const name = get("name")!.value.trim();
+      if (action === "delete") return {};
+      if (!name) return no("A field needs a name");
+      if (name.includes(".")) return no("A field name can't contain a dot");
+      const p: FieldProps = { name, required: get("required")!.checked };
+      const opts = get<HTMLTextAreaElement>("options");
+      if (opts) {
+        p.options = opts.value.split("\n").map((o) => o.trim()).filter(Boolean);
+        if (!p.options.length) return no("Add at least one choice");
+      }
+      const date = get<HTMLSelectElement>("date");
+      if (date) p.dateFormat = date.value;
+      const size = get<HTMLSelectElement>("size");
+      if (size) p.fontSize = Number(size.value);
+      const ml = get("multiline");
+      if (ml) p.multiline = ml.checked;
+      return p;
+    },
+    [{ label: "Delete field", value: "delete", danger: true }],
+  );
+  if (!r) return null;
+  return r.action === "delete" ? "delete" : r.value;
 }

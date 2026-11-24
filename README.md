@@ -17,6 +17,10 @@ Saving: results of the tools, copies and extracted pages are normal browser down
 
 Updates: when a new version is ready, papgi switches to it right away if no document is open; otherwise it shows a small "Reload" bar so unsaved work isn't lost.
 
+## Language
+
+English or German (Deutsch). It follows the browser's language; File → *Language* switches it. In German, new form fields, the watermark and page numbers are written in German too ("Seite 1 von 9").
+
 ## Tools
 
 | Tool | |
@@ -49,6 +53,8 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | **Copy & paste** | Ctrl+C / Ctrl+X / Ctrl+V for anything you added (text boxes, drawings, signatures, pictures), also into another PDF; Ctrl+D duplicates. Pastes go where the mouse is (or a long press / right-click → Paste; the Paste button on phones). Screenshots and pictures from other apps paste as pictures, text as a text box |
 | **Select area** | Drag a box around any part of a page, then **Copy**, **Cut**, **Erase**, or drag it somewhere else (also onto another page). Everything in the box goes: the page's content, form fields (moved fields stay the same fields; copied ones become new fields with their own name) and added items. The copy is the real content (text stays text, drawings stay sharp), not a picture; letters belong where their middle is. A cut is filled with the colour around it. Moved and pasted parts can be moved again; they become ordinary page content when the file is saved |
 | **Eraser** | *Added items*: rubs out drawings where you pass (the rest of the stroke stays) and removes highlights, shapes, text boxes it touches. *Everything*: also really removes the PDF's own text, pictures and lines under the brush (not just covered up), and form fields it touches. Size slider |
+| **Form fields** | Form tool (F): click or drag on the page to add a text field, several-line text, check box, radio buttons (one choice per group; *New group* starts another), drop-down, date (a date picker; written as dd.mm.yyyy or your format) or signature box. Click a field to move it, resize it by a corner, or open its settings (name, choices, text size, required); Ctrl+D copies, Delete removes. They're real PDF form fields that Acrobat and other apps fill in too. A signature box says *Sign here*: click it (or use the Sign tool inside it) to put your signature in, sized to fit |
+| **Crop** | Document → *Crop pages…*: drag the box's edges (or type the margins in mm) on this page, all pages or a range; *Trim white margins* cuts each page to what's printed on it; *Remove crop* shows the whole page again. Nothing is deleted: the hidden parts come back with Remove crop |
 | **Notes** | Note tool (N): click to add a sticky note, click a note to read or change it (also from the Select tool) |
 | **Pictures** | Document → *Add a picture…* (or paste one): placed on the current page, then move and resize it |
 | **Watermark** | Document → *Watermark…*: text, size, opacity, colour, bold, diagonal or across, on all pages or a range, with a preview. Written into the pages (Vietnamese and other Latin letters work) |
@@ -66,7 +72,7 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 
 | Key | Action |
 |---|---|
-| V / A / E / H / P / T / R / N / X / S | Select, Select area, Edit text, Highlight, Pen, Text box, Shapes, Note, Eraser, Sign |
+| V / A / E / H / P / T / R / N / F / X / S | Select, Select area, Edit text, Highlight, Pen, Text box, Shapes, Note, Form, Eraser, Sign |
 | Ctrl+P | Print |
 | Shift while drawing a shape | Square / circle, lines at 45° steps |
 | Edit text: Ctrl+Enter / Esc | Finish / cancel editing a paragraph (clicking outside also finishes) |
@@ -90,6 +96,9 @@ npm run dev        # dev server
 npm test           # unit tests (engine runs MuPDF in Node against the samples)
 npm run build      # production build into dist/
 npm run e2e        # browser check with Playwright (run after build); screenshots in e2e/shots/
+npm run e2e:de     # the interface in German: every screen and dialog, no text left untranslated
+COLLECT=1 npm run e2e   # list every interface text shown (e2e/shots/strings.json); copy it to
+                        # tests/fixtures/ui-strings.json so the unit tests check each has German
 npm run icons      # regenerate PNG icons from public/favicon.svg
 npm run samples    # regenerate the sample PDFs (needs pdflatex + python3 with reportlab, Pillow)
 ```
@@ -116,6 +125,10 @@ src/
   core/docx.ts       small .docx writer (sections, columns, paragraphs, tabs, pictures)
   engine/tools.ts    merge, split, images <-> PDF, compress (work on copies; unit-tested in Node)
   engine/clip.ts     copy/cut/paste of items and page areas, erasing, baking pasted areas on save
+  engine/forms.ts    making form fields (text, check box, radio, drop-down, date, signature box) and their appearances
+  i18n.ts            interface language: swaps shown English texts for German as they appear
+  i18n-de.ts         the German texts (dictionary + patterns for texts with numbers and names)
+  ui/crop.ts         crop dialog (drag the box, margins in mm, trim white margins)
   engine/stamp.ts    watermarks, page numbers, headers and footers written into the pages
   ui/doc-tools.ts    watermark, page-number, password, redact and note dialogs
   core/erase.ts      eraser geometry: brush coverage, rubbing strokes (pure, tested)

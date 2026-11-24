@@ -3947,3 +3947,225 @@ textarea.note-text {
   word-break: break-word;
   cursor: pointer;
 }
+
+/* crop dialog */
+.crop-split {
+  grid-template-columns: 1fr auto;
+}
+
+.crop-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+}
+
+.crop-grid .dt-row {
+  grid-template-columns: 52px 1fr auto;
+}
+
+.crop-grid .dt-num {
+  max-width: none;
+  grid-column: 2;
+}
+
+.crop-grid output {
+  grid-column: 3;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.crop-stage {
+  position: relative;
+  justify-self: center;
+  margin: 10px;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--border), 0 2px 8px rgba(0, 0, 0, 0.12);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  background: #fff;
+}
+
+.crop-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.crop-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.crop-shade {
+  position: absolute;
+  box-shadow: 0 0 0 9999px rgba(10, 12, 16, 0.5);
+}
+
+.crop-box {
+  position: absolute;
+  outline: 2px solid var(--accent);
+  cursor: move;
+}
+
+.crop-h {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  /* (a bigger invisible area around a small visible square) */
+  background: radial-gradient(var(--accent) 0 0) center / 10px 10px no-repeat;
+}
+
+.crop-h[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.crop-h[data-h="n"] { left: 50%; top: 0; cursor: ns-resize; }
+.crop-h[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.crop-h[data-h="e"] { left: 100%; top: 50%; cursor: ew-resize; }
+.crop-h[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop-h[data-h="s"] { left: 50%; top: 100%; cursor: ns-resize; }
+.crop-h[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.crop-h[data-h="w"] { left: 0; top: 50%; cursor: ew-resize; }
+
+@media (pointer: coarse) {
+  .crop-h {
+    width: 30px;
+    height: 30px;
+    margin: -15px 0 0 -15px;
+  }
+}
+
+@media (max-width: 560px) {
+  .crop-split {
+    grid-template-columns: 1fr;
+  }
+
+  .crop-split .crop-stage {
+    order: -1;
+  }
+}
+
+/* Form tool: making fields */
+.pages[data-tool="form"] .page {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.pages[data-tool="form"] .page-forms {
+  display: none;
+}
+
+.fieldbox {
+  fill: rgba(47, 111, 237, 0.08);
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.fieldname {
+  fill: var(--accent);
+  font-family: system-ui, sans-serif;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.fieldnew {
+  fill: rgba(47, 111, 237, 0.12);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.field-peek {
+  display: flex;
+  flex-direction: column;
+  max-width: 180px;
+  padding: 0 8px;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.field-peek b,
+.field-peek span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.field-peek .muted {
+  font-size: 11px;
+}
+
+.field-kind-label {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* a signature box: click to sign */
+.field-sign {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  border: 1.5px dashed var(--accent);
+  border-radius: 4px;
+  background: rgba(47, 111, 237, 0.08);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.field-sign .ic {
+  width: 18px;
+  height: 18px;
+}
+
+.pages[data-tool="sign"] .page-forms .field-sign {
+  pointer-events: auto;
+}
+
+.field-date {
+  padding: 0 4px;
+}
+
+.dt-top {
+  align-items: start;
+}
+
+.dt [hidden] {
+  display: none !important;
+}
+
+/* language choice */
+.lang-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.lang-opt {
+  display: flex;
+  align-items: center;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 15px;
+  text-align: left;
+}
+
+.lang-opt.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}

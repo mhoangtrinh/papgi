@@ -1,5 +1,6 @@
 // The start screen (tools + recent files) and the stand-alone tool pages.
 // It sits over the editor; the app shows it for the routes "" (home) and the flow tools' ids.
+import { t } from "../i18n";
 import type { Engine } from "../engine/client";
 import type { OutFile } from "../engine/tools";
 import type { OpenedFile } from "../files";
@@ -141,9 +142,9 @@ export class Hub {
     this.render();
     this.el.scrollTop = 0;
     document.title = this.flow
-      ? `${this.flow.title} · papgi`
+      ? `${t(this.flow.title)} · papgi`
       : route === "open"
-        ? "Open PDF · papgi"
+        ? `${t("Open PDF")} · papgi`
         : "papgi";
   }
 
@@ -226,7 +227,7 @@ export class Hub {
         ${t ? `<button class="btn flat hub-back" data-go="home">${icon("back")}<span>All tools</span></button>` : ""}
         ${title}
         <div class="hub-actions">
-          ${doc ? `<button class="btn flat to-editor" data-go="edit" title="Back to ${esc(doc)}">${icon("textEdit")}<span class="lbl">Editor: </span><span class="docn">${esc(doc)}</span></button>` : ""}
+          ${doc ? `<button class="btn flat to-editor" data-go="edit" title="Back to ${esc(doc)}">${icon("textEdit")}<span class="lbl">Editor: </span><span class="docn" translate="no">${esc(doc)}</span></button>` : ""}
           <button class="icon-btn" data-act="theme" title="Theme">${icon(this.host.themeIcon())}</button>
         </div>
       </header>`;
@@ -317,7 +318,7 @@ export class Hub {
         (r) => `
         <div class="recent-item" data-recent="${r.id}" role="button" tabindex="0" title="Open ${esc(r.name)}">
           <div class="recent-thumb">${r.thumb ? `<img src="${r.thumb}" alt="">` : icon("file")}</div>
-          <div class="recent-text"><b>${esc(r.name)}</b><span class="muted small">${ago(r.opened)} · ${r.pages} ${r.pages === 1 ? "page" : "pages"} · ${formatSize(r.size)}</span></div>
+          <div class="recent-text"><b translate="no">${esc(r.name)}</b><span class="muted small">${ago(r.opened)} · ${r.pages} ${r.pages === 1 ? "page" : "pages"} · ${formatSize(r.size)}</span></div>
           <button class="icon-btn sm recent-x" data-forget="${r.id}" title="Remove from recent files">${icon("close")}</button>
         </div>`,
       )
@@ -403,7 +404,7 @@ export class Hub {
           ${f.reorder ? `<span class="grip" title="Drag to reorder">${icon("grip")}</span>` : ""}
           ${f.pageView && this.files.get(it.id) ? `<span class="file-badge" style="--file:${this.files.get(it.id)!.color}">${this.files.get(it.id)!.letter}</span>` : ""}
           <span class="file-thumb">${it.thumb ? `<img src="${it.thumb}" alt="">` : icon(it.kind === "pdf" ? "file" : "image")}</span>
-          <span class="file-text"><b>${esc(it.name)}</b><span class="muted small">${it.kind === "pdf" ? `${it.pages} ${it.pages === 1 ? "page" : "pages"} · ` : ""}${formatSize(it.bytes.length)}${it.password ? " · unlocked" : ""}</span></span>
+          <span class="file-text"><b translate="no">${esc(it.name)}</b><span class="muted small">${it.kind === "pdf" ? `${it.pages} ${it.pages === 1 ? "page" : "pages"} · ` : ""}${formatSize(it.bytes.length)}${it.password ? " · unlocked" : ""}</span></span>
           ${f.reorder ? `<button class="icon-btn sm" data-move="${i}" data-dir="-1" title="Move up" ${i === 0 ? "disabled" : ""}>${icon("up")}</button><button class="icon-btn sm" data-move="${i}" data-dir="1" title="Move down" ${i === this.items.length - 1 ? "disabled" : ""}>${icon("down")}</button>` : ""}
           <button class="icon-btn sm" data-remove="${i}" title="Remove">${icon("close")}</button>
         </li>`,
@@ -1181,7 +1182,7 @@ export class Hub {
         ${onePdf ? `<button class="btn" data-act="open-result">${icon("textEdit")}Open in editor</button>` : ""}
         <button class="btn flat" data-act="again">Start over</button>
       </div>
-      ${many ? `<ul class="out-list">${this.results.map((r, i) => `<li><span class="file-text"><b>${esc(r.name)}</b><span class="muted small">${formatSize(r.bytes.length)}</span></span><button class="icon-btn sm" data-out="${i}" title="Download ${esc(r.name)}">${icon("download")}</button></li>`).join("")}</ul>` : ""}`;
+      ${many ? `<ul class="out-list">${this.results.map((r, i) => `<li><span class="file-text"><b translate="no">${esc(r.name)}</b><span class="muted small">${formatSize(r.bytes.length)}</span></span><button class="icon-btn sm" data-out="${i}" title="Download ${esc(r.name)}">${icon("download")}</button></li>`).join("")}</ul>` : ""}`;
     sec.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 

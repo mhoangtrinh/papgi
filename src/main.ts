@@ -1,8 +1,12 @@
 import "./style.css";
 import { registerSW } from "virtual:pwa-register";
 import { App } from "./app";
+import { lang, missing, seen, startTranslating } from "./i18n";
 
 const app = new App(document.getElementById("app")!);
+startTranslating();
+// (for the browser tests: texts with no translation, and all texts seen)
+(window as unknown as { papgiI18n: unknown }).papgiI18n = { lang, missing, seen };
 // Handy for debugging from the console (and used by the browser tests).
 (window as unknown as { papgi: App }).papgi = app;
 // (tells builds apart in the update test)

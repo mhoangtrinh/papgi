@@ -84,7 +84,7 @@ export function modal(opts: ModalOpts, onOpen?: (root: HTMLElement) => void): Pr
 
 export async function askPassword(name: string, wrong: boolean): Promise<string | null> {
   const wrap = document.createElement("div");
-  wrap.innerHTML = `<p>${wrong ? "That password didn't work. " : ""}<b></b> is protected. Enter its password to open it.</p>
+  wrap.innerHTML = `<p>${wrong ? "That password didn't work. " : ""}<b translate="no"></b> is protected. Enter its password to open it.</p>
     <input type="password" class="field" autocomplete="current-password" aria-label="Password">`;
   wrap.querySelector("b")!.textContent = name;
   const input = wrap.querySelector("input")!;
