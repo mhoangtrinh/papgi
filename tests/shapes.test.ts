@@ -61,11 +61,19 @@ describe("shapes in the PDF", () => {
     expect(px(e, 150, 380)[1]).toBeGreaterThan(200);
   });
 
-  it("dashed, dotted and cloud outlines are remembered", () => {
+  it("dashed and dotted outlines are remembered; a cloud is a shape of its own", () => {
     e.drawShape(0, "Circle", [100, 300], [200, 400], style({ line: "dashed" }));
     e.drawShape(0, "Square", [300, 300], [400, 400], style({ line: "dotted", width: 3 }));
-    const a = e.drawShape(0, "Square", [100, 500], [200, 600], style({ line: "cloudy" }));
-    expect(a.map((x) => x.shape!.line)).toEqual(["dashed", "dotted", "cloudy"]);
+    const a = e.drawShape(0, "Cloud", [100, 500], [200, 600], style({ line: "dashed" }));
+    expect(a.map((x) => x.shape!.line)).toEqual(["dashed", "dotted", "dashed"]);
+    expect(a.map((x) => x.shape!.kind)).toEqual(["Circle", "Square", "Cloud"]);
+    // restyled, resized or copied, it stays a cloud
+    const b = e.styleAnnot(0, a[2].index, { line: "solid", width: 4 });
+    expect(b[2].shape!.kind).toBe("Cloud");
+    e.resizeAnnot(0, a[2].index, [100, 500, 260, 640]);
+    e.copyAnnot(0, a[2].index);
+    const p = e.paste(1, [50, 50]);
+    expect(p.annots[p.index].shape!.kind).toBe("Cloud");
   });
 
   it("restyles a shape: only what's given changes, one undo step", () => {
@@ -94,11 +102,11 @@ describe("shapes in the PDF", () => {
   });
 
   it("copies and moves keep the style", () => {
-    const a = e.drawShape(0, "Diamond", [100, 300], [200, 400], style({ fill: [1, 0, 1], line: "cloudy", opacity: 0.6 }));
+    const a = e.drawShape(0, "Diamond", [100, 300], [200, 400], style({ fill: [1, 0, 1], line: "dotted", opacity: 0.6 }));
     e.copyAnnot(0, a[0].index);
     const p = e.paste(1, [50, 50]);
     const s = p.annots[p.index].shape!;
-    expect([s.kind, s.line, s.fill, Math.round(s.opacity * 10)]).toEqual(["Diamond", "cloudy", [1, 0, 1], 6]);
+    expect([s.kind, s.line, s.fill, Math.round(s.opacity * 10)]).toEqual(["Diamond", "dotted", [1, 0, 1], 6]);
   });
 });
 

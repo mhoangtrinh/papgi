@@ -823,6 +823,27 @@ try {
   await page.waitForTimeout(500);
   const tri2 = (await engine("listAnnots", 0)).find((x) => x.shape?.kind === "Triangle");
   check("changing the line style restyles the selected shape", tri2?.shape.line === "dashed" && !!tri2.shape.fill, JSON.stringify(tri2?.shape));
+  // dragging the width slider: the shape follows at once, one undo step when let go
+  const slide = (v, type) => page.evaluate(([v, type]) => { const r = document.querySelector('.opt-pop [data-srange="width"]'); r.value = String(v); r.dispatchEvent(new Event(type, { bubbles: true })); }, [v, type]);
+  const triW = async () => (await engine("listAnnots", 0)).find((x) => x.shape?.kind === "Triangle")?.shape.width;
+  const stepsBefore = (await engine("state")).undoName;
+  await slide(6, "input");
+  await page.waitForTimeout(250);
+  const mid = await triW();
+  await slide(9, "input");
+  await page.waitForTimeout(250);
+  const mid2 = await triW();
+  const notYet = (await engine("state")).undoName;
+  await slide(9, "change");
+  await page.waitForTimeout(400);
+  const done = (await engine("state")).undoName;
+  check("the selected shape follows the width slider while it's dragged; one undo step", mid === 6 && mid2 === 9 && notYet === stepsBefore && done === "Style", `${mid} ${mid2} ${notYet} ${done}`);
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(400);
+  check("one undo puts the width back", (await triW()) === tri2.shape.width, String(await triW()));
+  await page.mouse.click(...(await raw(0, 160, 720)));
+  await page.waitForTimeout(300);
+  await page.click('#options [data-pop="outline"]');
   await page.click('.opt-pop [data-snooutline]');
   await page.waitForTimeout(500);
   const tri3 = (await engine("listAnnots", 0)).find((x) => x.shape?.kind === "Triangle");

@@ -12,6 +12,10 @@ export interface ShapeOptionsHost {
   selected(): AnnotInfo | null;
   /** Change the selected shape. */
   restyle(style: Partial<ShapeStyle>): void;
+  /** Change it while a slider or colour picker moves (shown at once, one undo step at the end). */
+  live(style: Partial<ShapeStyle>): void;
+  /** The slider or picker was let go. */
+  commit(): void;
   rerender(): void;
 }
 
@@ -21,6 +25,7 @@ const KINDS: [ShapeKind, string, string][] = [
   ["Circle", "circle", "Ellipse"],
   ["Triangle", "triangle", "Triangle"],
   ["Diamond", "diamond", "Diamond"],
+  ["Cloud", "lcloud", "Cloud"],
   ["Line", "line", "Line"],
   ["Arrow", "arrow", "Arrow"],
   ["DoubleArrow", "arrow2", "Double arrow"],
@@ -29,7 +34,6 @@ const LINES: [LineStyle, string, string][] = [
   ["solid", "lsolid", "Solid"],
   ["dashed", "ldash", "Dashed"],
   ["dotted", "ldot", "Dotted"],
-  ["cloudy", "lcloud", "Cloud"],
 ];
 
 export class ShapeOptions {
@@ -113,8 +117,7 @@ export class ShapeOptions {
         `<div class="pop-row swatches">${PALETTE.map((c) => sw("scolor", c, c === cur)).join("")}<label class="swatch custom" title="Custom colour" style="--c:${cur ?? "#1c1c1c"}"><input type="color" data-scolor-input value="${cur ?? "#1c1c1c"}"></label></div>` +
         (line ? "" : `<button class="pop-check ${st.color ? "" : "on"}" data-snooutline>${icon("noFill")}<span>No outline</span></button>`) +
         `<div class="pop-row">${range("width", 0.5, 12, 0.5, st.width, "Width", "pt")}</div>` +
-        `<div class="pop-row"><div class="seg" role="radiogroup" aria-label="Line">${LINES.filter(([l]) => !line || l !== "cloudy")
-          .map(([l, ic, label]) => `<button data-sline="${l}" class="${l === st.line ? "on" : ""}" title="${label}">${icon(ic)}</button>`)
+        `<div class="pop-row"><div class="seg" role="radiogroup" aria-label="Line">${LINES.map(([l, ic, label]) => `<button data-sline="${l}" class="${l === st.line ? "on" : ""}" title="${label}">${icon(ic)}</button>`)
           .join("")}</div></div>`
       );
     }
@@ -136,21 +139,26 @@ export class ShapeOptions {
       if (selected) this.host.restyle(style);
       this.host.rerender();
     };
-    // sliders: follow while dragging, change the shape when let go
+    // sliders and colour pickers: the selected shape follows while dragging; one undo step when let go
     const input = t as HTMLInputElement;
+    const follow = (style: Partial<ShapeStyle>) => {
+      if (!selected) return;
+      if (e.type === "input") this.host.live(style);
+      else if (e.type === "change") this.host.commit();
+    };
     if (input.dataset?.srange) {
       const v = Number(input.value);
       const out = input.parentElement!.querySelector("output")!;
       if (input.dataset.srange === "width") {
         out.textContent = `${v}pt`;
         s.shapeWidth = v;
-        if (e.type === "change") apply({ width: v });
+        follow({ width: v });
       } else {
         out.textContent = `${v}%`;
         s.shapeOpacity = v / 100;
-        if (e.type === "change") apply({ opacity: v / 100 });
+        follow({ opacity: v / 100 });
       }
-      if (e.type === "input") this.host.save();
+      this.host.save();
       return true;
     }
     if (input.dataset?.scolorInput !== undefined || input.dataset?.sfillInput !== undefined) {
@@ -158,11 +166,13 @@ export class ShapeOptions {
       if (input.dataset.scolorInput !== undefined) {
         s.colors.shape = input.value;
         s.shapeOutline = true;
-        if (e.type === "change") apply({ color: hexToRgb(input.value) });
+        follow({ color: hexToRgb(input.value) });
       } else {
         s.shapeFill = input.value;
-        if (e.type === "change") apply({ fill: hexToRgb(input.value) });
+        follow({ fill: hexToRgb(input.value) });
       }
+      this.host.save();
+      if (e.type === "change") this.host.rerender();
       return true;
     }
     if (e.type !== "click") return false;

@@ -137,7 +137,12 @@ export function mergeSettings(saved: Record<string, unknown> | null): Settings {
   if (!SHAPE_KINDS.includes(out.shapeKind)) out.shapeKind = DEFAULTS.shapeKind;
   if (!(typeof out.shapeFill === "string" && /^#[0-9a-f]{6}$/i.test(out.shapeFill))) out.shapeFill = null;
   out.shapeOutline = out.shapeOutline !== false;
-  if (!["solid", "dashed", "dotted", "cloudy"].includes(out.shapeLine)) out.shapeLine = "solid";
+  // (clouds used to be a line style; now they're a shape of their own)
+  if ((out.shapeLine as string) === "cloudy") {
+    out.shapeLine = "solid";
+    if (out.shapeKind === "Square") out.shapeKind = "Cloud";
+  }
+  if (!["solid", "dashed", "dotted"].includes(out.shapeLine)) out.shapeLine = "solid";
   out.shapeOpacity = typeof out.shapeOpacity === "number" && out.shapeOpacity >= 0.1 && out.shapeOpacity <= 1 ? out.shapeOpacity : 1;
   out.sideToc = out.sideToc === true;
   if (!FIELD_KINDS.includes(out.fieldKind)) out.fieldKind = "text";
@@ -183,7 +188,7 @@ export function shapeStyle(s: Settings): ShapeStyle {
     color: s.shapeOutline || line ? hexToRgb(s.colors.shape) : null,
     fill: s.shapeFill && !line ? hexToRgb(s.shapeFill) : null,
     width: s.shapeWidth,
-    line: line && s.shapeLine === "cloudy" ? "solid" : s.shapeLine,
+    line: s.shapeLine,
     opacity: s.shapeOpacity,
   };
 }

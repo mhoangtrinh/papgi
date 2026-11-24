@@ -1423,6 +1423,46 @@ export class Viewer {
     g.style.height = `${rectHeight(r) * this.zoom}px`;
   }
 
+  // a slider being dragged: the selected shape follows (one engine call at a time, the latest
+  // value wins), and becomes one undo step when let go
+  private liveWant: Partial<ShapeStyle> | null = null;
+  private liveRun: Promise<void> | null = null;
+
+  liveRestyle(style: Partial<ShapeStyle>): void {
+    this.liveWant = { ...this.liveWant, ...style };
+    if (!this.liveRun) this.liveRun = this.pumpLive().finally(() => (this.liveRun = null));
+  }
+
+  private async pumpLive(): Promise<void> {
+    while (this.liveWant) {
+      const st = this.liveWant;
+      this.liveWant = null;
+      const cur = this.selectedAnnot();
+      if (!cur?.annot.shape) return;
+      const pv = this.pages[cur.page];
+      try {
+        pv.annots = await this.host.engine.liveStyle(cur.page, cur.annot.index, st);
+      } catch {
+        return;
+      }
+      pv.version++;
+      pv.dataVersion = pv.version;
+      this.schedule();
+      // (one new picture of the page at a time: wait for it before the next value)
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    }
+  }
+
+  /** The slider was let go: the change becomes one undo step. */
+  async commitLive(): Promise<void> {
+    while (this.liveRun) await this.liveRun;
+    await this.host.engine.endLive();
+    const cur = this.selectedAnnot();
+    if (!cur) return;
+    const pv = this.pages[cur.page];
+    this.afterAnnotEdit(pv, await this.host.engine.listAnnots(cur.page));
+  }
+
   /** Change how the selected shape looks. */
   async restyleSelected(style: Partial<ShapeStyle>): Promise<void> {
     const cur = this.selectedAnnot();

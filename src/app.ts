@@ -129,6 +129,8 @@ export class App {
       save: () => saveSettings(this.settings),
       selected: () => (this.settings.tool === "select" || this.settings.tool === "area" ? (this.viewer.selectedAnnot()?.annot.shape ? this.viewer.selectedAnnot()!.annot : null) : null),
       restyle: (st) => void this.viewer.restyleSelected(st).catch((err) => toast(err.message, "error")),
+      live: (st) => this.viewer.liveRestyle(st),
+      commit: () => void this.viewer.commitLive().catch((err) => toast(err.message, "error")),
       rerender: () => this.renderOptions(),
     });
     // On phones the pages panel covers the page, so start with it closed there.

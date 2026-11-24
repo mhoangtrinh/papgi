@@ -363,6 +363,7 @@ export class PdfEngine {
   }
 
   undo(): DocInfo {
+    this.endLive();
     const prev = this.undoStack.pop();
     if (prev) {
       // the current document itself is kept for redo (no copy needed)
@@ -380,6 +381,7 @@ export class PdfEngine {
   }
 
   redo(): DocInfo {
+    this.endLive();
     const next = this.redoStack.pop();
     if (next) {
       const cur = this.currentStep(next.name, next.content);
@@ -671,8 +673,13 @@ export class PdfEngine {
   drawShape(index: number, kind: ShapeKind, a: Point, b: Point, style: ShapeStyle, square = false): AnnotInfo[] {
     const g = shapeGeometry(kind, a, b, square);
     return this.op(isLineKind(kind) ? (kind === "Line" ? "Line" : "Arrow") : "Shape", index, (page) => {
-      const type = kind === "Square" || kind === "Circle" ? kind : isLineKind(kind) ? "Line" : "Polygon";
+      const type = kind === "Square" || kind === "Circle" ? kind : kind === "Cloud" ? "Square" : isLineKind(kind) ? "Line" : "Polygon";
       const an = page.createAnnotation(type);
+      if (kind === "Cloud") {
+        // a cloud: a box drawn with scalloped edges
+        an.setBorderEffect("Cloudy");
+        an.setBorderEffectIntensity(1);
+      }
       if (type === "Line") {
         an.setLine(g.points[0], g.points[1]);
         an.setLineEndingStyles(kind === "DoubleArrow" ? "OpenArrow" : "None", kind === "Line" ? "None" : "OpenArrow");
@@ -1790,6 +1797,7 @@ export class PdfEngine {
    * recorded; if it throws, the document is put back exactly as it was.
    */
   private journaled(name: string, fn: () => void | boolean, content: number[] | "all" = "all"): void {
+    this.endLive();
     const before = this.ready?.doc === this.doc ? this.ready!.bytes : this.snapshot();
     this.ready = null;
     let changed: void | boolean;
@@ -1800,6 +1808,37 @@ export class PdfEngine {
       throw e;
     }
     if (changed === false) return;
+    this.pushStep(name, before, content);
+  }
+
+  /** A live change (e.g. a slider being dragged): shown as it goes, one undo step in the end. */
+  private live: { name: string; before: Uint8Array; index: number } | null = null;
+
+  /** Restyle a shape while its slider moves: no undo step yet (endLive makes one). */
+  liveStyle(index: number, annot: number, style: Partial<ShapeStyle>): AnnotInfo[] {
+    if (!this.live) {
+      this.live = { name: "Style", before: this.ready?.doc === this.doc ? this.ready!.bytes : this.snapshot(), index };
+      this.ready = null;
+    }
+    this.withPage(index, (page) => {
+      const an = page.getAnnotations()[annot];
+      if (!an) throw new Error("No such annotation");
+      applyShapeStyle(an, style);
+      an.update();
+      arrowAppearance(this.mupdf, page, an);
+    });
+    return this.listAnnots(index);
+  }
+
+  /** The live change is done: it becomes one undo step. */
+  endLive(): void {
+    const l = this.live;
+    if (!l) return;
+    this.live = null;
+    this.pushStep(l.name, l.before, []);
+  }
+
+  private pushStep(name: string, before: Uint8Array, content: number[] | "all"): void {
     // pages whose contents (not just annotations or fields) may look different now
     this.dropContent(content);
     this.undoStack.push({ name, bytes: before, id: this.stateId, content, size: before.length });
@@ -1844,7 +1883,6 @@ function applyShapeStyle(a: MuPDF.PDFAnnotation, st: Partial<ShapeStyle>): void 
   if (st.opacity !== undefined) a.setOpacity(Math.max(0.1, Math.min(1, st.opacity)));
   if (st.line !== undefined || st.width !== undefined) {
     const line = st.line ?? lineBefore;
-    const cloudy = line === "cloudy" && fillable;
     const dash = dashPattern(line, a.getBorderWidth());
     if (dash) {
       a.setBorderStyle("Dashed");
@@ -1853,17 +1891,12 @@ function applyShapeStyle(a: MuPDF.PDFAnnotation, st: Partial<ShapeStyle>): void 
       a.setBorderStyle("Solid");
       a.clearBorderDash();
     }
-    if (fillable) {
-      a.setBorderEffect(cloudy ? "Cloudy" : "None");
-      if (cloudy) a.setBorderEffectIntensity(1);
-    }
   }
   // fill only: no outline drawn
   if (fillable && !a.getColor().length && !a.getInteriorColor().length) a.setInteriorColor([0.5, 0.5, 0.5]);
 }
 
 function lineStyleOf(a: MuPDF.PDFAnnotation): LineStyle {
-  if (a.hasBorderEffect() && a.getBorderEffect() === "Cloudy") return "cloudy";
   if (a.getBorderStyle() !== "Dashed") return "solid";
   const d = a.getBorderDashPattern() as number[];
   const w = a.getBorderWidth();
@@ -1873,6 +1906,7 @@ function lineStyleOf(a: MuPDF.PDFAnnotation): LineStyle {
 function shapeInfo(a: MuPDF.PDFAnnotation, type: string): { kind: ShapeKind } & ShapeStyle {
   let kind: ShapeKind = type as ShapeKind;
   if (type === "Polygon") kind = a.getVertices().length === 3 ? "Triangle" : "Diamond";
+  else if (type === "Square" && a.hasBorderEffect() && a.getBorderEffect() === "Cloudy") kind = "Cloud";
   else if (type === "Line") {
     const e = a.getLineEndingStyles();
     kind = e.start !== "None" && e.end !== "None" ? "DoubleArrow" : e.start !== "None" || e.end !== "None" ? "Arrow" : "Line";

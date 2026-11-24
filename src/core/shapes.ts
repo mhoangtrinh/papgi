@@ -1,10 +1,10 @@
 // Shapes: kinds, styles and their geometry (pure).
 import type { Point, Rect } from "./geometry";
 
-export type ShapeKind = "Square" | "Circle" | "Triangle" | "Diamond" | "Line" | "Arrow" | "DoubleArrow";
-export type LineStyle = "solid" | "dashed" | "dotted" | "cloudy";
+export type ShapeKind = "Square" | "Circle" | "Triangle" | "Diamond" | "Cloud" | "Line" | "Arrow" | "DoubleArrow";
+export type LineStyle = "solid" | "dashed" | "dotted";
 
-export const SHAPE_KINDS: ShapeKind[] = ["Square", "Circle", "Triangle", "Diamond", "Line", "Arrow", "DoubleArrow"];
+export const SHAPE_KINDS: ShapeKind[] = ["Square", "Circle", "Triangle", "Diamond", "Cloud", "Line", "Arrow", "DoubleArrow"];
 
 /** How a shape is drawn. Colours are RGB 0..1; null = none. */
 export interface ShapeStyle {
