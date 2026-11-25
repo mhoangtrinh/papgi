@@ -55,3 +55,22 @@ describe("erasing keeps the rest of the page as it was", () => {
     expect(strokeOpsToGs("BT (a) Tj ET", () => "x")).toBeNull();
   });
 });
+
+describe("search and redact ignore upper/lower case", () => {
+  const pdf = () => makePdf("BT /F1 14 Tf 50 750 Td (John Smith wrote this) Tj ET\nBT /F1 14 Tf 50 700 Td (JOHN SMITH signed) Tj ET\nBT /F1 14 Tf 50 650 Td (M\\374ller) Tj ET");
+  it("finds every spelling of the word, and letters with accents", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(pdf());
+    expect(e.search("john smith").length).toBe(2);
+    expect(e.search("Muller").length).toBe(1);
+  });
+  it("redacts the upper-case words too (as in comments and fields)", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(pdf());
+    expect(e.redactCount("john")).toBe(2);
+    e.redactText("john");
+    expect(e.pageText(0)).not.toMatch(/john/i);
+    // (redacting doesn't treat "u" as "ü")
+    expect(e.redactCount("Muller")).toBe(0);
+  });
+});

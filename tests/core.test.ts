@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  toPage, toScreen, normRect, quadToRect, unionRects, simplifyStroke, placeStrokes, strokesBounds, nextZoom, translateQuad, inRect,
+  toPage, toScreen, normRect, quadToRect, unionRects, simplifyStroke, placeStrokes, strokesBounds, nextZoom, translateQuad, inRect, markLine, quadPoints,
   type Point, type Quad,
 } from "../src/core/geometry";
 import { clickPage, emptySelection, moveOrder, movedSelection, afterDelete, parseRange, formatRange } from "../src/core/pages";
@@ -84,5 +84,30 @@ describe("page selection and ordering", () => {
     expect(parseRange("abc", 6)).toBeNull();
     expect(parseRange("", 6)).toBeNull();
     expect(formatRange([0, 1, 2, 4, 6, 7])).toBe("1-3, 5, 7-8");
+  });
+});
+
+describe("underline / strike-out lines follow the text", () => {
+  it("upright text: a horizontal line near the bottom", () => {
+    const q: Quad = [10, 0, 50, 0, 10, 10, 50, 10]; // ul, ur, ll, lr
+    const u = markLine(q, "Underline");
+    expect(u.a[1]).toBeCloseTo(9.2);
+    expect(u.b).toEqual([50, u.a[1]]);
+    expect(u.a[0]).toBe(10);
+  });
+  it("on a page turned by 90°: a vertical line, beside the letters' baseline", () => {
+    // text running downwards; the letters' bottom is towards smaller x
+    const q: Quad = [20, 10, 20, 50, 10, 10, 10, 50];
+    const u = markLine(q, "Underline");
+    expect(u.a[0]).toBeCloseTo(10.8);
+    expect(u.b[0]).toBeCloseTo(10.8);
+    expect([u.a[1], u.b[1]]).toEqual([10, 50]);
+    expect(u.width).toBeCloseTo(0.7);
+  });
+  it("on a page turned by 180°: the strike-out stays inside the letters", () => {
+    const q: Quad = [50, 10, 10, 10, 50, 0, 10, 0];
+    const s = markLine(q, "StrikeOut");
+    expect(s.a[1]).toBeCloseTo(4.5);
+    expect(quadPoints(q)).toBe("50,10 10,10 10,0 50,0");
   });
 });

@@ -570,6 +570,10 @@ kbd {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   z-index: 30;
+  /* (a short window: the menu scrolls instead of running off the screen) */
+  max-height: calc(100dvh - 60px - env(safe-area-inset-top));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .menu button {
@@ -1498,6 +1502,11 @@ textarea.field-input {
   align-items: center;
   justify-content: space-between;
   padding: 14px 14px 4px 20px;
+  /* (a long dialog scrolls: its title, ✕ and buttons stay in view) */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
 }
 
 .modal-head h2 {
@@ -1519,6 +1528,10 @@ textarea.field-input {
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 20px 18px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--panel);
 }
 
 .field {

@@ -52,6 +52,26 @@ export function quadToRect(q: Quad): Rect {
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
+/** SVG polygon points of a quad (ul, ur, lr, ll): right on turned pages too. */
+export function quadPoints(q: Quad): string {
+  return `${q[0]},${q[1]} ${q[2]},${q[3]} ${q[6]},${q[7]} ${q[4]},${q[5]}`;
+}
+
+/**
+ * The line of an underline or strike-out over a text quad, along the text (also on pages
+ * turned by 90° or 180°, where the quad's corners aren't left-to-right, top-to-bottom).
+ */
+export function markLine(q: Quad, kind: "Underline" | "StrikeOut"): { a: Point; b: Point; width: number } {
+  // from the bottom edge (ll -> lr) towards the top edge (ul -> ur)
+  const t = kind === "Underline" ? 0.08 : 0.45;
+  const h = Math.hypot(q[0] - q[4], q[1] - q[5]);
+  return {
+    a: [q[4] + (q[0] - q[4]) * t, q[5] + (q[1] - q[5]) * t],
+    b: [q[6] + (q[2] - q[6]) * t, q[7] + (q[3] - q[7]) * t],
+    width: Math.max(0.7, h * 0.07),
+  };
+}
+
 export function translateQuad(q: Quad, dx: number, dy: number): Quad {
   return q.map((v, i) => v + (i % 2 === 0 ? dx : dy)) as Quad;
 }

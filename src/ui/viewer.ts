@@ -9,7 +9,7 @@ import type { Settings, Tool, SavedSignature, Spread } from "../storage";
 import { hexToRgb, rgbToHex, shapeStyle } from "../storage";
 import { arrowHeadPoints, dashPattern, isLineKind, shapeBigEnough, shapeGeometry, type ShapeKind, type ShapeStyle } from "../core/shapes";
 import {
-  type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight, strokesBounds,
+  type Point, type Quad, type Rect, normRect, inRect, simplifyStroke, placeStrokes, clampZoom, rectWidth, rectHeight, strokesBounds, quadPoints, markLine,
 } from "../core/geometry";
 import { defaultFieldSize } from "../engine/forms";
 import { icon } from "./icons";
@@ -1114,12 +1114,8 @@ export class Viewer {
     const kind = this.host.settings.markKind;
     g.innerHTML = quads
       .map((q) => {
-        const pts = `${q[0]},${q[1]} ${q[2]},${q[3]} ${q[6]},${q[7]} ${q[4]},${q[5]}`;
-        if (mode === "mark" && kind !== "Highlight") {
-          const y = kind === "Underline" ? q[5] - (q[5] - q[1]) * 0.08 : (q[1] + q[5]) / 2;
-          return `<line x1="${q[0]}" y1="${y}" x2="${q[2]}" y2="${y}" stroke="${color}" stroke-width="${Math.max(0.8, (q[5] - q[1]) * 0.07)}"/>`;
-        }
-        return `<polygon points="${pts}" class="${mode === "sel" ? "selq" : "markq"}" ${color ? `fill="${color}"` : ""}/>`;
+        if (mode === "mark" && (kind === "Underline" || kind === "StrikeOut")) return markLineSvg(q, kind, color);
+        return `<polygon points="${quadPoints(q)}" class="${mode === "sel" ? "selq" : "markq"}" ${color ? `fill="${color}"` : ""}/>`;
       })
       .join("");
   }
@@ -1197,13 +1193,7 @@ export class Viewer {
   private holdQuads(pv: PageView, quads: Quad[], kind: string, color: string): { release: (ok: boolean) => void } {
     const g = pv.svg.querySelector(".g-preview")!;
     g.innerHTML = quads
-      .map((q) => {
-        const x0 = Math.min(q[0], q[4]), x1 = Math.max(q[2], q[6]), y0 = Math.min(q[1], q[3]), y1 = Math.max(q[5], q[7]);
-        if (kind === "Highlight") return `<rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" class="markq" fill="${color}"/>`;
-        const h = y1 - y0;
-        const y = kind === "StrikeOut" ? y0 + h * 0.55 : y1 - h * 0.08;
-        return `<line x1="${x0}" x2="${x1}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="${Math.max(0.6, h * 0.07)}"/>`;
-      })
+      .map((q) => (kind === "Underline" || kind === "StrikeOut" ? markLineSvg(q, kind, color) : `<polygon points="${quadPoints(q)}" class="markq" fill="${color}"/>`))
       .join("");
     return this.holdPreview(pv);
   }
@@ -2805,7 +2795,7 @@ export class Viewer {
         h.page !== pv.index
           ? ""
           : h.quads
-              .map((q) => `<polygon points="${q[0]},${q[1]} ${q[2]},${q[3]} ${q[6]},${q[7]} ${q[4]},${q[5]}" class="hit ${i === this.hitIndex ? "cur" : ""}"/>`)
+              .map((q) => `<polygon points="${quadPoints(q)}" class="hit ${i === this.hitIndex ? "cur" : ""}"/>`)
               .join(""),
       )
       .join("");
@@ -2873,6 +2863,12 @@ const RESIZE_CURSOR = ["over-nwse", "over-nesw", "over-nwse", "over-nesw", "over
 const noteKey = (page: number, num: number) => `${page}:${num}`;
 
 /** Who wrote a note or reply and when (nothing if neither is known), with optional buttons. */
+/** The preview of an underline / strike-out on a text quad, along the text. */
+function markLineSvg(q: Quad, kind: "Underline" | "StrikeOut", color: string): string {
+  const { a, b, width } = markLine(q, kind);
+  return `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="${color}" stroke-width="${width}"/>`;
+}
+
 function byline(author: string, date: number, buttons = ""): string {
   const when = date ? new Date(date).toLocaleString(lang === "de" ? "de-DE" : undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
   if (!author && !when && !buttons) return "";

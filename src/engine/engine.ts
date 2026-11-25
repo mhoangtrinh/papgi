@@ -627,13 +627,18 @@ export class PdfEngine {
     return this.text(index).asText();
   }
 
-  search(needle: string, maxHitsPerPage = 200): SearchHit[] {
+  /**
+   * Every place `needle` is on the pages, ignoring upper/lower case (like any viewer's search);
+   * `exactLetters`: "e" doesn't also find "é" (for redacting; the search box ignores accents).
+   */
+  search(needle: string, maxHitsPerPage = 200, exactLetters = false): SearchHit[] {
     const doc = this.requireDoc();
     const hits: SearchHit[] = [];
     if (!needle.trim()) return hits;
     const n = doc.countPages();
+    const opts = exactLetters ? "ignore-case" : "ignore-case,ignore-diacritics";
     for (let i = 0; i < n; i++) {
-      const res = this.text(i).search(needle, undefined) as Quad[][];
+      const res = this.text(i).search(needle, opts) as Quad[][];
       for (const quads of res.slice(0, maxHitsPerPage)) hits.push({ page: i, quads });
     }
     return hits;
@@ -1239,7 +1244,7 @@ export class PdfEngine {
   /** How many places redactText would black out or replace. */
   redactCount(needle: string): number {
     if (!needle.trim()) return 0;
-    return this.search(needle, 10000).length + this.redactElsewhere(needle, false).count;
+    return this.search(needle, 10000, true).length + this.redactElsewhere(needle, false).count;
   }
 
   /**
@@ -1250,7 +1255,7 @@ export class PdfEngine {
   redactText(needle: string): { pages: number[]; count: number } {
     const doc = this.requireDoc();
     if (!needle.trim()) return { pages: [], count: 0 };
-    const hits = this.search(needle, 10000);
+    const hits = this.search(needle, 10000, true);
     const byPage = new Map<number, Rect[]>();
     for (const h of hits) {
       // a hit can span lines: one box per line piece, a little bigger than the letters
