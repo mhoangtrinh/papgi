@@ -133,6 +133,7 @@ export function showShortcuts(): void {
     ["Ctrl + F", "Search"],
     ["Ctrl + C / X / V", "Copy, cut, paste (text, items, areas, pictures)"],
     ["Ctrl + D", "Duplicate the selected item"],
+    ["Ctrl + B / Ctrl + I", "Bold / italic (while editing text)"],
     ["Ctrl + + / − / 0", "Zoom in / out / fit width"],
     ["Ctrl + wheel", "Zoom"],
     ["Delete", "Delete the selected item, area or pages"],

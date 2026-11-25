@@ -122,3 +122,18 @@ describe("indents", () => {
     ]);
   });
 });
+
+describe("justified lines and very wide gaps", () => {
+  it("never stretches a gap beyond maxGap (the line stays short instead)", () => {
+    const measure = (_s: number, t: string) => t.length * 5;
+    const runs = [{ text: "a b c verylongwordthatwraps more text here", style: 0 }];
+    const free = layoutParagraph(runs, { width: 100, align: "justify", measure });
+    const capped = layoutParagraph(runs, { width: 100, align: "justify", measure, maxGap: 8 });
+    const gaps = (l: { pieces: { x: number; text: string }[] }) => l.pieces.slice(1).map((p, k) => p.x - (l.pieces[k].x + l.pieces[k].text.length * 5));
+    expect(Math.max(...gaps(free[0]))).toBeGreaterThan(8);
+    expect(Math.max(...gaps(capped[0]))).toBeLessThanOrEqual(8.001);
+    // lines that justify within the limit are unchanged
+    const normal = [{ text: "word word word word word word word word", style: 0 }];
+    expect(layoutParagraph(normal, { width: 100, align: "justify", measure, maxGap: 8 })).toEqual(layoutParagraph(normal, { width: 100, align: "justify", measure }));
+  });
+});

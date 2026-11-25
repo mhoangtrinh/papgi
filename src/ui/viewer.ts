@@ -2527,7 +2527,14 @@ export class Viewer {
     }
     if (!block.editable) return void toast(block.reason ?? "This text can't be edited.", "error");
     pv.svg.querySelector(".g-hover")?.replaceChildren();
-    const ed = new ParagraphEditor(pv.index, block, pv.info, new URL("fonts/", document.baseURI).href, (commit) => void this.closeParagraph(commit));
+    const ed = new ParagraphEditor(pv.index, block, pv.info, new URL("fonts/", document.baseURI).href, (commit) => void this.closeParagraph(commit), () => syncStyle());
+    // the B / I buttons show what the selection is
+    const syncStyle = () => {
+      if (this.para?.ed !== ed) return document.removeEventListener("selectionchange", syncStyle);
+      const st = ed.state();
+      this.floating.querySelector("[data-act=bold]")?.classList.toggle("on", st.bold);
+      this.floating.querySelector("[data-act=italic]")?.classList.toggle("on", st.italic);
+    };
     pv.el.append(ed.el);
     this.para = { pv, ed, block };
     ed.placeCaret(clientX, clientY);
@@ -2537,10 +2544,15 @@ export class Viewer {
       "edit",
       `${block.warn ? `<span class="float-warn" title="${block.warn}">${icon("warn")}<span>Formulas get flattened</span></span><span class="sep"></span>` : ""}
        ${block.ocr ? `<div class="seg mini" title="Font for the new text"><button data-act="sans" class="${this.host.settings.ocrSerif ? "" : "on"}">Sans</button><button data-act="serif" class="${this.host.settings.ocrSerif ? "on" : ""}">Serif</button></div><span class="sep"></span>` : ""}
+       <button data-act="bold" class="toggle" title="Bold (Ctrl+B)">${icon("bold")}</button>
+       <button data-act="italic" class="toggle" title="Italic (Ctrl+I)">${icon("italic")}</button>
+       <span class="sep"></span>
        <button data-act="done" title="Finish (Ctrl+Enter)">${icon("check")}</button>
        <button data-act="cancel" title="Cancel (Esc)">${icon("close")}</button>`,
     );
     if (block.ocr) ed.setSerif(this.host.settings.ocrSerif);
+    document.addEventListener("selectionchange", syncStyle);
+    syncStyle();
     this.floating.onclick = (ev) => {
       const b = (ev.target as HTMLElement).closest<HTMLButtonElement>("button");
       if (!b) return;
@@ -2552,6 +2564,7 @@ export class Viewer {
         this.floating.querySelectorAll<HTMLButtonElement>("[data-act=sans],[data-act=serif]").forEach((x) => x.classList.toggle("on", x === b));
         return;
       }
+      if (b.dataset.act === "bold" || b.dataset.act === "italic") return ed.toggle(b.dataset.act);
       void this.closeParagraph(b.dataset.act === "done");
     };
     this.floating.onpointerdown = (ev) => ev.preventDefault(); // keep the caret in the editor
@@ -2572,7 +2585,7 @@ export class Viewer {
     this.paraBusy = true;
     ed.el.classList.add("saving");
     try {
-      const { result, annots } = await this.host.busy(this.host.engine.editText(pv.index, block.id, ed.runs(), new URL("fonts/", document.baseURI).href, { serif: block.ocr && this.host.settings.ocrSerif }));
+      const { result, annots } = await this.host.busy(this.host.engine.editText(pv.index, block.id, ed.runs(), new URL("fonts/", document.baseURI).href, { serif: block.ocr && this.host.settings.ocrSerif, variants: ed.variants() }));
       this.para = null;
       if (this.floating.dataset.kind === "edit") this.hideFloating();
       this.afterAnnotEdit(pv, annots);

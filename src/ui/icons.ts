@@ -61,6 +61,8 @@ const P: Record<string, string> = {
   eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   flatten: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  bold: '<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7z"/><path d="M7 12h7a3.5 3.5 0 0 1 0 7H7z"/>',
+  italic: '<path d="M10 5h8M6 19h8M14.5 5 9.5 19"/>',
   // the Document menu: a page with a small gear (not the four squares of "All tools")
   docMenu: '<path d="M11 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8l6 6v2"/><path d="M14 3v6h6"/><circle cx="17.5" cy="17.5" r="1.8"/><path d="M17.5 13.6v1.1M17.5 20.3v1.1M13.6 17.5h1.1M20.3 17.5h1.1M14.7 14.7l.8.8M19.5 19.5l.8.8M14.7 20.3l.8-.8M19.5 15.5l.8-.8"/>',
   file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',

@@ -17,12 +17,22 @@ export interface LayoutOptions {
   restIndent?: number;
   /** Width of `text` drawn in `style`. */
   measure: (style: number, text: string) => number;
+  /**
+   * Justified lines never stretch a gap between words beyond this (then the line stays a
+   * little short of the right edge). Much wider gaps read as the end of a line: the words
+   * would no longer read back as one paragraph.
+   */
+  maxGap?: number;
+  /** What a capped line can't take up in its gaps goes into letter spacing, up to this per letter. */
+  maxLetterSpacing?: number;
 }
 
 export interface Piece {
   x: number; // from the left edge of the paragraph
   text: string;
   style: number;
+  /** Extra space after each letter (a justified line whose word gaps are already at maxGap). */
+  letterSpacing?: number;
 }
 
 export interface Line {
@@ -104,7 +114,20 @@ export function layoutParagraph(runs: Run[], o: LayoutOptions): Line[] {
     const width = avail();
     let extra = 0;
     let offset = indent();
-    if (o.align === "justify" && !last && gaps > 0) extra = Math.max(0, (width - natural) / gaps);
+    let tc = 0;
+    if (o.align === "justify" && !last && gaps > 0) {
+      extra = Math.max(0, (width - natural) / gaps);
+      if (o.maxGap !== undefined) {
+        const widest = Math.max(0, ...words.filter((w, i) => i > 0 && !w.joined).map((w) => w.spaceBefore));
+        const capped = Math.min(extra, Math.max(0, o.maxGap - widest));
+        if (capped < extra && o.maxLetterSpacing) {
+          // the rest of the line's room spread over its letters (all but the very last one)
+          const letters = words.reduce((n, w) => n + w.segs.reduce((k, sg) => k + [...sg.text].length, 0), 0);
+          if (letters > 1) tc = Math.min(o.maxLetterSpacing, (width - natural - capped * gaps) / (letters - 1));
+        }
+        extra = capped;
+      }
+    }
     else if (o.align === "center") offset += Math.max(0, (width - natural) / 2);
     else if (o.align === "right") offset += Math.max(0, width - natural);
     const pieces: Piece[] = [];
@@ -112,8 +135,8 @@ export function layoutParagraph(runs: Run[], o: LayoutOptions): Line[] {
     words.forEach((w, i) => {
       if (i > 0) x += w.spaceBefore + (w.joined ? 0 : extra);
       for (const s of w.segs) {
-        pieces.push({ x, text: s.text, style: s.style });
-        x += o.measure(s.style, s.text);
+        pieces.push(tc ? { x, text: s.text, style: s.style, letterSpacing: tc } : { x, text: s.text, style: s.style });
+        x += o.measure(s.style, s.text) + tc * [...s.text].length;
       }
     });
     return { pieces, width: natural, last };

@@ -74,3 +74,35 @@ export function substituteFor(t: FontTraits): Substitute {
   }
   return { file: pick("LiberationSerif-", bold, italic, names), family: "papgi Serif", css: "'papgi Serif', 'Times New Roman', serif", bold, italic, exact: /times|liberation ?serif|nimbus ?rom|tinos/i.test(n) };
 }
+
+const FAMILIES: Record<string, { family: string; css: string; files: [string, string, string, string] }> = {
+  Carlito: { family: "papgi Carlito", css: "'papgi Carlito', Calibri, sans-serif", files: ["Carlito-Regular.ttf", "Carlito-Bold.ttf", "Carlito-Italic.ttf", "Carlito-BoldItalic.ttf"] },
+  Caladea: { family: "papgi Caladea", css: "'papgi Caladea', Cambria, serif", files: ["Caladea-Regular.ttf", "Caladea-Bold.ttf", "Caladea-Italic.ttf", "Caladea-BoldItalic.ttf"] },
+  LiberationSans: { family: "papgi Sans", css: "'papgi Sans', Arial, Helvetica, sans-serif", files: ["LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf", "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf"] },
+  LiberationSerif: { family: "papgi Serif", css: "'papgi Serif', 'Times New Roman', serif", files: ["LiberationSerif-Regular.ttf", "LiberationSerif-Bold.ttf", "LiberationSerif-Italic.ttf", "LiberationSerif-BoldItalic.ttf"] },
+  LiberationMono: { family: "papgi Mono", css: "'papgi Mono', 'Courier New', monospace", files: ["LiberationMono-Regular.ttf", "LiberationMono-Bold.ttf", "LiberationMono-Italic.ttf", "LiberationMono-BoldItalic.ttf"] },
+  lmroman10: { family: "papgi LM Roman", css: "'papgi LM Roman', 'Times New Roman', serif", files: ["lmroman10-regular.otf", "lmroman10-bold.otf", "lmroman10-italic.otf", "lmroman10-bolditalic.otf"] },
+  lmsans10: { family: "papgi LM Sans", css: "'papgi LM Sans', Arial, sans-serif", files: ["lmsans10-regular.otf", "lmsans10-bold.otf", "lmsans10-oblique.otf", "lmsans10-boldoblique.otf"] },
+};
+
+/**
+ * The same bundled family made bold and/or italic (for Bold / Italic while editing text).
+ * Latin Modern Mono has no bold: bold monospace text uses Liberation Mono (not an exact twin).
+ */
+export function variantFont(file: string, bold: boolean, italic: boolean): { file: string; family: string; css: string; sameFamily: boolean } {
+  const k = bold ? (italic ? 3 : 1) : italic ? 2 : 0;
+  if (/^lmmono10-/.test(file)) {
+    if (!bold) return { file: italic ? "lmmono10-italic.otf" : "lmmono10-regular.otf", family: "papgi LM Mono", css: "'papgi LM Mono', 'Courier New', monospace", sameFamily: true };
+    const f = FAMILIES.LiberationMono;
+    return { file: f.files[k], family: f.family, css: f.css, sameFamily: false };
+  }
+  const key = Object.keys(FAMILIES).find((p) => file.startsWith(`${p}-`));
+  const f = FAMILIES[key ?? "LiberationSans"];
+  return { file: f.files[k], family: f.family, css: f.css, sameFamily: !!key };
+}
+
+/** A paragraph style made bold and/or italic: same size and colour, the family's matching font. */
+export function styleVariant<T extends { file: string; family: string; css: string; exact: boolean; bold: boolean; italic: boolean; ocr?: boolean }>(base: T, bold: boolean, italic: boolean): T {
+  const v = variantFont(base.file, bold, italic);
+  return { ...base, bold, italic, file: v.file, family: v.family, css: base.ocr ? base.css : v.css, exact: base.exact && v.sameFamily };
+}

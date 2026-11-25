@@ -41,7 +41,7 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 
 | | |
 |---|---|
-| **Edit text** | Click any paragraph and change the words right on the page. The old text is really removed; the new text is set in the closest bundled font (Latin Modern for LaTeX papers, Carlito/Caladea for Calibri/Cambria, Liberation for Arial/Helvetica/Times/Courier — same letter widths as the originals), re-wrapped and justified like before. Highlights follow their words. |
+| **Edit text** | Click any paragraph and change the words right on the page. The old text is really removed; the new text is set in the closest bundled font (Latin Modern for LaTeX papers, Carlito/Caladea for Calibri/Cambria, Liberation for Arial/Helvetica/Times/Courier — same letter widths as the originals), re-wrapped and justified like before. Highlights follow their words. **Bold / italic**: select words and press Ctrl+B / Ctrl+I or the **B** / *I* buttons above the paragraph (with nothing selected, for what you type next); they use the same font family's bold or italic. |
 | View | Fast, sharp rendering (MuPDF in WebAssembly), thumbnails, zoom, search (upper/lower case and accents don't matter: "muller" finds "Müller"). The page-layout button next to the zoom switches between one page at a time, two pages side by side, and two side by side with the cover alone (on wide screens) |
 | **Find a function** | Ctrl+K, the *Find a function…* field in the top bar (a blue button when the bar is crowded or on phones), or *Find a function* on the start screen: type what you want to do ("ocr", "smaller", "unterschrift", "two pages"…) and press Enter. Finds every tool, menu item and view setting, in English or German words |
 | **Tabs** | Open several PDFs at once (File → Open, the + of the tab row, or drop several files): each gets a tab with its own undo, and shows again where you left it. A dot marks unsaved changes; closing such a tab asks first. Copy in one PDF, paste in another. Opening a file that's already open goes to its tab |
@@ -68,8 +68,6 @@ From the editor, the tools menu sends the open PDF straight to Merge, Split, Com
 | **Contents** | Sidebar → *Contents*: the PDF's bookmarks, or, when it has none, its headings (found from their size, bold and numbering; running headers and table headers are skipped). Click to jump; the section you're reading is marked |
 | **Scans (OCR)** | Recognize text on scanned pages (Document → Recognize text, or the button shown when a scan opens). The words become hidden, selectable text: select, copy, search, highlight. Edit text then works on scans too: the old words are painted over in the paper colour and the new text is written in the ink colour (Sans or Serif). Runs on the device; languages: English, German, Vietnamese, French, Spanish, Italian, Portuguese, Dutch, Polish, Czech, Hungarian, Turkish, Russian, Ukrainian (up to 3 at once). Each language downloads once (1–3 MB) and then works offline. |
 
-Planned next: bold/italic changes while editing text.
-
 Text editing limits: formulas and sub/superscripts inside an edited paragraph are flattened onto one line; rotated text can't be edited yet. On scans, edit only after recognizing the text; Chinese, Japanese, Korean, Arabic and other scripts aren't supported for recognition.
 
 ## Controls
@@ -80,6 +78,7 @@ Text editing limits: formulas and sub/superscripts inside an edited paragraph ar
 | Ctrl+P | Print |
 | Shift while drawing a shape | Square / circle, lines at 45° steps |
 | Edit text: Ctrl+Enter / Esc | Finish / cancel editing a paragraph (clicking outside also finishes) |
+| Edit text: Ctrl+B / Ctrl+I | Bold / italic for the selected words |
 | Ctrl+O, Ctrl+S, Ctrl+Shift+S | Open, Save, Download a copy |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+F | Search (Enter / Shift+Enter to step) |

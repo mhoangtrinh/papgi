@@ -1351,6 +1351,12 @@ textarea.field-input {
   background: var(--hover);
 }
 
+/* Bold / Italic while editing text: lit when the selection has it */
+.floating > button.toggle.on {
+  background: var(--accent-soft, rgba(47, 111, 237, 0.14));
+  color: var(--accent);
+}
+
 .floating .ic {
   width: 18px;
   height: 18px;

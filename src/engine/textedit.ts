@@ -5,7 +5,7 @@
 
 import type * as MuPDF from "mupdf";
 import type { Point, Quad, Rect } from "../core/geometry";
-import { substituteFor, cleanFontName, isBoldName, isItalicName } from "../core/fontmatch";
+import { substituteFor, cleanFontName, isBoldName, isItalicName, styleVariant } from "../core/fontmatch";
 import { layoutParagraph, normalizeRuns, type Align, type Run } from "../core/textlayout";
 import { appendContent, ownResources, isOcrPage, OCR_EM_BOX, OCR_FONT, sampleColors } from "./ocr";
 import { applyRedactions } from "./redact";
@@ -56,6 +56,17 @@ export interface EditBlock {
 export interface EditOptions {
   /** For recognised text: set the new words in a serif font instead of sans. */
   serif?: boolean;
+  /**
+   * Styles made bold or italic while editing: run styles from block.styles.length on
+   * refer to these, in order (a paragraph's own style `of`, with bold/italic changed).
+   */
+  variants?: StyleVariant[];
+}
+
+export interface StyleVariant {
+  of: number;
+  bold: boolean;
+  italic: boolean;
 }
 
 export interface EditResult {
@@ -552,6 +563,9 @@ function plan(page: MuPDF.PDFPage, blockId: number, runsIn: Run[], fonts: FontSo
   if (!block.editable) throw new Error(block.reason ?? "This text can't be edited.");
   // recognised text has no real font: use the one the user picked
   for (const st of block.styles) if (st.ocr && opts.serif) st.file = "LiberationSerif-Regular.ttf";
+  // styles made bold / italic in the editor
+  const own = block.styles.length;
+  for (const v of opts.variants ?? []) block.styles.push(styleVariant(block.styles[Math.min(Math.max(0, v.of | 0), own - 1)], !!v.bold, !!v.italic));
   const runs = normalizeRuns(runsIn.map((r) => ({ text: r.text, style: Math.min(Math.max(0, r.style | 0), block.styles.length - 1) })));
   const byStyle = new Map<number, string>();
   for (const r of runs) byStyle.set(r.style, (byStyle.get(r.style) ?? "") + r.text);
@@ -597,7 +611,12 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
     }
     return w * size;
   };
-  const laid = layoutParagraph(runs, { width: block.width, align: block.align, measure, firstIndent: block.firstIndent, restIndent: block.restIndent });
+  // (MuPDF reads a gap of 0.8 em or more between words as the end of a line: a justified line
+  // stretched further would come back as single words, no longer one paragraph)
+  const smallest = Math.min(...runs.map((r) => block.styles[r.style].size), Infinity);
+  const maxGap = Number.isFinite(smallest) ? smallest * 0.7 : undefined;
+  const maxLetterSpacing = Number.isFinite(smallest) ? smallest * 0.08 : undefined;
+  const laid = layoutParagraph(runs, { width: block.width, align: block.align, measure, firstIndent: block.firstIndent, restIndent: block.restIndent, maxGap, maxLetterSpacing });
   const nonEmpty = laid.some((l) => l.pieces.length);
 
   // On a scan, the words are pixels of the page image: sample the paper and ink colours so
@@ -690,7 +709,10 @@ export function replaceBlock(mupdf: M, doc: MuPDF.PDFDocument, page: MuPDF.PDFPa
           hex += gid.toString(16).padStart(4, "0");
         }
         const tm = mupdf.Matrix.concat([1, 0, 0, -1, block.left + piece.x, y], inv);
-        ops += `BT /${resName(f)} ${num(st.size)} Tf ${st.color.map(num).join(" ")} rg ${tm.map(num).join(" ")} Tm <${hex}> Tj ET\n`;
+        // (letter spacing is in text space: unscaled by the font size, scaled by Tm like the text;
+        // set on every piece: it's part of the graphics state and would carry over to the next)
+        const tc = `${num(piece.letterSpacing ?? 0)} Tc `;
+        ops += `BT /${resName(f)} ${num(st.size)} Tf ${tc}${st.color.map(num).join(" ")} rg ${tm.map(num).join(" ")} Tm <${hex}> Tj ET\n`;
       }
     });
     ops += "Q\n";

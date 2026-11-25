@@ -2,14 +2,16 @@ import { describe, it, expect } from "vitest";
 import * as mupdf from "mupdf";
 import fs from "node:fs";
 import { PdfEngine } from "../src/engine/engine";
+import type { EditOptions } from "../src/engine/textedit";
+import { variantFont } from "../src/core/fontmatch";
 
 const sample = (name: string) => new Uint8Array(fs.readFileSync(new URL(`../public/samples/${name}`, import.meta.url)));
 const fontFile = (name: string) => new Uint8Array(fs.readFileSync(new URL(`../public/fonts/${name}`, import.meta.url)));
 
 /** Engine with every font it asks for loaded from public/fonts (what the worker does with fetch). */
-function edit(e: PdfEngine, page: number, block: number, runs: { text: string; style: number }[]) {
-  for (const f of e.fontsForEdit(page, block, runs)) e.registerFont(f, fontFile(f));
-  return e.replaceText(page, block, runs);
+function edit(e: PdfEngine, page: number, block: number, runs: { text: string; style: number }[], opts: EditOptions = {}) {
+  for (const f of e.fontsForEdit(page, block, runs, opts)) e.registerFont(f, fontFile(f));
+  return e.replaceText(page, block, runs, opts);
 }
 
 const find = (e: PdfEngine, page: number, start: string) => e.textBlocks(page).find((b) => b.runs.map((r) => r.text).join("").startsWith(start))!;
@@ -259,5 +261,77 @@ describe("hyphens survive re-editing", () => {
     expect(again).toContain("analog-to-digital");
     expect(again).toContain("base-emitter");
     expect(again).toContain("achievable");
+  });
+});
+
+describe("live text editing: bold and italic", () => {
+  it("makes words bold and italic in the paragraph's own font family", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("pages.pdf"));
+    const b = find(e, 0, "This is page 1");
+    const n = b.styles.length;
+    // "This is " plain, "very" bold, " " plain, "important" bold italic
+    const runs = [
+      { text: "This is ", style: 0 },
+      { text: "very", style: n },
+      { text: " ", style: 0 },
+      { text: "important", style: n + 1 },
+    ];
+    edit(e, 0, b.id, runs, { variants: [{ of: 0, bold: true, italic: false }, { of: 0, bold: true, italic: true }] });
+    const after = find(e, 0, "This is very important");
+    const styleOf = (word: string) => {
+      let at = 0;
+      for (const r of after.runs) {
+        if (r.text.includes(word)) return after.styles[r.style];
+        at += r.text.length;
+      }
+      return null;
+    };
+    expect(styleOf("very")?.bold).toBe(true);
+    expect(styleOf("very")?.italic).toBe(false);
+    expect(styleOf("important")?.bold).toBe(true);
+    expect(styleOf("important")?.italic).toBe(true);
+    expect(styleOf("This")?.bold).toBe(false);
+    // same family (Helvetica -> Liberation Sans), same size
+    expect(styleOf("very")?.file).toBe("LiberationSans-Bold.ttf");
+    expect(styleOf("important")?.size).toBeCloseTo(styleOf("This")!.size, 1);
+  });
+
+  it("makes bold text plain again", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("paper.pdf"));
+    const blocks = e.textBlocks(0);
+    const bold = blocks.find((b) => b.editable && b.styles.length === 1 && b.styles[0].bold)!;
+    expect(bold).toBeTruthy();
+    const text = bold.runs.map((r) => r.text).join("");
+    edit(e, 0, bold.id, [{ text, style: 1 }], { variants: [{ of: 0, bold: false, italic: false }] });
+    const after = e.textBlocks(0).find((b) => b.runs.map((r) => r.text).join("") === text)!;
+    expect(after.styles.every((s) => !s.bold)).toBe(true);
+  });
+
+  it("picks the right file for each family", () => {
+    expect(variantFont("Carlito-Regular.ttf", true, false).file).toBe("Carlito-Bold.ttf");
+    expect(variantFont("Caladea-Bold.ttf", false, true).file).toBe("Caladea-Italic.ttf");
+    expect(variantFont("lmroman10-regular.otf", true, true).file).toBe("lmroman10-bolditalic.otf");
+    expect(variantFont("lmsans10-bold.otf", false, true).file).toBe("lmsans10-oblique.otf");
+    expect(variantFont("LiberationSerif-Italic.ttf", false, false).file).toBe("LiberationSerif-Regular.ttf");
+    // Latin Modern Mono has no bold: Liberation Mono instead
+    expect(variantFont("lmmono10-regular.otf", true, false)).toMatchObject({ file: "LiberationMono-Bold.ttf", sameFamily: false });
+    expect(variantFont("lmmono10-regular.otf", false, true).file).toBe("lmmono10-italic.otf");
+  });
+});
+
+describe("live text editing: justified lines stay one paragraph", () => {
+  it("a bold word that makes a line wrap early doesn't leave gaps that split the paragraph into words", () => {
+    const e = new PdfEngine(mupdf);
+    e.open(sample("paper.pdf"));
+    const b = e.textBlocks(0).find((x) => x.runs.map((r) => r.text).join("").includes("Power is the dominant"))!;
+    const text = b.runs.map((r) => r.text).join("");
+    const i = text.indexOf("dominant");
+    const n = b.styles.length;
+    edit(e, 0, b.id, [{ text: text.slice(0, i), style: 0 }, { text: "dominant", style: n }, { text: text.slice(i + 8), style: 0 }], { variants: [{ of: 0, bold: true, italic: false }] });
+    const again = e.textBlocks(0).find((x) => x.runs.map((r) => r.text).join("").includes("Power is the dominant constraint"));
+    expect(again).toBeTruthy();
+    expect(again!.runs.map((r) => r.text).join("")).toContain("achievable resolution. Power is the dominant constraint, because");
   });
 });

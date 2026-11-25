@@ -437,6 +437,42 @@ try {
   ptxt = (await engine("pageText", 0)).replace(/\s+/g, " ");
   check("edit after undo is not garbled", ptxt.includes("Edited live in papgi. After undo.") && !/\$OOH|\u0000/.test(ptxt));
   await page.screenshot({ path: shots + "desktop-textedit-after-undo-light.png" });
+  // bold / italic: select "After" and press Ctrl+B; then, with nothing selected, Ctrl+I and type
+  {
+    const hit = (await engine("search", "After undo"))[0].quads[0];
+    const hp = await pt(hit[0] + 3, (hit[1] + hit[5]) / 2);
+    await page.mouse.click(hp[0], hp[1]);
+    await page.waitForSelector(".para-editor");
+    await page.evaluate(() => {
+      const el = document.querySelector(".para-editor");
+      const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = w.nextNode())) {
+        const i = n.textContent.indexOf("After");
+        if (i < 0) continue;
+        const r = document.createRange();
+        r.setStart(n, i);
+        r.setEnd(n, i + 5);
+        getSelection().removeAllRanges();
+        getSelection().addRange(r);
+        break;
+      }
+    });
+    await page.keyboard.press("Control+b");
+    await page.waitForTimeout(150);
+    const lit = await page.evaluate(() => document.querySelector('.floating [data-act="bold"]')?.classList.contains("on"));
+    await page.keyboard.press("Control+End");
+    await page.click('.floating [data-act="italic"]');
+    await page.keyboard.type(" Fin");
+    await page.screenshot({ path: shots + "desktop-textedit-bold-italic.png" });
+    await page.keyboard.press("Control+Enter");
+    await page.waitForSelector(".para-editor", { state: "detached", timeout: 15000 });
+    await page.waitForTimeout(500);
+    const blk = (await engine("textBlocks", 0)).find((b) => b.runs.map((r) => r.text).join("").includes("After undo"));
+    const styleOf = (w) => { const r = blk.runs.find((x) => x.text.includes(w)); return r && blk.styles[r.style]; };
+    check("edit text: Ctrl+B makes the selected word bold, the rest stays", !!blk && styleOf("After")?.bold && !styleOf("After")?.italic && !styleOf("Edited")?.bold && lit, JSON.stringify(blk?.runs));
+    check("edit text: I with nothing selected makes what's typed next italic", !!blk && styleOf("Fin")?.italic && !styleOf("Fin")?.bold && (await engine("pageText", 0)).replace(/\s+/g, " ").includes("After undo. Fin"), JSON.stringify(blk?.runs));
+  }
   await page.keyboard.press("v");
 
   // save -> download and verify the file in Node
