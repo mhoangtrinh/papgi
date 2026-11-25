@@ -78,8 +78,25 @@ export function modal(opts: ModalOpts, onOpen?: (root: HTMLElement) => void): Pr
     document.addEventListener("keydown", onKey, true);
     document.body.append(back);
     onOpen?.(back);
-    back.querySelector<HTMLElement>("input, textarea, .btn.primary")?.focus({ preventScroll: true });
+    firstFocus(back)?.focus({ preventScroll: true });
   });
+}
+
+/**
+ * What a dialog puts the cursor in when it opens. On a touch screen that pops up the keyboard
+ * over half the dialog, so there only when typing is the point of it (a password, or its only
+ * text field); otherwise its main button.
+ */
+export function firstFocus(root: ParentNode, touch = matchMedia("(pointer: coarse)").matches): HTMLElement | null {
+  const primary = root.querySelector<HTMLElement>(".btn.primary");
+  const typing = [...root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("textarea, input")].filter(
+    (el) => el instanceof HTMLTextAreaElement || ["text", "search", "email", "password", "number", ""].includes(el.getAttribute("type") ?? ""),
+  );
+  if (!touch) return root.querySelector<HTMLElement>("input, textarea") ?? primary;
+  const pw = typing.find((el) => el.type === "password");
+  if (pw) return pw;
+  if (typing.length === 1) return typing[0];
+  return primary;
 }
 
 export async function askPassword(name: string, wrong: boolean): Promise<string | null> {

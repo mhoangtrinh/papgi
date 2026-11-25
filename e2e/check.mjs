@@ -2260,6 +2260,25 @@ try {
     await page.waitForTimeout(400);
   }
 
+  // ---- a short window: menus scroll instead of running off the screen; long dialogs keep their title and ✕ ----
+  {
+    await page.setViewportSize({ width: 1024, height: 600 });
+    await page.waitForTimeout(400);
+    await page.click("#btn-doc");
+    const m = await page.evaluate(() => { const el = document.querySelector("#doc-menu"); const r = el.getBoundingClientRect(); el.scrollTop = el.scrollHeight; const last = [...el.querySelectorAll("button")].pop().getBoundingClientRect(); return [r.bottom, innerHeight, last.bottom]; });
+    check("short window: the Document menu fits and its last item can be reached", m[0] <= m[1] && m[2] <= m[1], JSON.stringify(m));
+    await page.keyboard.press("Escape");
+    await page.click("#btn-file");
+    await page.click('#file-menu [data-menu="keys"]');
+    await page.waitForSelector(".modal");
+    const d = await page.evaluate(() => { const x = document.querySelector('.modal-head [data-v=""]').getBoundingClientRect(); const b = document.querySelector(".modal-actions .btn").getBoundingClientRect(); return [x.top, b.bottom, innerHeight]; });
+    check("short window: a long dialog shows its title, ✕ and buttons", d[0] >= 0 && d[1] <= d[2], JSON.stringify(d));
+    await page.screenshot({ path: shots + "desktop-short-shortcuts.png" });
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(400);
+  }
+
   check("no page errors", errors.length === 0, errors.join(" | "));
   await ctx.close();
 
@@ -2325,6 +2344,14 @@ try {
       return m.left >= 0 && m.right <= window.innerWidth && m.bottom <= window.innerHeight && !wide;
     });
     check(`phone ${scheme}: page-numbers dialog fits (fields inside, scrolls if long)`, dlg);
+    // (several fields: no keyboard popping up over the dialog)
+    check(`phone ${scheme}: a dialog with several fields doesn't open the keyboard`, await pp.evaluate(() => !document.activeElement?.matches("input, textarea")));
+    await pp.tap('.modal [data-v=""]');
+    // (one field to type in: the cursor goes there)
+    await pp.tap("#btn-file");
+    await pp.tap('#file-menu [data-menu="author"]');
+    await pp.waitForSelector(".modal");
+    check(`phone ${scheme}: a dialog that's only for typing puts the cursor in its field`, await pp.evaluate(() => document.activeElement?.matches(".modal input")));
     await pp.tap('.modal [data-v=""]');
     const overflow = await pp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     check(`phone ${scheme}: no page overflow`, !overflow);

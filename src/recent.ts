@@ -38,9 +38,10 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
       d.close();
       resolve(req ? req.result : undefined);
     };
-    t.onerror = () => {
+    // (a full disk aborts the transaction without an error event: settle either way)
+    t.onerror = t.onabort = () => {
       d.close();
-      reject(t.error);
+      reject(t.error ?? new Error("Storage transaction aborted"));
     };
   });
 }
