@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { thumbLayout } from "../src/ui/sidebar";
+import { thumbLayout, thumbsToDrop } from "../src/ui/sidebar";
 
 const A4 = 297 / 210;
 
@@ -30,5 +30,28 @@ describe("thumbLayout (pages panel)", () => {
     expect(r.width).toBeGreaterThan(280);
     // one page fills the width
     expect(thumbLayout(400, 900, 1, A4, 200).width).toBe(400);
+  });
+});
+
+describe("thumbsToDrop (long PDFs: page pictures in the panel are kept within a budget)", () => {
+  const mb = 1e6;
+  it("keeps everything under the budget", () => {
+    expect(thumbsToDrop([{ bytes: 10 * mb, near: true }, { bytes: 10 * mb, near: false }], 48 * mb)).toEqual([]);
+  });
+  it("lets go of the ones farthest from view first, never the ones near it", () => {
+    // 100 pages of 1 MB, pages 40-45 in view
+    const thumbs = Array.from({ length: 100 }, (_, i) => ({ bytes: mb, near: i >= 40 && i <= 45 }));
+    const drop = thumbsToDrop(thumbs, 48 * mb);
+    expect(drop.length).toBe(100 - 36);
+    expect(drop.some((i) => i >= 40 && i <= 45)).toBe(false);
+    expect(drop[0]).toBe(99);
+    // what stays is around the view
+    const kept = thumbs.map((_, i) => i).filter((i) => !drop.includes(i));
+    expect(Math.min(...kept)).toBeGreaterThanOrEqual(20);
+    expect(Math.max(...kept)).toBeLessThanOrEqual(66);
+  });
+  it("skips pictures not drawn yet", () => {
+    const thumbs = [{ bytes: 0, near: false }, { bytes: 60 * mb, near: false }, { bytes: 0, near: true }];
+    expect(thumbsToDrop(thumbs, 48 * mb)).toEqual([1]);
   });
 });

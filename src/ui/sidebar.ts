@@ -39,6 +39,32 @@ interface Thumb {
 }
 
 export const SIDE_MIN = 120;
+/**
+ * Bytes of page pictures the panel keeps: past this, pictures far from view are let go
+ * (and drawn again when scrolled back to). iPhone Safari stops drawing canvases once all
+ * of them together pass a few hundred MB, and a long PDF has a thumbnail for every page.
+ */
+export const THUMB_BUDGET = 48e6;
+
+/** Which drawn thumbnails to let go to get back under the budget: the farthest from the ones near view. */
+export function thumbsToDrop(thumbs: { bytes: number; near: boolean }[], budget = THUMB_BUDGET): number[] {
+  let total = thumbs.reduce((s, t) => s + t.bytes, 0);
+  if (total <= budget) return [];
+  const near = thumbs.map((t, i) => (t.near ? i : -1)).filter((i) => i >= 0);
+  const mid = near.length ? (near[0] + near[near.length - 1]) / 2 : 0;
+  const far = thumbs
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => !t.near && t.bytes > 0)
+    .sort((a, b) => Math.abs(b.i - mid) - Math.abs(a.i - mid));
+  const out: number[] = [];
+  // (down to 3/4 of the budget, so it doesn't happen again on every new picture)
+  for (const { t, i } of far) {
+    if (total <= budget * 0.75) break;
+    total -= t.bytes;
+    out.push(i);
+  }
+  return out;
+}
 /** Page size in the panel (px, zoomable): pages grow with the panel up to this
  *  size, and a new column starts only when it fits at this size. */
 export const TILE_DEFAULT = 200;
@@ -486,6 +512,7 @@ export class Sidebar {
           t.canvas.getContext("2d")!.drawImage(bmp, 0, 0);
           t.renderedVersion = version;
           t.renderedWidth = boxW;
+          this.trimThumbs();
         }
         bmp.close();
       })
@@ -494,6 +521,17 @@ export class Sidebar {
         this.rendering = false;
         this.schedule();
       });
+  }
+
+  /** Let go of pictures far from view when the panel holds too many (see THUMB_BUDGET). */
+  private trimThumbs(): void {
+    const drop = thumbsToDrop(this.thumbs.map((t) => ({ bytes: t.renderedWidth ? t.canvas.width * t.canvas.height * 4 : 0, near: t.near })));
+    for (const i of drop) {
+      const t = this.thumbs[i];
+      t.canvas.width = t.canvas.height = 0;
+      t.renderedVersion = 0;
+      t.renderedWidth = 0;
+    }
   }
 
   show(on: boolean): void {
