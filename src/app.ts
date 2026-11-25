@@ -252,7 +252,7 @@ export class App {
           </div>
         </div>
         <div class="menu-wrap">
-          <button class="menu-label" id="btn-doc" aria-haspopup="menu" title="Recognize text, sign, pages, compress…">${icon("tools", "ml-icon")}<span>Document</span></button>
+          <button class="menu-label" id="btn-doc" aria-haspopup="menu" title="Recognize text, sign, pages, compress…">${icon("docMenu", "ml-icon")}<span>Document</span></button>
           <div class="menu left" id="doc-menu" role="menu" hidden>
             <button data-menu="organize" data-needs-doc>${icon("pages")}Organize pages</button>
             <button data-menu="ocr" data-needs-doc>${icon("scan")}Recognize text (OCR)…</button>
