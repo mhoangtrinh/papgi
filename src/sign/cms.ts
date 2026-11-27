@@ -122,9 +122,7 @@ export async function makeSelfSigned(name: string, email: string, years = 5): Pr
   const keys = (await crypto.subtle.generateKey(RSA, false, ["sign", "verify"])) as CryptoKeyPair;
   const cert = new pkijs.Certificate();
   cert.version = 2;
-  const serial = crypto.getRandomValues(new Uint8Array(12));
-  serial[0] &= 0x7f;
-  cert.serialNumber = new asn1js.Integer({ valueHex: serial.buffer });
+  cert.serialNumber = newSerial();
   // (name and e-mail as two parts of the name, "CN=…, E=…")
   const dn = () => {
     const n = new pkijs.RelativeDistinguishedNames();
@@ -149,6 +147,35 @@ export async function makeSelfSigned(name: string, email: string, years = 5): Pr
   await cert.subjectPublicKeyInfo.importKey(keys.publicKey);
   await cert.sign(keys.privateKey, "SHA-256");
   return { cert: new Uint8Array(cert.toSchema(true).toBER(false)), chain: [], key: keys.privateKey };
+}
+
+/**
+ * A random positive serial number in strict DER: the first byte 0x01-0x7f. (A first byte of 0
+ * before one below 0x80 is "illegal padding": OpenSSL, and with it other apps, then reject
+ * the certificate and every signature made with it. Before Nov 2026 this happened for about
+ * 1 in 256 certificates made in papgi.)
+ */
+function newSerial(): asn1js.Integer {
+  const serial = crypto.getRandomValues(new Uint8Array(12));
+  serial[0] = serial[0] & 0x7f || 0x01;
+  return new asn1js.Integer({ valueHex: serial.buffer });
+}
+
+/** Is the certificate's serial number encoded with illegal padding (see newSerial)? */
+export function hasBadSerial(der: Uint8Array): boolean {
+  const v = pkijs.Certificate.fromBER(buf(der)).serialNumber.valueBlock.valueHexView;
+  return v.length > 1 && ((v[0] === 0x00 && v[1] < 0x80) || (v[0] === 0xff && v[1] >= 0x80));
+}
+
+/**
+ * The same certificate of your own (same key, name and dates) with a new, correctly encoded
+ * serial number, signed again with its key.
+ */
+export async function reissueSelfSigned(s: Signer): Promise<Signer> {
+  const cert = pkijs.Certificate.fromBER(buf(s.cert));
+  cert.serialNumber = newSerial();
+  await cert.sign(s.key, "SHA-256");
+  return { ...s, cert: new Uint8Array(cert.toSchema(true).toBER(false)) };
 }
 
 /** The name and e-mail in a certificate. */

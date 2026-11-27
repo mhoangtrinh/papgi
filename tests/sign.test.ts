@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import { createSignature, checkSignature, makeSelfSigned, importPfx, certNames } from "../src/sign/cms";
+import * as pkijs from "pkijs";
+import * as asn1js from "asn1js";
+import { createSignature, checkSignature, makeSelfSigned, importPfx, certNames, hasBadSerial, reissueSelfSigned } from "../src/sign/cms";
 
 const has = (cmd: string) => {
   try {
@@ -15,6 +17,37 @@ const has = (cmd: string) => {
 };
 
 describe("signatures (CMS)", { timeout: 30000 }, () => {
+  it("serial numbers of your own certificates are always strict DER (OpenSSL and others reject the rest)", async () => {
+    for (let i = 0; i < 40; i++) expect(hasBadSerial((await makeSelfSigned("A", "")).cert)).toBe(false);
+  });
+
+  it.runIf(has("openssl"))("a certificate made before with a badly encoded serial number is made again, and its signatures check out elsewhere", async () => {
+    const me = await makeSelfSigned("Hoang Trinh", "hoang@example.com");
+    // as about 1 in 256 certificates were: a first byte of 0 before one below 0x80
+    const c = pkijs.Certificate.fromBER(me.cert.buffer.slice(me.cert.byteOffset, me.cert.byteOffset + me.cert.byteLength) as ArrayBuffer);
+    c.serialNumber = new asn1js.Integer({ valueHex: new Uint8Array([0x00, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33]).buffer });
+    await c.sign(me.key, "SHA-256");
+    const bad = { ...me, cert: new Uint8Array(c.toSchema(true).toBER(false)) };
+    expect(hasBadSerial(bad.cert)).toBe(true);
+    const data = new TextEncoder().encode("%PDF-1.7 signed bytes");
+    const opensslOk = async (s: typeof me) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sig-"));
+      fs.writeFileSync(path.join(dir, "sig.der"), await createSignature(data, s));
+      fs.writeFileSync(path.join(dir, "data.bin"), data);
+      try {
+        return /Verification successful/.test(execSync(`openssl cms -verify -binary -inform DER -in sig.der -content data.bin -noverify -out /dev/null 2>&1`, { cwd: dir }).toString());
+      } catch {
+        return false;
+      }
+    };
+    expect(await opensslOk(bad)).toBe(false);
+    const fixed = await reissueSelfSigned(bad);
+    expect(hasBadSerial(fixed.cert)).toBe(false);
+    expect(certNames(fixed.cert)).toEqual(certNames(bad.cert));
+    expect(await opensslOk(fixed)).toBe(true);
+    expect(await checkSignature(data, await createSignature(data, fixed))).toMatchObject({ status: "valid", signer: "Hoang Trinh" });
+  });
+
   it("signs with a certificate of your own; the signature checks out, and not for changed bytes", async () => {
     const me = await makeSelfSigned("Hoang Trinh", "hoang@example.com");
     expect(certNames(me.cert)).toMatchObject({ name: "Hoang Trinh", email: "hoang@example.com", selfSigned: true });

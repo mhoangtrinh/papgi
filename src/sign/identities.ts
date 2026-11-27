@@ -1,6 +1,6 @@
 // Certificates to sign with, kept in this browser (IndexedDB). The private key is stored as a
 // key the browser can sign with but never hands out (not extractable).
-import { certNames, type Signer } from "./cms";
+import { certNames, hasBadSerial, reissueSelfSigned, type Signer } from "./cms";
 
 export interface Identity extends Signer {
   id: string;
@@ -43,10 +43,25 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
 
 /** Newest first; [] if storage isn't available. */
 export async function listIdentities(): Promise<Identity[]> {
+  let list: Identity[];
   try {
-    return ((await tx<Identity[]>("readonly", (s) => s.getAll())) ?? []).sort((a, b) => b.added - a.added);
+    list = ((await tx<Identity[]>("readonly", (s) => s.getAll())) ?? []).sort((a, b) => b.added - a.added);
   } catch {
     return [];
+  }
+  // a certificate of your own made with a badly encoded serial number (other apps reject its
+  // signatures): made again with the same key, name and dates, and kept instead
+  return Promise.all(list.map((id) => repaired(id)));
+}
+
+async function repaired(id: Identity): Promise<Identity> {
+  try {
+    if (!id.selfSigned || !hasBadSerial(id.cert)) return id;
+    const fixed: Identity = { ...id, ...(await reissueSelfSigned(id)) };
+    await tx("readwrite", (st) => st.put(fixed));
+    return fixed;
+  } catch {
+    return id;
   }
 }
 
