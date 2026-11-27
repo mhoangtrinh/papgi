@@ -929,8 +929,12 @@ body:not(.has-doc) .sidebar {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* (a narrow panel: two lines rather than "Strg/Umschalt-…") */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  line-height: 1.25;
   font-size: 11px;
 }
 

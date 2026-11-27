@@ -483,6 +483,7 @@ export class Sidebar {
     const hint = this.el.querySelector(".side-hint")!;
     const n = this.sel.selected.length;
     hint.textContent = n > 1 ? `${n} pages selected` : n === 1 ? `Page ${this.sel.selected[0] + 1} selected` : "Ctrl/Shift-click: select";
+    (hint as HTMLElement).title = hint.textContent;
   }
 
   private waiting = 0;
